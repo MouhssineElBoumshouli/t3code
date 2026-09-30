@@ -252,6 +252,28 @@ describe("TeamService", () => {
     ),
   );
 
+  it.effect("creates a task already started on a thread", () =>
+    withTeamService(
+      Effect.gen(function* () {
+        const { teams, owner } = yield* setUpTeam;
+        const task = yield* teams.createTask({
+          teamId: teamFile.teamId,
+          actorMemberId: owner.memberId,
+          title: "Fix search",
+          ownerMemberId: owner.memberId,
+          status: "in_progress",
+          thread: threadA,
+        });
+        assert.equal(task.status, "in_progress");
+        assert.deepEqual(task.thread, threadA);
+        const forThread = yield* teams.findTaskForThread(teamFile.teamId, threadA);
+        assert.equal(Option.getOrThrow(forThread).taskId, task.taskId);
+        const [created] = yield* teams.listActivity(teamFile.teamId, { limit: 1 });
+        assert.deepEqual(created?.thread, threadA);
+      }),
+    ),
+  );
+
   it.effect("writes handoff notes with files and commit, and caps them at 150 words", () =>
     withTeamService(
       Effect.gen(function* () {

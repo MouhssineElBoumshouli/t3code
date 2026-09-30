@@ -2,6 +2,50 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-09-30 — M1.2 team tools: `team_status`, `team_claim`, `team_task`, `team_handoff`
+
+**What changed**
+
+- New toolkit `apps/server/src/mcp/toolkits/team/`, built like `pullRequests/`: `tools.ts` (schemas, errors, the four tools), `handlers.ts`, `paths.ts`. Registered with one `team-layer:` line in `McpHttpServer.ts`'s `layer`, plus its two imports.
+- Every tool starts the same way: thread → project → working folder (`worktreePath`, else the project root) → `.team/team.json`, falling back to the root of that folder's Git repo. No team file → a normal `{ inTeam: false, message }` result, not an error. Team file but no team in the database → `ensureTeam` registers it with this server as owner (display name = the environment's label). Team known but this server not a member → a normal "not a member" result.
+- Paths: a full path inside the project becomes project-relative; a relative path is read from the working folder; a path outside the project (or climbing out with `..`) is rejected with a message naming the project folder. Windows paths work too.
+- `team_status`: your task, open tasks (max 8), other threads' claims (max 10, 5 paths each), your claims, the last 5 activity lines, newest first, plus a count of what was left out. Done tasks are left out.
+- `team_claim`: claim paths with a note; returns overlaps with other threads' claims and says to coordinate. `release: true` releases the paths given, or all of this thread's claims.
+- `team_task`: reads this thread's task; `status`/`note` update it; with no task, `title` creates one for this thread (status `in_progress` unless given, owner = this member). A title for a thread that already has a task is ignored, and the result says so.
+- `team_handoff`: `changed`, `left`, `risks`, `files`; the 150-word cap comes from the service. The commit is filled in with `git rev-parse HEAD` in the working folder (null if that fails), and the note is linked to the thread's task.
+- Each tool description is under 40 words (a test checks it).
+- `TeamService.createTask` now takes optional `status` and `thread`, so a task an agent creates starts on its thread in one transaction.
+- DESIGN.md: D5 now describes the registration rule, the repo-root fallback, paths and the token caps; section 4 and milestones updated (M1.3 = `teamContext`, M1.4 = `team_memory_search`).
+
+**Files touched**
+
+- New: `apps/server/src/mcp/toolkits/team/{tools,handlers,paths}.ts`, tests `handlers.test.ts`, `paths.test.ts`.
+- Our files: `apps/server/src/team/TeamService.ts`, `apps/server/src/team/TeamService.test.ts`.
+- Upstream edits, marked `team-layer:`: `apps/server/src/mcp/McpHttpServer.ts` (2 imports + 1 layer line), `apps/server/src/server.test.ts` (1 import + a mocked `TeamService` for the routes layer, which now needs it).
+- `team/DESIGN.md`, `team/PROGRESS.md`.
+
+**How it was checked**
+
+- Tests, from `apps/server`: `vp test run src/mcp/toolkits/team/ src/team/TeamService.test.ts` → 3 files, 22 tests passed. Covered: the not-a-team case for all four tools, registering on first use (once), not-a-member, repo-root fallback, full/relative/outside paths (posix and win32), overlaps, partial and full release, task read/create/update, handoff commit from the worktree (not the project root), the word cap, and the `team_status` caps.
+- A deliberate break (sorting oldest first) made the `team_status` cap test fail; restored.
+- Also ran the upstream files I touched: `vp test run src/mcp/McpHttpServer.test.ts src/server.test.ts src/team/TeamService.test.ts` → 3 files, 231 tests passed.
+- Typecheck: `npx tsc --noEmit` in `apps/server` → 0 errors.
+- Lint: `vp lint --report-unused-disable-directives` on the new files, `McpHttpServer.ts` and `TeamService.ts` → no findings. `server.test.ts` has 25 existing warnings, the same count before and after my edit. `vp fmt --check` on every changed file → clean.
+- Real server start on a scratch base dir (port 13988): team migrations ran, the server listened, `POST /mcp` without a credential returned 401 (so the MCP routes, including the team toolkit, were built), no errors in the log. Stopped by the PID captured at start, after checking it owned the port.
+- Not done: no real agent called the tools (as asked). No repo-wide checks.
+
+**What's left**
+
+- M1.3: the `teamContext` block in runtime instructions, which tells agents to call these tools.
+- M1.4: `team_memory_search` and freshness marks.
+- M2: limit registration-on-first-use to host mode (see D5).
+
+**Unsure about / notes**
+
+- The owner's display name is the environment label (usually the machine name), not a person's name. There is no rename yet.
+- Paths are compared as text; symlinked folders (for example `/tmp` vs `/private/tmp` on macOS) are not resolved, so a full path through a symlink can be rejected as outside the project.
+- `team_status` hides done tasks entirely; the board UI (M3/M4) will show them.
+
 ## 2026-09-30 — M1.1 foundation: schemas, storage, team service, `t3 team init`
 
 **What changed**

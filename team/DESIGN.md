@@ -133,19 +133,27 @@ Later, if 150 tokens per turn is too much for Cursor, Grok and Antigravity, send
 
 A new toolkit at `apps/server/src/mcp/toolkits/team/`, built like `pullRequests/`. [checked: pattern]
 
-| Tool                 | What it does                                                                                                                     |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `team_status`        | Returns the team board: who, what task, which paths.                                                                             |
-| `team_claim`         | Claim paths (files or folders) with a short note, or release them with `release: true`. Returns any overlap with others' claims. |
-| `team_task`          | Read this thread's task card, or update its status and note.                                                                     |
-| `team_handoff`       | Save a handoff for this thread: what changed, what's left, risks. Max 150 words.                                                 |
-| `team_memory_search` | Search decisions and handoffs. Returns the top 3 to 5, short, each marked fresh or maybe-outdated (D7).                          |
+| Tool                 | What it does                                                                                                                      |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `team_status`        | Returns the team board: who, what task, which paths.                                                                              |
+| `team_claim`         | Claim paths (files or folders) with a short note, or release them with `release: true`. Returns any overlap with others' claims.  |
+| `team_task`          | Read this thread's task card, or update its status and note. With no card yet, pass a title to create one for this thread.        |
+| `team_handoff`       | Save a handoff for this thread: what changed, what's left, risks. Max 150 words. The commit is filled in from the working folder. |
+| `team_memory_search` | Search decisions and handoffs. Returns the top 3 to 5, short, each marked fresh or maybe-outdated (D7). Comes in M1.4.            |
 
 `team_decision_propose` is dropped for now.
 
-**No new MCP capability.** Every agent sees these five tools, the same way every agent sees the preview tools today. [checked] Each tool checks team membership **when it is called**: thread → project → `.team/team.json` → is this `teamId` joined on this server? If not, it returns a short "This project is not in a team" result. [checked: thread and project lookup pattern] Because the check happens at call time, a user who joins a team mid-session gets working tools without restarting the agent. This avoids edits to `McpInvocationContext.ts` and `ProviderService.ts`. [checked: capabilities are frozen at session start]
+**No new MCP capability.** Every agent sees these five tools, the same way every agent sees the preview tools today. [checked] Each tool checks team membership **when it is called**: thread → project → working folder → `.team/team.json` → team and member. [checked: built in M1.2] Because the check happens at call time, a user who joins a team mid-session gets working tools without restarting the agent. This avoids edits to `McpInvocationContext.ts` and `ProviderService.ts`. [checked: capabilities are frozen at session start]
 
-**Files come from the thread's own checkout.** Any team file read or write (reading `.team/team.json` and `.team/rulebook.md`, checking decision freshness with Git) uses `thread.worktreePath` when it is set, else the project's workspace root. A worktree can be on a branch whose `.team/` differs from the main checkout. [checked: thread shell has `worktreePath`]
+- **No team file:** a normal result, `{ inTeam: false, message }`, not an error, so the agent does not retry.
+- **Team file, but the team is not in this server's database:** the server registers the team and adds itself as owner (`ensureTeam`). Right for M1, where every team lives on the owner's own server. **M2 must narrow this** to host mode: a member's server must not make itself owner of a team it only found in a cloned repo.
+- **Team known, but this server is not a member:** a normal "not a member" result.
+
+**Files come from the thread's own checkout.** Any team file read or write (reading `.team/team.json` and `.team/rulebook.md`, checking decision freshness with Git) uses `thread.worktreePath` when it is set, else the project's workspace root. A worktree can be on a branch whose `.team/` differs from the main checkout. [checked: thread shell has `worktreePath`] If `.team/team.json` is not in that working folder, the tools look at the root of its Git repo, because `t3 team init` writes `.team/` at the repo root and a project can be a subfolder of a repo. [checked: built in M1.2]
+
+**Paths.** Claims and handoff files are stored relative to the folder that holds `.team/`, with `/` separators. Agents often send full paths: a full path inside the project is turned into a project-relative one, a relative path is read from the working folder, and a path outside the project (or climbing out with `..`) is rejected with a message saying so. Windows drive letters and `\` work the same way.
+
+**Token cost.** Every agent in every project sees the tool list, so each tool description stays under 40 words (a test checks it). `team_status` is capped: 8 open tasks, 10 other threads' claims (5 paths each), 5 activity lines, newest first, with a count of what was left out. Done tasks are not listed.
 
 ### D6. Conflicts
 
@@ -236,7 +244,8 @@ Smart features on top of the board, after v1:
 | `apps/server/src/provider/Layers/GrokAdapter.ts`         | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
 | `apps/server/src/provider/Layers/OpenCodeAdapter.ts`     | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
 | `apps/server/src/provider/Layers/AntigravityAdapter.ts`  | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
-| `apps/server/src/mcp/McpHttpServer.ts`                   | Add the team toolkit to `layer` (D5). [checked]                                                                                                                                                        |
+| `apps/server/src/mcp/McpHttpServer.ts`                   | Add the team toolkit to `layer` (D5). [checked: done in M1.2]                                                                                                                                          |
+| `apps/server/src/server.test.ts`                         | Test only: provide a mocked `TeamService` to the routes layer, which now needs it for the team tools. [checked: done in M1.2]                                                                          |
 | `packages/contracts/src/index.ts`                        | One `export * from "./team.ts"` line for the team schemas. [checked: done in M1.1]                                                                                                                     |
 | `packages/contracts/src/auth.ts`                         | Add `team:read`, `team:write`, and add them to `AuthAdministrativeScopes` (D1). [checked]                                                                                                              |
 | `apps/server/src/server.ts`                              | Start the team layer: `TeamService.layer` in `RuntimeCoreDependenciesLive`, just above `PersistenceLayerLive` (D3). Later, merge the team HTTP API into the routes layer (D1). [checked: done in M1.1] |
@@ -249,6 +258,9 @@ Smart features on top of the board, after v1:
 
 - **M1, solo:** team tools, host mode on your own machine, `<team_context>` block through `teamContext`, handoff notes, `.team/` files (`team.json`, rulebook, decisions), own migrator and `team_*` tables, team creation that turns on worktrees. Pass the cold start test with Claude Code and Codex.
   - **M1.1, foundation (done 2026-09-30):** team schemas in contracts, own migrator and `team_*` tables, `TeamService` (teams, members, claims, tasks, handoffs, activity), `t3 team init`. No tools, networking or UI yet.
+  - **M1.2, team tools (done 2026-09-30):** `team_status`, `team_claim` (with release), `team_task`, `team_handoff` in `apps/server/src/mcp/toolkits/team/`, with the call-time team check and registration (D5).
+  - **M1.3:** the `teamContext` block in runtime instructions (D4).
+  - **M1.4:** `team_memory_search` and freshness marks (D5, D7).
 - **M2, two people:** team HTTP API, `team:read` / `team:write` scopes, `t3 team invite`, member join with `bootstrapRemoteBearerSession`, member push (AgentAwarenessRelay pattern) and 15-30 second polling, offline queue. Test with one friend over Tailscale.
 - **M3, conflicts:** overlap detection from turn diffs, overlap warnings, team board in the UI.
 - **M4, team features:** the self-moving task board (D9), catch me up, handoff UI, then guide mode.

@@ -85,6 +85,10 @@ export interface CreateTaskInput {
   readonly paths?: ReadonlyArray<string> | undefined;
   readonly note?: string | undefined;
   readonly ownerMemberId?: TeamMemberId | undefined;
+  /** Default: todo. */
+  readonly status?: TeamTaskStatus | undefined;
+  /** The thread working on the card, when it starts with one. */
+  readonly thread?: TeamThreadRef | undefined;
 }
 
 export interface UpdateTaskInput {
@@ -636,8 +640,10 @@ export const make = Effect.gen(function* () {
             task_id, team_id, title, status, note, paths_json, owner_member_id,
             environment_id, thread_id, created_at, updated_at
           ) VALUES (
-            ${taskId}, ${input.teamId}, ${title}, ${"todo"}, ${optionalText(input.note)},
-            ${encodePaths(paths)}, ${input.ownerMemberId ?? null}, NULL, NULL, ${createdAt}, ${createdAt}
+            ${taskId}, ${input.teamId}, ${title}, ${input.status ?? "todo"}, ${optionalText(input.note)},
+            ${encodePaths(paths)}, ${input.ownerMemberId ?? null},
+            ${input.thread?.environmentId ?? null}, ${input.thread?.threadId ?? null},
+            ${createdAt}, ${createdAt}
           )
         `.pipe(storage("createTask"));
         yield* recordActivity({
@@ -645,7 +651,7 @@ export const make = Effect.gen(function* () {
           memberId: actor.memberId,
           kind: "task.created",
           summary: `${actor.displayName} created task "${title}".`,
-          thread: null,
+          thread: input.thread ?? null,
           createdAt,
         });
         const [task] = yield* selectTasks(input.teamId, { taskId });
