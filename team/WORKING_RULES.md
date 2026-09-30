@@ -1,0 +1,31 @@
+# Fork working rules
+
+This repo is a fork of T3 Code. We are adding a team layer: a shared Brain, shared project memory, file claims, conflict warnings, and team features. Upstream rules in AGENTS.md still apply, except where this file says otherwise.
+
+## Keep our code separate
+
+- Put new code in new files and folders whenever possible.
+- When you must edit an upstream file, keep the edit small and mark it with a comment starting with "team-layer:".
+- This keeps it easy to pull in updates from upstream T3 Code.
+
+## After every step
+
+1. Run typecheck and tests only for what you changed.
+2. Commit with a clear conventional commit message.
+3. Push to origin main. Not pushed = not done.
+4. Add an entry to team/PROGRESS.md with: date, what changed, files touched, how you checked it, what's left, anything you're unsure about.
+
+## Honesty
+
+- Never say something works unless you ran it and saw it work.
+- If you skipped a check or something failed, say so plainly.
+
+## Progress log
+
+- team/PROGRESS.md is allowed in this fork. It overrides the upstream rule against committing progress notes.
+
+## Safety
+
+- Never commit secrets, tokens, .env files, or pairing URLs.
+- Don't pull from upstream unless asked.
+- Ask before any big design decision that isn't in the plan.

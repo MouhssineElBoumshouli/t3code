@@ -1,1 +1,2 @@
 @AGENTS.md
+@team/WORKING_RULES.md

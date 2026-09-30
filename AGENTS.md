@@ -1,3 +1,5 @@
+Fork note: this is a fork. Also read and follow team/WORKING_RULES.md. Where it conflicts with this file, it wins.
+
 # T3 Code
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
