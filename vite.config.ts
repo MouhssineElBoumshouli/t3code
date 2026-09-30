@@ -97,8 +97,6 @@ export default defineConfig({
       "apps/mobile/ios/**",
       "apps/mobile/uniwind-types.d.ts",
       "*.icon/**",
-      // team-layer: verbatim copy of the owner's design doc; keep its bytes unchanged.
-      "team/DESIGN.md",
     ],
     sortPackageJson: {},
     overrides: [

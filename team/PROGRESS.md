@@ -2,6 +2,35 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-09-30 — Design doc v2
+
+**What changed**
+
+- Rewrote team/DESIGN.md as v2 using the accepted "Instead" fixes from team/CODE_FINDINGS.md: team HTTP API with `team:read` / `team:write` and polling (D1), `.team/team.json` with `teamId` (D2), own migrator with `team_sql_migrations` and `team_*` tables (D3), a small ~150-token team block through `teamContext` (D4), five tools with a membership check at call time (D5), turn-diff claims as overlap detection, and team creation turning on worktrees (D6), cards keyed by thread with both PR link paths (D9), and a realistic list of upstream files (section 4). Every claim is marked [checked] or [verify] again. Section 6 now lists the remaining [verify] items.
+- Removed the `team-layer:` ignore line from vite.config.ts, so the formatter formats DESIGN.md normally. vite.config.ts is back to the upstream version.
+- Docs only, no feature code.
+
+**Files touched**
+
+- team/DESIGN.md
+- team/PROGRESS.md
+- vite.config.ts (line removed; file matches upstream again)
+
+**How it was checked**
+
+- Before writing, checked a few new details in the code: all six adapters have T3's thread id where they call `buildRuntimeInstructions()`, Codex has it in its session runtime options, HTTP groups are mounted in `makeRoutesLayer` in `apps/server/src/server.ts`, and pairing link lifetime is settable in the server-side auth service but not over HTTP.
+- `git diff` of vite.config.ts against the commit before the ignore line was added: no difference.
+- No typecheck or tests: only Markdown and one removed config line changed. The pre-commit formatter ran on the commit.
+
+**What's left**
+
+- The six [verify] items in DESIGN.md section 6. Then start M1.
+
+**Unsure about / notes**
+
+- D2 small choice not spelled out in the findings: the host address is **not** stored in `.team/team.json`. It comes from the invite and stays on each member's server, so public repos don't carry a private Tailscale address.
+- D6 layer 4: team creation writes `.team/team.json` and the `t3.json` field in one commit that the creator reviews and pushes. Whether our code should make that commit itself or leave the files for the user to commit is open.
+
 ## 2026-09-30 — Design doc added and checked against the code
 
 **What changed**
