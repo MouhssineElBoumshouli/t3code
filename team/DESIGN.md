@@ -46,12 +46,12 @@ A team is keyed by the repo's `canonicalKey`. When a member opens a project whos
 
 ### D3. Memory lives in three places
 
-| What                  | Where                                                     | Why                                                                                                 |
-| --------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Rulebook              | `.team/rulebook.md` in the project repo                   | Changes go through Git and pull requests like code. Hard cap: 1,500 words.                          |
-| Decisions             | `.team/decisions/NNNN-short-title.md` in the project repo | One short file per decision. Front matter lists files it is about and the commit it was written at. |
-| Live state            | Host database (SQLite, like the rest of T3)               | Members, active agents, claims, tasks, handoff notes, activity feed. Changes too often for Git.     |
-| Personal chat history | Each provider's own history, unchanged                    | Private. Only summaries get shared.                                                                 |
+| What | Where | Why |
+| --- | --- | --- |
+| Rulebook | `.team/rulebook.md` in the project repo | Changes go through Git and pull requests like code. Hard cap: 1,500 words. |
+| Decisions | `.team/decisions/NNNN-short-title.md` in the project repo | One short file per decision. Front matter lists files it is about and the commit it was written at. |
+| Live state | Host database (SQLite, like the rest of T3) | Members, active agents, claims, tasks, handoff notes, activity feed. Changes too often for Git. |
+| Personal chat history | Each provider's own history, unchanged | Private. Only summaries get shared. |
 
 The `.team/` folder is in the user's project, not in our app's repo.
 
@@ -74,14 +74,14 @@ Anything bigger goes through tools (D5), never pasted in. If the snapshot is ove
 
 A new tool set at `apps/server/src/mcp/toolkits/team/`, built like `pullRequests/`:
 
-| Tool                                 | What it does                                                                                            |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `team_status`                        | Returns the team board: who, what task, which paths.                                                    |
-| `team_claim` / `team_release`        | Claim or release paths (files or folders) with a short note. Returns any overlap with others.           |
-| `team_task_get` / `team_task_update` | Read this thread's task card, update its status and note.                                               |
-| `team_handoff_write`                 | Save a handoff: what changed, what's left, risks. Max 150 words.                                        |
-| `team_memory_search`                 | Search decisions and handoffs. Returns the top 3 to 5, short, each marked fresh or maybe-outdated (D7). |
-| `team_decision_propose`              | Write a new `.team/decisions/` file in the working copy, so it gets committed with the work.            |
+| Tool | What it does |
+| --- | --- |
+| `team_status` | Returns the team board: who, what task, which paths. |
+| `team_claim` / `team_release` | Claim or release paths (files or folders) with a short note. Returns any overlap with others. |
+| `team_task_get` / `team_task_update` | Read this thread's task card, update its status and note. |
+| `team_handoff_write` | Save a handoff: what changed, what's left, risks. Max 150 words. |
+| `team_memory_search` | Search decisions and handoffs. Returns the top 3 to 5, short, each marked fresh or maybe-outdated (D7). |
+| `team_decision_propose` | Write a new `.team/decisions/` file in the working copy, so it gets committed with the work. |
 
 Tools only show up when the project belongs to a team, same as how preview and device tools only show up when available.
 

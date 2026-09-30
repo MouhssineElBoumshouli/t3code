@@ -14,10 +14,12 @@ Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 - team/DESIGN.md (new, byte-identical copy)
 - team/CODE_FINDINGS.md (new)
 - team/PROGRESS.md
+- vite.config.ts (one `team-layer:` line: formatter ignores team/DESIGN.md)
 
 **How it was checked**
 
 - `cmp` between the Downloads file and team/DESIGN.md: identical.
+- The first commit (21a375e) went through the pre-commit formatter, which padded the two tables in DESIGN.md with spaces. The follow-up commit restores the exact bytes and adds team/DESIGN.md to the formatter's ignore list. `vp fmt --check` on DESIGN.md and vite.config.ts now checks only vite.config.ts, which passes, and `cmp` shows the committed file matches the original.
 - Every answer comes from reading the code at the file and line numbers given in CODE_FINDINGS.md. Nothing was run; no typecheck or tests, because only Markdown changed.
 - Did not pull from upstream.
 
