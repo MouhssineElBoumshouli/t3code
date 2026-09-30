@@ -1,5 +1,7 @@
 // @effect-diagnostics abortControllerInEffect:off - Tests hand-built AbortSignals to the SDK query stub to exercise cancellation.
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+// team-layer: team briefing test helper.
+import { TEST_TEAM_BRIEFING, withTeamBriefing } from "../../team/testing/teamBriefing.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -459,6 +461,42 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(createInput?.options.permissionMode, "bypassPermissions");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
     }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  // team-layer: Claude gets the team briefing once, in the session prompt.
+  it.effect("adds the team briefing to the session prompt only for a team thread", () => {
+    const harness = makeHarness();
+    const systemPromptFor = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+        return harness.getLastCreateQueryInput()?.options.systemPrompt;
+      });
+    return withTeamBriefing(
+      (threadId) => (threadId === THREAD_ID ? TEST_TEAM_BRIEFING : undefined),
+      Effect.gen(function* () {
+        assert.deepEqual(yield* systemPromptFor(ThreadId.make("thread-not-in-team")), {
+          type: "preset",
+          preset: "claude_code",
+          append: buildRuntimeInstructions({ harness: "Claude Code" }),
+        });
+        assert.deepEqual(yield* systemPromptFor(THREAD_ID), {
+          type: "preset",
+          preset: "claude_code",
+          append: buildRuntimeInstructions({
+            harness: "Claude Code",
+            teamContext: TEST_TEAM_BRIEFING,
+          }),
+        });
+      }),
+    ).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );

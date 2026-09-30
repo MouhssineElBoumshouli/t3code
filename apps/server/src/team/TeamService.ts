@@ -820,7 +820,8 @@ export const make = Effect.gen(function* () {
           created_at AS "createdAt"
         FROM team_activity
         WHERE team_id = ${teamId}
-        ORDER BY created_at DESC, activity_id DESC
+        -- rowid keeps insertion order for entries written in the same millisecond.
+        ORDER BY created_at DESC, rowid DESC
         LIMIT ${options?.limit ?? DEFAULT_LIST_LIMIT}
       `.pipe(
         storage("listActivity"),

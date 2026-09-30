@@ -1,59 +1,27 @@
 import {
   countTeamWords,
   type TeamClaim,
-  type TeamFile,
-  type TeamMember,
   type TeamTask,
   type TeamThreadRef,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
-import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import type { TeamServiceError } from "../../../team/TeamErrors.ts";
-import { findRepoRoot, readTeamFile } from "../../../team/TeamProjectFiles.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { toProjectPaths } from "./paths.ts";
+import { fromService, makeTeamResolver, type TeamContext } from "./resolve.ts";
 import {
   type NotInTeamResult,
   TeamToolError,
-  TeamToolFailedError,
   TeamToolkit,
   type TeamStatusResult,
 } from "./tools.ts";
 
 /** Caps on `team_status`, which every team agent may call often. Oldest items go first. */
 export const TEAM_STATUS_LIMITS = { tasks: 8, claims: 10, pathsPerClaim: 5, activity: 5 };
-
-const NOT_IN_TEAM: NotInTeamResult = {
-  inTeam: false,
-  message: "This project is not in a team, so team tools do nothing here. Carry on without them.",
-};
-
-interface TeamContext {
-  readonly teamFile: TeamFile;
-  readonly member: TeamMember;
-  readonly thread: TeamThreadRef;
-  readonly teamRoot: string;
-  readonly workingFolder: string;
-}
-
-type Resolved =
-  | { readonly _tag: "NotInTeam"; readonly result: NotInTeamResult }
-  | { readonly _tag: "InTeam"; readonly context: TeamContext };
-
-const notInTeam = (result: NotInTeamResult): Resolved => ({ _tag: "NotInTeam", result });
-const inTeamWith = (context: TeamContext): Resolved => ({ _tag: "InTeam", context });
-
-const fromService = (operation: string) => (error: TeamServiceError) =>
-  error._tag === "TeamStorageError"
-    ? new TeamToolFailedError({ operation, cause: error })
-    : new TeamToolError({ detail: error.message });
 
 const sameThread = (left: TeamThreadRef | null, right: TeamThreadRef) =>
   left !== null && left.environmentId === right.environmentId && left.threadId === right.threadId;
@@ -73,91 +41,14 @@ const capPaths = (paths: ReadonlyArray<string>) =>
 
 const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const git = yield* GitVcsDriver.GitVcsDriver;
-  const environment = yield* ServerEnvironment.ServerEnvironment;
   const path = yield* Path.Path;
-  const fileContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
-
-  const lookupFailed = (operation: string) => (cause: unknown) =>
-    new TeamToolFailedError({ operation, cause });
-
-  /** Finds `.team/team.json` in the working folder, else at the root of its Git repo. */
-  const findTeamFile = (workingFolder: string) =>
-    Effect.gen(function* () {
-      const here = yield* readTeamFile(workingFolder);
-      if (Option.isSome(here))
-        return Option.some({ teamFile: here.value, teamRoot: workingFolder });
-      const repoRoot = yield* findRepoRoot(workingFolder);
-      if (Option.isNone(repoRoot) || repoRoot.value === workingFolder) return Option.none();
-      const atRoot = yield* readTeamFile(repoRoot.value);
-      return Option.map(atRoot, (teamFile) => ({ teamFile, teamRoot: repoRoot.value }));
-    }).pipe(
-      Effect.mapError(
-        (error) => new TeamToolError({ detail: `${error.filePath}: ${error.detail}` }),
-      ),
-      Effect.provide(fileContext),
-    );
-
-  /** thread -> project -> working folder -> `.team/team.json` -> team and this server's member. */
-  const resolve = Effect.gen(function* () {
-    const scope = yield* McpInvocationContext.McpInvocationContext;
-    const thread = yield* snapshots
-      .getThreadShellById(scope.threadId)
-      .pipe(Effect.mapError(lookupFailed("lookup")));
-    if (Option.isNone(thread)) {
-      return yield* new TeamToolError({ detail: `Thread ${scope.threadId} was not found.` });
-    }
-    const project = yield* snapshots
-      .getProjectShellById(thread.value.projectId)
-      .pipe(Effect.mapError(lookupFailed("lookup")));
-    if (Option.isNone(project)) {
-      return yield* new TeamToolError({ detail: "This thread's project was not found." });
-    }
-    const workingFolder = thread.value.worktreePath ?? project.value.workspaceRoot;
-    const found = yield* findTeamFile(workingFolder);
-    if (Option.isNone(found)) return notInTeam(NOT_IN_TEAM);
-    const { teamFile, teamRoot } = found.value;
-
-    const existing = yield* teams
-      .getTeam(teamFile.teamId)
-      .pipe(Effect.mapError(fromService("lookup")));
-    let member: TeamMember;
-    if (Option.isNone(existing)) {
-      // The file is checked in but this server has not seen the team yet (M1: solo host).
-      const descriptor = yield* environment.getDescriptor;
-      const ensured = yield* teams
-        .ensureTeam({
-          teamFile,
-          canonicalKey: project.value.repositoryIdentity?.canonicalKey ?? null,
-          owner: { environmentId: scope.environmentId, displayName: descriptor.label },
-        })
-        .pipe(Effect.mapError(fromService("registration")));
-      member = ensured.owner;
-    } else {
-      const found = yield* teams
-        .findMemberByEnvironment(teamFile.teamId, scope.environmentId)
-        .pipe(Effect.mapError(fromService("lookup")));
-      if (Option.isNone(found)) {
-        return notInTeam({
-          inTeam: false,
-          message: `This project is in team ${teamFile.name}, but this T3 server is not a member. Team tools do nothing here.`,
-        });
-      }
-      member = found.value;
-    }
-    return inTeamWith({
-      teamFile,
-      member,
-      thread: { environmentId: scope.environmentId, threadId: scope.threadId },
-      teamRoot,
-      workingFolder,
-    });
-  });
+  const { resolve } = yield* makeTeamResolver;
 
   /** Runs `run` for a team project, and answers with the not-in-team result otherwise. */
   const inTeam = <A, E, R>(run: (context: TeamContext) => Effect.Effect<A, E, R>) =>
-    resolve.pipe(
+    McpInvocationContext.McpInvocationContext.pipe(
+      Effect.flatMap(resolve),
       Effect.flatMap((resolved): Effect.Effect<A | NotInTeamResult, E, R> =>
         resolved._tag === "NotInTeam" ? Effect.succeed(resolved.result) : run(resolved.context),
       ),
@@ -188,12 +79,15 @@ const make = Effect.gen(function* () {
     };
   };
 
+  /** `tasks` tells one person's threads apart: each claim shows its thread's task. */
   const summarizeClaim = (
-    claim: Pick<TeamClaim, "memberId" | "note">,
+    claim: Pick<TeamClaim, "memberId" | "thread" | "note">,
     paths: ReadonlyArray<string>,
     names: ReadonlyMap<string, string>,
+    tasks: ReadonlyArray<TeamTask>,
   ) => ({
     who: names.get(claim.memberId) ?? "Unknown member",
+    task: tasks.findLast((task) => sameThread(task.thread, claim.thread))?.title ?? "no task",
     paths: capPaths(paths),
     ...(claim.note === null ? {} : { note: claim.note }),
   });
@@ -264,7 +158,7 @@ const make = Effect.gen(function* () {
               .map((task) => summarizeTask(task, names)),
             claims: otherClaims
               .slice(0, TEAM_STATUS_LIMITS.claims)
-              .map((claim) => summarizeClaim(claim, claim.paths, names)),
+              .map((claim) => summarizeClaim(claim, claim.paths, names, tasks)),
             yourClaims: capPaths([
               ...new Set(
                 claims
@@ -316,16 +210,20 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.mapError(fromService("claim")));
           const names = overlaps.length === 0 ? new Map() : yield* namesOf(context);
+          const tasks =
+            overlaps.length === 0
+              ? []
+              : yield* teams.listTasks(teamId).pipe(Effect.mapError(fromService("claim")));
           return {
             claimed: claim.paths,
             released: [],
             overlaps: overlaps.map((overlap) =>
-              summarizeClaim(overlap.claim, overlap.paths, names),
+              summarizeClaim(overlap.claim, overlap.paths, names, tasks),
             ),
             message:
               overlaps.length === 0
                 ? "Claimed. No overlaps."
-                : "Claimed, but teammates hold overlapping paths. Coordinate with them before editing those.",
+                : "Claimed, but teammates hold overlapping paths. Tell the user before editing those.",
           };
         }),
       ),

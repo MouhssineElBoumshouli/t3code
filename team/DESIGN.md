@@ -110,12 +110,18 @@ Decisions are written by people, or by agents with normal file edits. The rulebo
 
 A small team block, about 150 tokens, goes into the runtime instructions through a new optional input: `buildRuntimeInstructions({ ..., teamContext })`. When `teamContext` is missing, the output is exactly what it is today, so single-person use does not change.
 
-The block changes rarely: only when the thread gets a task or the team's rules path changes. It holds:
+The block holds only things that rarely change: the team, the member, and how to use the team tools. It says, in plain words:
 
-1. "This project is in team <name>. Project rules are in `.team/rulebook.md`. Read it before your first change."
-2. "Your task: <card title> (<card id>)", or "No task yet."
-3. "Before editing files you have not touched in this thread, call `team_claim`. Call `team_status` to see who is working on what."
-4. "Code always wins over memory."
+1. "This project is in team "<name>". You are "<member name>"."
+2. "Before editing files, call `team_status`, then `team_claim` the paths you will touch."
+3. "If `team_claim` reports overlaps, tell the user before editing those files."
+4. "When you finish or stop, write a `team_handoff`."
+5. "Project rules are in `.team/rulebook.md`; read it before your first change." (The path is relative to the thread's working folder, so a project in a repo subfolder gets `../../.team/rulebook.md`.)
+6. "Code is the truth; team notes can be out of date."
+
+v2 also put the thread's task title in the block. M1.3 dropped it: a task changes during a session, so it would go stale for Claude and cost tokens on every message for Cursor, Grok and Antigravity. The task comes from `team_status` and `team_task`. [checked: built in M1.3]
+
+Names are cut to 60 characters, kept on one line, and stripped of `<`, `>`, `"` and backticks. A test fails if the block, with the longest names, goes over 150 tokens (estimated as the higher of 4 characters per token and 3/4 word per token). [checked: `apps/server/src/team/TeamBriefing.test.ts`]
 
 The board, the task card, handoff notes and decisions come **only through tools** (D5), never pasted into the instructions.
 
@@ -125,7 +131,13 @@ The board, the task card, handoff notes and decisions come **only through tools*
 - Cursor, Grok and Antigravity add the instructions to every user message, so every token stays in history for every turn. At 150 tokens that is about 7,500 tokens after 50 turns. A full board at 1,200 tokens would have been about 60,000. [checked]
 - Codex only resends when the text changes, so static text is sent once. [checked]
 
-**Plumbing.** Our team layer keeps a per-thread map of team blocks, the same way `McpProviderSession` keeps per-thread MCP config. Each adapter reads it by thread id and passes it as `teamContext`. That is one small `team-layer:` edit per adapter. All six adapters have T3's thread id where they call the function. [checked] For Codex, the T3 thread id is in the session runtime options, and the call goes through `buildCodexAdditionalContext()`, so the edit is a few lines across `CodexSessionRuntime.ts` and `CodexDeveloperInstructions.ts`. [checked]
+**Plumbing.** v2 planned a per-thread map of team blocks that adapters read, like `McpProviderSession`. Nothing could fill that map before a session starts without editing `ProviderService.ts` (on the "do not edit" list), and a reactor on orchestration events would race the provider command reactor. So M1.3 turned it around: the team layer installs a resolver at startup (`TeamBriefingLive`, one `team-layer:` line in `server.ts`), and each adapter asks for the thread's block with `readTeamBriefing(threadId)` when it builds its instructions. That is one small `team-layer:` edit per adapter, plus a few lines in `CodexSessionRuntime.ts` and `CodexDeveloperInstructions.ts` for Codex. [checked: built in M1.3]
+
+- The resolver uses the same thread → team lookup as the team tools (`mcp/toolkits/team/resolve.ts`), so the block appears exactly where the tools work, and it registers the team on first use the same way (D5).
+- No block when the provider session has no `t3-code` MCP server (the agent could not call the tools the block names), when the project is not in a team, or when this server is not a member.
+- A failed or slow lookup (over 2 seconds) logs a warning and gives no block. It never holds up or breaks a turn.
+- Without the resolver (tests, or a build without the team layer), `readTeamBriefing` gives nothing, and `buildRuntimeInstructions` returns exactly what it did before.
+- When the block appears: Claude, once per session (a team made mid-session shows up in the next session). Codex, Cursor, Grok, Antigravity and OpenCode, on the next turn. Slash commands for Cursor, Grok and OpenCode native commands get no block, like the rest of the runtime instructions.
 
 Later, if 150 tokens per turn is too much for Cursor, Grok and Antigravity, send the block only on the first turn for those three. [verify: whether they keep earlier user-message text in context across turns]
 
@@ -153,6 +165,8 @@ A new toolkit at `apps/server/src/mcp/toolkits/team/`, built like `pullRequests/
 
 **Paths.** Claims and handoff files are stored relative to the folder that holds `.team/`, with `/` separators. Agents often send full paths: a full path inside the project is turned into a project-relative one, a relative path is read from the working folder, and a path outside the project (or climbing out with `..`) is rejected with a message saying so. Windows drive letters and `\` work the same way.
 
+**Claims show their task.** Each claim in `team_status` and each overlap from `team_claim` shows who holds it and the task of the thread that made it (task title, or "no task"), so two chats of the same person can be told apart. [checked: built in M1.3]
+
 **Token cost.** Every agent in every project sees the tool list, so each tool description stays under 40 words (a test checks it). `team_status` is capped: 8 open tasks, 10 other threads' claims (5 paths each), 5 activity lines, newest first, with a count of what was left out. Done tasks are not listed.
 
 ### D6. Conflicts
@@ -160,7 +174,7 @@ A new toolkit at `apps/server/src/mcp/toolkits/team/`, built like `pullRequests/
 Five layers, cheapest first:
 
 1. **Split the work.** Tasks come with paths. (Planner UI comes after v1.)
-2. **Claims (main early warning).** The team block (D4) tells agents to call `team_claim` before editing new files. The claim returns overlaps right away, before any edit.
+2. **Claims (main early warning).** The team block (D4) tells agents to call `team_status` and `team_claim` before editing files, and to tell the user about overlaps before editing those. The claim returns overlaps right away, before any edit.
 3. **Overlap detection from turn diffs.** On `thread.turn-diff-completed`, the member's server records every file the turn touched and checks it against others' claims. Overlap sends a warning to both people. This is detection after the fact, not prevention: the event fires after the turn ends, so both people may already have edited. [checked] Rules:
    - Only use events with `status: "ready"`. Mid-turn placeholders have `status: "missing"` and no files. [checked]
    - Treat every file as "touched". The event's `kind` is always `"modified"`, even for new or deleted files. [checked]
@@ -234,23 +248,24 @@ Smart features on top of the board, after v1:
 
 **Upstream files we expect to edit:**
 
-| File                                                     | Why                                                                                                                                                                                                    |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `apps/server/src/provider/RuntimeInstructions.ts`        | Optional `teamContext` input (D4). [checked]                                                                                                                                                           |
-| `apps/server/src/provider/Layers/ClaudeAdapter.ts`       | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
-| `apps/server/src/provider/Layers/CodexSessionRuntime.ts` | Pass the T3 thread id's `teamContext` down (D4). [checked]                                                                                                                                             |
-| `apps/server/src/provider/CodexDeveloperInstructions.ts` | Accept and forward `teamContext` (D4). [checked]                                                                                                                                                       |
-| `apps/server/src/provider/Layers/CursorAdapter.ts`       | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
-| `apps/server/src/provider/Layers/GrokAdapter.ts`         | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
-| `apps/server/src/provider/Layers/OpenCodeAdapter.ts`     | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
-| `apps/server/src/provider/Layers/AntigravityAdapter.ts`  | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
-| `apps/server/src/mcp/McpHttpServer.ts`                   | Add the team toolkit to `layer` (D5). [checked: done in M1.2]                                                                                                                                          |
-| `apps/server/src/server.test.ts`                         | Test only: provide a mocked `TeamService` to the routes layer, which now needs it for the team tools. [checked: done in M1.2]                                                                          |
-| `packages/contracts/src/index.ts`                        | One `export * from "./team.ts"` line for the team schemas. [checked: done in M1.1]                                                                                                                     |
-| `packages/contracts/src/auth.ts`                         | Add `team:read`, `team:write`, and add them to `AuthAdministrativeScopes` (D1). [checked]                                                                                                              |
-| `apps/server/src/server.ts`                              | Start the team layer: `TeamService.layer` in `RuntimeCoreDependenciesLive`, just above `PersistenceLayerLive` (D3). Later, merge the team HTTP API into the routes layer (D1). [checked: done in M1.1] |
-| `apps/server/src/bin.ts`                                 | Register `t3 team` in `makeCli`'s subcommand list (`init` now, `invite` in M2). [checked: done in M1.1]                                                                                                |
-| Web UI entry points                                      | Team screens (M3 and later). [verify]                                                                                                                                                                  |
+| File                                                                                                                                            | Why                                                                                                                                                                                                                                                                |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `apps/server/src/provider/RuntimeInstructions.ts`                                                                                               | Optional `teamContext` input (D4). [checked: done in M1.3]                                                                                                                                                                                                         |
+| `apps/server/src/provider/Layers/ClaudeAdapter.ts`                                                                                              | Pass `teamContext` (D4). [checked: done in M1.3]                                                                                                                                                                                                                   |
+| `apps/server/src/provider/Layers/CodexSessionRuntime.ts`                                                                                        | Pass the T3 thread id's `teamContext` down (D4). [checked: done in M1.3]                                                                                                                                                                                           |
+| `apps/server/src/provider/CodexDeveloperInstructions.ts`                                                                                        | Accept and forward `teamContext` (D4). [checked: done in M1.3]                                                                                                                                                                                                     |
+| `apps/server/src/provider/Layers/CursorAdapter.ts`                                                                                              | Pass `teamContext` (D4). [checked: done in M1.3]                                                                                                                                                                                                                   |
+| `apps/server/src/provider/Layers/GrokAdapter.ts`                                                                                                | Pass `teamContext` (D4). [checked: done in M1.3]                                                                                                                                                                                                                   |
+| `apps/server/src/provider/Layers/OpenCodeAdapter.ts`                                                                                            | Pass `teamContext` (D4). [checked: done in M1.3]                                                                                                                                                                                                                   |
+| `apps/server/src/provider/Layers/AntigravityAdapter.ts`                                                                                         | Pass `teamContext` (D4). [checked: done in M1.3]                                                                                                                                                                                                                   |
+| `apps/server/src/mcp/McpHttpServer.ts`                                                                                                          | Add the team toolkit to `layer` (D5). [checked: done in M1.2]                                                                                                                                                                                                      |
+| `apps/server/src/server.test.ts`                                                                                                                | Test only: provide a mocked `TeamService` to the routes layer, which now needs it for the team tools. [checked: done in M1.2]                                                                                                                                      |
+| Adapter tests: `ClaudeAdapter.test.ts`, `CursorAdapter.test.ts`, `GrokAdapter.test.ts`, `AntigravityAdapter.test.ts`, `OpenCodeAdapter.test.ts` | Test only: one appended team-briefing test each, marked `team-layer:` (D4). [checked: done in M1.3]                                                                                                                                                                |
+| `packages/contracts/src/index.ts`                                                                                                               | One `export * from "./team.ts"` line for the team schemas. [checked: done in M1.1]                                                                                                                                                                                 |
+| `packages/contracts/src/auth.ts`                                                                                                                | Add `team:read`, `team:write`, and add them to `AuthAdministrativeScopes` (D1). [checked]                                                                                                                                                                          |
+| `apps/server/src/server.ts`                                                                                                                     | Start the team layer: `TeamService.layer` in `RuntimeCoreDependenciesLive`, just above `PersistenceLayerLive` (D3), and `TeamBriefingLive` in `ReactorLayerLive` (D4). Later, merge the team HTTP API into the routes layer (D1). [checked: done in M1.1 and M1.3] |
+| `apps/server/src/bin.ts`                                                                                                                        | Register `t3 team` in `makeCli`'s subcommand list (`init` now, `invite` in M2). [checked: done in M1.1]                                                                                                                                                            |
+| Web UI entry points                                                                                                                             | Team screens (M3 and later). [verify]                                                                                                                                                                                                                              |
 
 **Upstream files we do not edit:** `persistence/Migrations.ts`, `persistence/Layers/Sqlite.ts`, `WsRpcGroup` in contracts, `auth/RpcAuthorization.ts`, `mcp/McpInvocationContext.ts`, `provider/Layers/ProviderService.ts`, and `EnvironmentHttpApi` in `packages/contracts/src/environmentHttp.ts`.
 
@@ -259,7 +274,7 @@ Smart features on top of the board, after v1:
 - **M1, solo:** team tools, host mode on your own machine, `<team_context>` block through `teamContext`, handoff notes, `.team/` files (`team.json`, rulebook, decisions), own migrator and `team_*` tables, team creation that turns on worktrees. Pass the cold start test with Claude Code and Codex.
   - **M1.1, foundation (done 2026-09-30):** team schemas in contracts, own migrator and `team_*` tables, `TeamService` (teams, members, claims, tasks, handoffs, activity), `t3 team init`. No tools, networking or UI yet.
   - **M1.2, team tools (done 2026-09-30):** `team_status`, `team_claim` (with release), `team_task`, `team_handoff` in `apps/server/src/mcp/toolkits/team/`, with the call-time team check and registration (D5).
-  - **M1.3:** the `teamContext` block in runtime instructions (D4).
+  - **M1.3, team briefing (done 2026-09-30):** the `teamContext` block in runtime instructions for all six providers (D4), and the task of each claim in `team_status` and `team_claim` (D5).
   - **M1.4:** `team_memory_search` and freshness marks (D5, D7).
 - **M2, two people:** team HTTP API, `team:read` / `team:write` scopes, `t3 team invite`, member join with `bootstrapRemoteBearerSession`, member push (AgentAwarenessRelay pattern) and 15-30 second polling, offline queue. Test with one friend over Tailscale.
 - **M3, conflicts:** overlap detection from turn diffs, overlap warnings, team board in the UI.

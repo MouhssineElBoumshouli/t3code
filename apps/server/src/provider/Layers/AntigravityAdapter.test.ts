@@ -32,6 +32,8 @@ import {
   type AcpToolCallState,
 } from "../acp/AcpRuntimeModel.ts";
 import { makeAntigravityAdapter, type AntigravityAdapterOptions } from "./AntigravityAdapter.ts";
+// team-layer: team briefing test helper.
+import { TEST_TEAM_BRIEFING, withTeamBriefing } from "../../team/testing/teamBriefing.ts";
 
 const instanceId = ProviderInstanceId.make("antigravity-test");
 const threadId = ThreadId.make("antigravity-thread");
@@ -486,6 +488,37 @@ it.layer(layer)("AntigravityAdapter", (it) => {
       });
     }),
   );
+
+  // team-layer: Antigravity gets the team briefing with every prompt, once in a team.
+  it.effect("adds the team briefing to prompts once the thread is in a team", () => {
+    let inTeam = false;
+    return withTeamBriefing(
+      (id) => (inTeam && id === threadId ? TEST_TEAM_BRIEFING : undefined),
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        yield* h.adapter.startSession({
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "approval-required",
+        });
+        const runtimeTextOf = (input: string) =>
+          Effect.gen(function* () {
+            const sending = yield* h.adapter.sendTurn({ threadId, input }).pipe(Effect.forkChild);
+            const prompt = yield* h.nextPrompt;
+            yield* Deferred.succeed(prompt.result, { stopReason: "end_turn" });
+            yield* Fiber.join(sending);
+            expect(prompt.content[0]).toEqual({ type: "text", text: input });
+            const runtime = prompt.content[1];
+            return runtime?.type === "text" ? runtime.text : "";
+          });
+        const before = yield* runtimeTextOf("before the team");
+        expect(before).toContain(`Antigravity harness, as ${nativeDefault}`);
+        expect(before.endsWith("</pull_request_linking>")).toBe(true);
+        inTeam = true;
+        expect(yield* runtimeTextOf("in the team")).toBe(`${before}\n\n${TEST_TEAM_BRIEFING}`);
+      }),
+    );
+  });
 
   it.effect("does not auto-approve a remaining native request in full access", () =>
     Effect.gen(function* () {

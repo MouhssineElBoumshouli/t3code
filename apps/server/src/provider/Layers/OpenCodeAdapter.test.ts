@@ -36,6 +36,8 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+// team-layer: team briefing test helper.
+import { TEST_TEAM_BRIEFING, withTeamBriefing } from "../../team/testing/teamBriefing.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import type { OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
@@ -6649,6 +6651,47 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         parts: [{ type: "text", text: "Fix it" }],
       });
     }).pipe(Effect.provide(adapterLayer));
+  });
+
+  // team-layer: OpenCode gets the team briefing in its per-prompt system addendum.
+  it.effect("adds the team briefing to the system addendum only for a team thread", () => {
+    const instanceId = ProviderInstanceId.make("opencode_zen");
+    const adapterLayer = Layer.effect(
+      OpenCodeAdapter,
+      makeOpenCodeAdapter(openCodeAdapterTestSettings, { instanceId }),
+    ).pipe(
+      Layer.provideMerge(Layer.succeed(OpenCodeRuntime, OpenCodeRuntimeTestDouble)),
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    const teamThread = asThreadId("thread-opencode-team");
+    const soloThread = asThreadId("thread-opencode-solo");
+
+    return withTeamBriefing(
+      (id) => (id === teamThread ? TEST_TEAM_BRIEFING : undefined),
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const systemFor = (threadId: typeof teamThread) =>
+          Effect.gen(function* () {
+            yield* adapter.startSession({
+              provider: ProviderDriverKind.make("opencode"),
+              threadId,
+              runtimeMode: "full-access",
+              modelSelection: createModelSelection(instanceId, "anthropic/claude-sonnet-4-5"),
+            });
+            yield* adapter.sendTurn({ threadId, input: "Fix it" });
+            return (runtimeMock.state.promptCalls.at(-1) as { system?: string }).system;
+          });
+        const solo = buildRuntimeInstructions({
+          harness: "OpenCode",
+          model: "anthropic/claude-sonnet-4-5",
+        });
+        NodeAssert.equal(yield* systemFor(soloThread), solo);
+        NodeAssert.equal(yield* systemFor(teamThread), `${solo}\n\n${TEST_TEAM_BRIEFING}`);
+      }),
+    ).pipe(Effect.provide(adapterLayer));
   });
 
   it.effect("rejects sendTurn model selections for another instance id", () => {

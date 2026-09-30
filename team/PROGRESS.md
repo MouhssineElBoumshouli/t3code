@@ -2,6 +2,55 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-09-30 — M1.3 team briefing
+
+**What changed**
+
+- `buildRuntimeInstructions()` takes an optional `teamContext`. When it is missing or empty, the output is exactly what it was before (a test checks this).
+- The briefing (`apps/server/src/team/TeamBriefing.ts`) is about 107 tokens with normal names and at most about 132 with 60-character names. It says: this project is in team "<name>" and you are "<member>"; before editing files, call `team_status`, then `team_claim` the paths you will touch; if `team_claim` reports overlaps, tell the user before editing those files; when you finish or stop, write a `team_handoff`; project rules are in `.team/rulebook.md`, read it before your first change; code is the truth, team notes can be out of date. No claims, tasks or other live data.
+- All six providers pass it: Claude (session prompt, once per session), Codex (`additionalContext`, through `CodexSessionRuntime` and `CodexDeveloperInstructions`), Cursor, Grok, Antigravity (every prompt) and OpenCode (per-prompt system addendum). Slash and native commands get no briefing, like the rest of the runtime instructions.
+- How adapters get it: `TeamBriefingLive` (in `ReactorLayerLive`) installs a resolver at startup; adapters call `readTeamBriefing(threadId)`. The resolver uses the same thread → team lookup as the tools, now shared in `mcp/toolkits/team/resolve.ts`. No briefing when the session has no `t3-code` MCP server, the project is not in a team, or this server is not a member; a failure or a lookup over 2 seconds logs a warning and gives no briefing.
+- `team_status` claims and `team_claim` overlaps now show `task`: the claiming thread's task title, or "no task". The overlap message now says "Tell the user before editing those", to match the briefing.
+- Fixed a flaky test from M1.2: `listActivity` broke ties between same-millisecond entries by random id, so "newest first" was a coin flip (`TeamService.test.ts` failed about half the time). It now breaks ties by insertion order (`rowid`). This also fixes the order of `team_status`'s "recent" lines.
+- DESIGN.md: D4 rewritten (block contents, why the task was dropped, the new plumbing), D5 (claims show their task), D6 layer 2, section 4 table, milestones.
+
+**Files touched**
+
+- New: `apps/server/src/team/TeamBriefing.ts`, `apps/server/src/team/testing/teamBriefing.ts` (test helper), `apps/server/src/mcp/toolkits/team/resolve.ts`, `apps/server/src/mcp/toolkits/team/briefing.ts`; tests `apps/server/src/team/TeamBriefing.test.ts`, `apps/server/src/mcp/toolkits/team/briefing.test.ts`, `apps/server/src/provider/Layers/CodexTeamBriefing.test.ts`.
+- Our files: `mcp/toolkits/team/handlers.ts` (lookup moved to `resolve.ts`, task on claims), `tools.ts`, `handlers.test.ts`, `team/TeamService.ts` (activity order).
+- Upstream edits, marked `team-layer:`: `provider/RuntimeInstructions.ts`, `provider/CodexDeveloperInstructions.ts`, `provider/Layers/{Claude,Cursor,Grok,Antigravity,OpenCode}Adapter.ts`, `provider/Layers/CodexSessionRuntime.ts`, `server.ts` (1 import + 1 layer line), and one appended test in each of `{Claude,Cursor,Grok,Antigravity,OpenCode}Adapter.test.ts`.
+- `team/DESIGN.md`, `team/PROGRESS.md`.
+
+**How it was checked**
+
+- Tests, from `apps/server`: `vp test run src/team/ src/mcp/toolkits/team/ src/provider/RuntimeInstructions.test.ts src/provider/Layers/CodexTeamBriefing.test.ts src/provider/Layers/CodexSessionRuntime.test.ts src/provider/Layers/CodexCollabRuntime.integration.test.ts src/provider/Layers/{Claude,Cursor,Grok,Antigravity,OpenCode}Adapter.test.ts src/mcp/McpHttpServer.test.ts src/server.test.ts` → 18 files, 708 tests passed.
+- Provider tests: each adapter test sends a turn outside a team (exact old text, or ends at `</pull_request_linking>`) and one inside (briefing appended). Cursor, Grok and Antigravity check a thread that joins mid-session gets it on the next turn, and that slash commands get nothing. Codex is tested through the real session runtime and the mock app-server, reading the context back from the compaction restore.
+- Deliberate breaks: removing the briefing line in each of the six provider paths made that provider's test fail; raising the name cap to 200 made the token-budget test fail. All restored.
+- Resolver tests: not in a team, in a team (and registering it), subfolder project (`../../.team/rulebook.md`), worktree, no MCP server, not a member, broken `team.json` → no briefing instead of an error.
+- `TeamService.test.ts`: failed 2 of 4 runs before the `rowid` fix, passed 8 of 8 after.
+- Typecheck: `npx tsc --noEmit` in `apps/server` → 0 errors.
+- Lint: `vp lint --report-unused-disable-directives` on all 25 changed `.ts` files → only the existing `server.ts` line 8 warning (unused `ProviderDriverKind`, upstream, from before M1.1). `vp fmt --check` → clean.
+- Real server start on a scratch base dir (port 13989): upstream migrations, team migrations, listening, no errors. Stopped by the PID captured at start, after checking it owned the port.
+- Not done: no real agent has seen the briefing yet. That is the manual test below. No repo-wide checks.
+
+**Manual test (to run)**
+
+Given in chat on 2026-09-30. The steps never name the tools: they check whether agents claim, warn and hand off on their own.
+
+**What's left**
+
+- The manual test.
+- M1.4: `team_memory_search` and freshness marks.
+- M2: limit registration-on-first-use to host mode (see D5).
+
+**Unsure about / notes**
+
+- Token counts are estimates (the higher of 4 characters per token and 3/4 word per token), not a real tokenizer. No tokenizer is in the repo's dependencies.
+- The briefing asks agents to claim and warn; it cannot force them. Full-access mode never asks for approval, so an agent that ignores the briefing can still edit a claimed file. Turn-diff overlap detection (M3) is the backstop.
+- Claude reads the briefing once per session. A project that joins a team mid-session gets it in the next Claude session.
+- The first turn in a team project registers the team (same rule as the tools). M2 must narrow this.
+- The resolver is module-level state, like `McpProviderSession`'s map. Two servers in one process would share it; only tests do that, and the test helper installs and removes it around each test.
+
 ## 2026-09-30 — M1.2 team tools: `team_status`, `team_claim`, `team_task`, `team_handoff`
 
 **What changed**

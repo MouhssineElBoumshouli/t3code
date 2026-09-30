@@ -41,6 +41,8 @@ export type NotInTeamResult = typeof NotInTeamResult.Type;
 
 const ClaimSummary = Schema.Struct({
   who: Schema.String,
+  /** The claiming thread's task title, or "no task". */
+  task: Schema.String,
   paths: Schema.Array(Schema.String),
   note: Schema.optionalKey(Schema.String),
 });

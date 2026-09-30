@@ -43,6 +43,8 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+// team-layer: team briefing for runtime instructions (see team/DESIGN.md D4).
+import { readTeamBriefing } from "../../team/TeamBriefing.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterProcessError,
@@ -1089,6 +1091,7 @@ export function makeCursorAdapter(
 
           // ACP commands parse the complete text. Extra context can turn an exact
           // command into an ordinary model prompt or change its arguments.
+          const teamContext = yield* readTeamBriefing(input.threadId); // team-layer
           const result = yield* ctx.acp
             .prompt({
               prompt: /^\/[^\s/]+(?:\s|$)/.test(rawPrompt)
@@ -1097,7 +1100,11 @@ export function makeCursorAdapter(
                     ...promptParts,
                     {
                       type: "text",
-                      text: buildRuntimeInstructions({ harness: "Cursor", model: resolvedModel }),
+                      text: buildRuntimeInstructions({
+                        harness: "Cursor",
+                        model: resolvedModel,
+                        teamContext,
+                      }),
                     },
                   ],
             })

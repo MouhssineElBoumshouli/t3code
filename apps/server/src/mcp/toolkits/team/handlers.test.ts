@@ -33,6 +33,7 @@ const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const PROJECT_ID = ProjectId.make("project-1");
 const THREAD_A = ThreadId.make("thread-a");
 const THREAD_B = ThreadId.make("thread-b");
+const THREAD_C = ThreadId.make("thread-c");
 const TEAM_ID = TeamId.make("team-1");
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 
@@ -102,7 +103,7 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
     Layer.mock(ProjectionSnapshotQuery)({
       getThreadShellById: (threadId) =>
         Effect.succeed(
-          threadId === THREAD_A || threadId === THREAD_B
+          threadId === THREAD_A || threadId === THREAD_B || threadId === THREAD_C
             ? Option.some(makeThread(threadId, options.worktreePath ?? null))
             : Option.none(),
         ),
@@ -268,9 +269,9 @@ describe("team toolkit", () => {
       );
       assert.deepEqual(mine.claimed, ["src/auth/login.ts", "docs/auth.md"]);
       assert.deepEqual(mine.overlaps, [
-        { who: "Mouhssine's laptop", paths: ["src/auth"], note: "login work" },
+        { who: "Mouhssine's laptop", task: "no task", paths: ["src/auth"], note: "login work" },
       ]);
-      assert.include(mine.message, "Coordinate");
+      assert.include(mine.message, "Tell the user");
 
       const outside = yield* call("team_claim", { paths: ["/etc/passwd"] }).pipe(Effect.flip);
       assert.equal(outside._tag, "TeamToolError");
@@ -439,7 +440,11 @@ describe("team toolkit", () => {
       assert.deepEqual(full.claims[0]?.paths, [
         `file-${TEAM_STATUS_LIMITS.claims + extraClaims - 1}.ts`,
       ]);
-      assert.notDeepInclude(full.claims, { who: "Mouhssine's laptop", paths: ["file-1.ts"] });
+      assert.notDeepInclude(full.claims, {
+        who: "Mouhssine's laptop",
+        task: "no task",
+        paths: ["file-1.ts"],
+      });
       assert.deepEqual(full.yourClaims, ["mine.ts"]);
       assert.lengthOf(full.recent, TEAM_STATUS_LIMITS.activity);
       assert.equal(full.omitted, `${extraTasks} older tasks, ${extraClaims} older claims`);
@@ -461,6 +466,30 @@ describe("team toolkit", () => {
       const status = inTeam(yield* call("team_status", {}));
       assert.deepEqual(status.claims[0]?.paths, ["a", "b", "c", "d", "e", "+2 more"]);
       assert.isUndefined(status.omitted);
+    }),
+  );
+
+  it.effect("shows each claim's task, so one person's threads can be told apart", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      const { call } = yield* makeHarness({ workspaceRoot: root });
+      yield* call("team_task", { title: "Login page" }, THREAD_B);
+      yield* call("team_claim", { paths: ["src/login.ts"] }, THREAD_B);
+      yield* call("team_claim", { paths: ["src/login.ts"] }, THREAD_C);
+
+      const mine = inTeam(yield* call("team_claim", { paths: ["src/login.ts"] }));
+      assert.sameDeepMembers(
+        mine.overlaps.map(({ who, task }) => ({ who, task })),
+        [
+          { who: "Mouhssine's laptop", task: "Login page" },
+          { who: "Mouhssine's laptop", task: "no task" },
+        ],
+      );
+      const status = inTeam(yield* call("team_status", {}));
+      assert.sameMembers(
+        status.claims.map((claim) => claim.task),
+        ["Login page", "no task"],
+      );
     }),
   );
 });

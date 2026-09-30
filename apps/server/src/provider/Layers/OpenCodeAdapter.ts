@@ -44,6 +44,8 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+// team-layer: team briefing for runtime instructions (see team/DESIGN.md D4).
+import { readTeamBriefing } from "../../team/TeamBriefing.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
   buildOpenCodePermissionRules,
@@ -3246,6 +3248,7 @@ export function makeOpenCodeAdapter(
 
           let promptTimedOut = false;
           const submissionMethod = nativeCommand ? "session.command" : "session.promptAsync";
+          const teamContext = nativeCommand ? undefined : yield* readTeamBriefing(input.threadId); // team-layer
           // Native commands expand provider-owned templates. Their API does not
           // accept the per-turn system addendum supported by ordinary prompts.
           const submission = nativeCommand
@@ -3284,6 +3287,7 @@ export function makeOpenCodeAdapter(
                     system: buildRuntimeInstructions({
                       harness: "OpenCode",
                       model: `${parsedModel.providerID}/${parsedModel.modelID}`,
+                      teamContext,
                     }),
                     parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
                   },

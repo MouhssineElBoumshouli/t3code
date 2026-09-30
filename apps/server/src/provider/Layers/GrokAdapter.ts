@@ -41,6 +41,8 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+// team-layer: team briefing for runtime instructions (see team/DESIGN.md D4).
+import { readTeamBriefing } from "../../team/TeamBriefing.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterProcessError,
@@ -1664,6 +1666,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 ? resolveGrokAcpBaseModelId(currentModelId)
                 : undefined;
               // ACP slash commands must receive only their own arguments.
+              const teamContext = yield* readTeamBriefing(input.threadId); // team-layer
               const runtimeInstructions =
                 text && /^\/[^\s/]+(?:\s|$)/.test(text)
                   ? undefined
@@ -1671,6 +1674,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                       harness: "Grok",
                       model: displayModel,
                       reasoningEffort: normalizeGrokReasoningEffort(requestedTurnReasoningEffort),
+                      teamContext,
                     });
               for (let yieldAttempt = 0; yieldAttempt < 8; yieldAttempt += 1) {
                 yield* Effect.yieldNow;

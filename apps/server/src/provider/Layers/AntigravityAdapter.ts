@@ -37,6 +37,8 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+// team-layer: team briefing for runtime instructions (see team/DESIGN.md D4).
+import { readTeamBriefing } from "../../team/TeamBriefing.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import type { AntigravityAuth } from "../AntigravityAuth.ts";
 import {
@@ -1078,6 +1080,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
             updatedAt: yield* nowIso,
           };
           const dispatched = yield* Deferred.make<void>();
+          const teamContext = yield* readTeamBriefing(input.threadId); // team-layer
           const fiber = yield* context.runtime
             .prompt(
               {
@@ -1085,7 +1088,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                   ...prompt,
                   {
                     type: "text",
-                    text: buildRuntimeInstructions({ harness: "Antigravity", model }),
+                    text: buildRuntimeInstructions({ harness: "Antigravity", model, teamContext }),
                   },
                 ],
               },

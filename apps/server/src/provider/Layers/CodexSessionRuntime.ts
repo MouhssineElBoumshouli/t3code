@@ -45,6 +45,8 @@ import {
   buildCodexDeveloperInstructions,
   type T3CodeToolAvailability,
 } from "../CodexDeveloperInstructions.ts";
+// team-layer: team briefing for runtime instructions (see team/DESIGN.md D4).
+import { readTeamBriefing } from "../../team/TeamBriefing.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -592,6 +594,7 @@ function buildCodexTurnInstructions(input: {
   readonly modelName?: string;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
+  readonly teamContext?: string | undefined; // team-layer
 }): Pick<CodexTurnStartParamsWithCollaborationMode, "collaborationMode" | "additionalContext"> {
   if (input.interactionMode === undefined) {
     return {};
@@ -608,7 +611,7 @@ function buildCodexTurnInstructions(input: {
       },
     },
     additionalContext: buildCodexAdditionalContext(
-      { model, modelName: input.modelName, reasoningEffort },
+      { model, modelName: input.modelName, reasoningEffort, teamContext: input.teamContext },
       input.browserToolsAvailable ?? true,
     ),
   };
@@ -634,6 +637,8 @@ export function buildTurnStartParams(input: {
   readonly interactionMode?: ProviderInteractionMode;
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
+  /** team-layer: the team briefing, when this thread's project is in a team. */
+  readonly teamContext?: string | undefined;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -656,6 +661,7 @@ export function buildTurnStartParams(input: {
     ...(input.modelName ? { modelName: input.modelName } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     browserToolsAvailable: input.browserToolsAvailable ?? true,
+    teamContext: input.teamContext, // team-layer
   });
 
   return decodeCodexTurnStartParamsWithCollaborationMode({
@@ -2581,6 +2587,8 @@ export const makeCodexSessionRuntime = (
               options.appServerArgs,
               options.mcpCapabilities,
             ),
+            // team-layer: team briefing for T3's thread id (team/DESIGN.md D4).
+            teamContext: yield* readTeamBriefing(options.threadId),
           });
           yield* Ref.set(lastAdditionalContextRef, params.additionalContext);
           const rawResponse = yield* client.raw.request("turn/start", params);

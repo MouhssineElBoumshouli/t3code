@@ -188,6 +188,8 @@ export interface CodexRuntimeInfo {
   readonly model: string;
   readonly modelName?: string | undefined;
   readonly reasoningEffort: string;
+  /** team-layer: forwarded to buildRuntimeInstructions. */
+  readonly teamContext?: string | undefined;
 }
 
 /** Mode prompt for `turn/start.collaborationMode.settings.developer_instructions`. */

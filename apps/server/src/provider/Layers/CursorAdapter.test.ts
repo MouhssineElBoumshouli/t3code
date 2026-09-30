@@ -27,6 +27,8 @@ import {
 
 import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+// team-layer: team briefing test helper.
+import { TEST_TEAM_BRIEFING, withTeamBriefing } from "../../team/testing/teamBriefing.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { makeCursorAdapter } from "./CursorAdapter.ts";
@@ -360,6 +362,66 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
           [
             { type: "text", text: "please /review this" },
             { type: "text", text: buildRuntimeInstructions({ harness: "Cursor" }) },
+          ],
+          [{ type: "text", text: "/copy-request-id" }],
+        ],
+      );
+    }),
+  );
+
+  // team-layer: Cursor gets the team briefing with every prompt, once in a team.
+  it.effect("adds the team briefing to prompts once the thread is in a team", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const settings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-team-briefing");
+      const workspace = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-team-briefing-")),
+      );
+      const requestLogPath = NodePath.join(workspace, "requests.ndjson");
+      yield* Effect.promise(() => NodeFSP.writeFile(requestLogPath, "", "utf8"));
+      const wrapperPath = yield* Effect.promise(() =>
+        makeProbeWrapper(requestLogPath, NodePath.join(workspace, "argv.txt")),
+      );
+      yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+      let inTeam = false;
+      yield* withTeamBriefing(
+        (id) => (inTeam && id === threadId ? TEST_TEAM_BRIEFING : undefined),
+        Effect.gen(function* () {
+          yield* adapter.startSession({
+            threadId,
+            provider: ProviderDriverKind.make("cursor"),
+            cwd: workspace,
+            runtimeMode: "full-access",
+            modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+          });
+          yield* adapter.sendTurn({ threadId, input: "before the team" });
+          inTeam = true;
+          yield* adapter.sendTurn({ threadId, input: "in the team" });
+          yield* adapter.sendTurn({ threadId, input: "/copy-request-id" });
+          yield* adapter.stopSession(threadId);
+        }),
+      );
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      assert.deepStrictEqual(
+        requests
+          .filter((entry) => entry.method === "session/prompt")
+          .map((request) => (request.params as Record<string, unknown> | undefined)?.prompt),
+        [
+          [
+            { type: "text", text: "before the team" },
+            { type: "text", text: buildRuntimeInstructions({ harness: "Cursor" }) },
+          ],
+          [
+            { type: "text", text: "in the team" },
+            {
+              type: "text",
+              text: buildRuntimeInstructions({
+                harness: "Cursor",
+                teamContext: TEST_TEAM_BRIEFING,
+              }),
+            },
           ],
           [{ type: "text", text: "/copy-request-id" }],
         ],

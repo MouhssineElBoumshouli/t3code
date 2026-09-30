@@ -28,6 +28,8 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import { ServerConfig } from "../../config.ts";
 import { execScriptSource, writeFakeCli } from "../../testUtils/fakeCli.ts";
+// team-layer: team briefing test helper.
+import { TEST_TEAM_BRIEFING, withTeamBriefing } from "../../team/testing/teamBriefing.ts";
 import {
   grokPromptSettlementBelongsToContext,
   isGrokEnterPlanModeToolCall,
@@ -291,6 +293,50 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       }).pipe(TestClock.withLive),
     );
   }
+
+  // team-layer: Grok gets the team briefing with every prompt, once in a team.
+  it.effect("adds the team briefing to prompts once the thread is in a team", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-team-briefing");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-team-briefing-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockGrokWrapper({ T3_ACP_REQUEST_LOG_PATH: requestLogPath }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      let inTeam = false;
+      yield* withTeamBriefing(
+        (id) => (inTeam && id === threadId ? TEST_TEAM_BRIEFING : undefined),
+        Effect.gen(function* () {
+          yield* adapter.startSession({
+            threadId,
+            cwd: process.cwd(),
+            runtimeMode: "full-access",
+            modelSelection: { instanceId: ProviderInstanceId.make("grok"), model: "grok-mock-alt" },
+          });
+          yield* adapter.sendTurn({ threadId, input: "before the team" });
+          inTeam = true;
+          yield* adapter.sendTurn({ threadId, input: "in the team" });
+          yield* adapter.sendTurn({ threadId, input: "/goal status" });
+          yield* adapter.stopSession(threadId);
+        }),
+      );
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      const prompts = requests
+        .filter((request) => request.method === "session/prompt")
+        .map(
+          (request) => (request.params as { prompt: Array<{ type: string; text: string }> }).prompt,
+        );
+      assert.equal(prompts.length, 3);
+      const before = prompts[0]?.[1]?.text ?? "";
+      assert.include(before, "Grok harness, as grok-mock-alt");
+      assert.isTrue(before.endsWith("</pull_request_linking>"));
+      assert.equal(prompts[1]?.[1]?.text, `${before}\n\n${TEST_TEAM_BRIEFING}`);
+      assert.deepEqual(prompts[2], [{ type: "text", text: "/goal status" }]);
+    }),
+  );
 
   it.effect("keeps runtime context out of native command arguments", () =>
     Effect.gen(function* () {
