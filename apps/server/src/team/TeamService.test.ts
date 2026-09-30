@@ -385,4 +385,72 @@ describe("TeamService", () => {
       }),
     ),
   );
+  it.effect("releases a thread's claims when its work ends, only claims made before, once", () =>
+    withTeamService(
+      Effect.gen(function* () {
+        const { teams, owner } = yield* setUpTeam;
+        const { owner: friend } = yield* teams.ensureTeam({
+          teamFile,
+          canonicalKey: null,
+          owner: { environmentId: friendEnvironment, displayName: "Friend" },
+        });
+        const claim = (memberId: TeamMemberId, thread: typeof threadA, paths: Array<string>) =>
+          teams.claimPaths({ teamId: teamFile.teamId, memberId, thread, paths });
+        yield* claim(owner.memberId, threadA, ["src/a.ts"]);
+        yield* claim(owner.memberId, threadA, ["src/b.ts"]);
+        yield* claim(owner.memberId, threadB, ["src/a.ts"]);
+        // Same thread id on another server is another thread.
+        yield* claim(friend.memberId, { ...threadA, environmentId: friendEnvironment }, ["x.ts"]);
+        assert.deepEqual(yield* teams.listClaimedThreads(ownerEnvironment), [
+          threadA.threadId,
+          threadB.threadId,
+        ]);
+
+        // Merged at 30s; thread A claims more at 60s, after the merge.
+        yield* TestClock.adjust("60 seconds");
+        yield* claim(owner.memberId, threadA, ["src/c.ts"]);
+        const merged = yield* teams.releaseThreadClaims({
+          thread: threadA,
+          reason: "its pull request merged",
+          claimedBefore: "1970-01-01T00:00:30.000Z",
+        });
+        assert.sameMembers(
+          merged.flatMap((released) => released.paths),
+          ["src/a.ts", "src/b.ts"],
+        );
+        assert.isTrue(merged.every((released) => released.releasedAt !== null));
+        const [latest] = yield* teams.listActivity(teamFile.teamId, { limit: 1 });
+        assert.equal(latest?.kind, "claim.released");
+        assert.equal(
+          latest?.summary,
+          "Released Mouhssine's claims on src/a.ts, src/b.ts: its pull request merged.",
+        );
+
+        const archived = yield* teams.releaseThreadClaims({
+          thread: threadA,
+          reason: "its thread was archived",
+        });
+        assert.deepEqual(
+          archived.flatMap((released) => released.paths),
+          ["src/c.ts"],
+        );
+        const activityCount = (yield* teams.listActivity(teamFile.teamId)).length;
+        assert.deepEqual(
+          yield* teams.releaseThreadClaims({ thread: threadA, reason: "its thread was deleted" }),
+          [],
+        );
+        assert.lengthOf(yield* teams.listActivity(teamFile.teamId), activityCount);
+
+        const active = yield* teams.listActiveClaims(teamFile.teamId);
+        assert.sameDeepMembers(
+          active.map((held) => [held.thread.environmentId, held.thread.threadId]),
+          [
+            [ownerEnvironment, threadB.threadId],
+            [friendEnvironment, threadA.threadId],
+          ],
+        );
+        assert.deepEqual(yield* teams.listClaimedThreads(ownerEnvironment), [threadB.threadId]);
+      }),
+    ),
+  );
 });

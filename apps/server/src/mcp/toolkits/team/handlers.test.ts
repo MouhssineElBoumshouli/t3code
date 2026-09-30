@@ -26,7 +26,7 @@ import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { TEAM_STATUS_LIMITS, TeamToolkitHandlersLive } from "./handlers.ts";
+import { CLAIM_WHERE, TEAM_STATUS_LIMITS, TeamToolkitHandlersLive } from "./handlers.ts";
 import { type NotInTeamResult, TeamToolkit } from "./tools.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
@@ -93,6 +93,8 @@ interface HarnessOptions {
   readonly workspaceRoot: string;
   /** Worktree for every thread; null uses the project root. */
   readonly worktreePath?: string | null;
+  /** Worktrees for single threads, over `worktreePath`. */
+  readonly worktrees?: Partial<Record<ThreadId, string | null>>;
 }
 
 const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: HarnessOptions) {
@@ -104,7 +106,9 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
       getThreadShellById: (threadId) =>
         Effect.succeed(
           threadId === THREAD_A || threadId === THREAD_B || threadId === THREAD_C
-            ? Option.some(makeThread(threadId, options.worktreePath ?? null))
+            ? Option.some(
+                makeThread(threadId, options.worktrees?.[threadId] ?? options.worktreePath ?? null),
+              )
             : Option.none(),
         ),
       getProjectShellById: () => Effect.succeed(Option.some(makeProject(options.workspaceRoot))),
@@ -269,7 +273,13 @@ describe("team toolkit", () => {
       );
       assert.deepEqual(mine.claimed, ["src/auth/login.ts", "docs/auth.md"]);
       assert.deepEqual(mine.overlaps, [
-        { who: "Mouhssine's laptop", task: "no task", paths: ["src/auth"], note: "login work" },
+        {
+          who: "Mouhssine's laptop",
+          task: "no task",
+          where: CLAIM_WHERE.sameCheckout,
+          paths: ["src/auth"],
+          note: "login work",
+        },
       ]);
       assert.include(mine.message, "Tell the user");
 
@@ -443,6 +453,7 @@ describe("team toolkit", () => {
       assert.notDeepInclude(full.claims, {
         who: "Mouhssine's laptop",
         task: "no task",
+        where: CLAIM_WHERE.sameCheckout,
         paths: ["file-1.ts"],
       });
       assert.deepEqual(full.yourClaims, ["mine.ts"]);
@@ -492,4 +503,55 @@ describe("team toolkit", () => {
       );
     }),
   );
+  it.effect("says another thread's claimed work is in its own copy and not merged yet", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      // Chat A works in its own worktree; chats B and C share the project root.
+      const worktree = yield* makeProjectFolder(true);
+      const { call } = yield* makeHarness({
+        workspaceRoot: root,
+        worktrees: { [THREAD_A]: worktree },
+      });
+      yield* call("team_claim", { paths: ["src/login.ts"] }, THREAD_A);
+
+      const fromB = inTeam(yield* call("team_claim", { paths: ["src/login.ts"] }, THREAD_B));
+      assert.deepEqual(
+        fromB.overlaps.map(({ where, paths }) => ({ where, paths })),
+        [{ where: "their own copy; not merged into yours yet", paths: ["src/login.ts"] }],
+      );
+      assert.include(fromB.message, "in their own copy and not merged yet");
+      assert.include(fromB.message, "Tell the user before editing those.");
+
+      const statusB = inTeam(yield* call("team_status", {}, THREAD_B));
+      assert.deepEqual(
+        statusB.claims.map(({ where }) => where),
+        [CLAIM_WHERE.ownCopy],
+      );
+
+      // Chat C shares chat B's checkout, so B's edits are visible to it.
+      const fromC = inTeam(yield* call("team_claim", { paths: ["src/login.ts"] }, THREAD_C));
+      assert.sameDeepMembers(
+        fromC.overlaps.map(({ where }) => where),
+        [CLAIM_WHERE.ownCopy, CLAIM_WHERE.sameCheckout],
+      );
+      const onlyB = inTeam(yield* call("team_claim", { paths: ["docs/b.md"] }, THREAD_B));
+      assert.deepEqual(onlyB.overlaps, []);
+      const sameCheckout = inTeam(yield* call("team_claim", { paths: ["docs/b.md"] }, THREAD_C));
+      assert.deepEqual(
+        sameCheckout.overlaps.map(({ where }) => where),
+        [CLAIM_WHERE.sameCheckout],
+      );
+      assert.equal(
+        sameCheckout.message,
+        "Claimed, but teammates hold overlapping paths. Tell the user before editing those.",
+      );
+    }),
+  );
+
+  it("tells agents to keep claims when done and release only dropped work", () => {
+    const claim = TeamToolkit.tools.team_claim.description ?? "";
+    assert.include(claim, "Claims last until your work merges or this thread is archived");
+    assert.include(claim, "don't release when done");
+    assert.include(claim, "release: true only if the user drops the work");
+  });
 });

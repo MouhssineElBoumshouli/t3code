@@ -2,6 +2,55 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-09-30 — Claim lifetime fix (from the M1.3 manual test)
+
+**What changed**
+
+- The problem: in the M1.3 manual test, chat A released its claims at the end of its turn. Chat B then got no overlap warning for `src/login.ts`, which was still unmerged in chat A's worktree, and could not see the file.
+- A claim now lasts until the thread's work is merged or dropped. The briefing says: "When you finish or stop, write a team_handoff, but keep your claims: release them only if the user drops the work." (about 146 of 150 tokens with the longest names; "If team_claim reports overlaps" became "If it reports overlaps" to make room). The `team_claim` description (36 words): "Claim files or folders before editing them; returns overlaps with others' claims. Claims last until your work merges or this thread is archived: don't release when done. release: true only if the user drops the work."
+- Auto-release: new `apps/server/src/team/TeamClaimAutoRelease.ts`, started in `ReactorLayerLive`. It releases a thread's claims on `thread.archived`, `thread.deleted` (a deleted project deletes its threads first), `thread.pull-request-synced` with state `merged` (linked pull requests), and T3's own merge action (`PullRequestService.subscribeMerges`, matched to the thread's linked or branch pull request). A merge releases only claims made before the merge time, and only when none of the thread's other linked pull requests is still open. At startup it releases claims of threads that are no longer active. Each release writes an activity line.
+- `TeamService`: new `releaseThreadClaims` and `listClaimedThreads`. Claims are now ordered by `rowid` after `claimed_at` (same-millisecond claims came back in random order; found by the new test failing 3 of 5 runs).
+- `team_status` claims and `team_claim` overlaps have a new `where` field: "their own copy; not merged into yours yet", or "same checkout as you" when both threads work in the same folder. When any overlap is in another copy, the overlap message adds: "Their changes are in their own copy and not merged yet, so you may not see them."
+- DESIGN.md: D4 line 4, D5 (new "Claim lifetime" part with the event table and the gap, `where`), section 4 `server.ts` row, milestones, open question 5.
+- Deleted the stray `hello.ts` at the repo root (never committed).
+
+**Files touched**
+
+- New: `apps/server/src/team/TeamClaimAutoRelease.ts`, `apps/server/src/team/TeamClaimAutoRelease.test.ts`.
+- Our files: `team/TeamService.ts`, `team/TeamService.test.ts`, `team/TeamBriefing.ts`, `team/TeamBriefing.test.ts`, `mcp/toolkits/team/{handlers,tools,handlers.test}.ts`.
+- Upstream edit, marked `team-layer:`: `apps/server/src/server.ts` (1 import + 1 layer line).
+- `team/DESIGN.md`, `team/PROGRESS.md`.
+
+**How it was checked**
+
+- New tests: auto-release on archive and on delete; on a linked pull request merging (only claims from before the merge; a claim made after it stays); a stack waits until every open linked pull request has merged; T3's merge action releases a branch-only pull request's thread and ignores the same number in another project; startup releases claims of a thread that no longer exists; `where` for another worktree vs the same checkout; the briefing and description texts; `releaseThreadClaims` (only that thread, only that server, only before the time, no activity when there is nothing to release).
+- "Released at turn end doesn't happen by default", as far as code can test it: a test sends turn-diff-completed, session-set, settled, and a pull request synced as open then closed, and the claim is still there. The briefing test fails if the text asks to release claims when done. Whether a real agent obeys can only be checked by hand (below).
+- Deliberate breaks, each made the named test fail, all restored: no archive handling, no delete handling, ignore other open pull requests, release all claims on merge (ignoring the time), release on session-set, no startup release, no T3 merge handling, T3 merge from any project (this one first passed; I fixed the test, then it failed as it should), `where` always "own copy", briefing saying "release your claims".
+- `vp test run src/team/ src/mcp/toolkits/team/` 10 times in a row → 59 passed each time.
+- Wider set, from `apps/server`: `vp test run src/team/ src/mcp/toolkits/team/ src/provider/RuntimeInstructions.test.ts src/provider/Layers/CodexTeamBriefing.test.ts src/provider/Layers/CodexSessionRuntime.test.ts src/provider/Layers/{Claude,Cursor,Grok,Antigravity,OpenCode}Adapter.test.ts src/mcp/McpHttpServer.test.ts src/server.test.ts` → 18 files, 705 tests passed.
+- Typecheck: `npx tsc --noEmit` in `apps/server` → 0 errors. Lint on the 10 changed `.ts` files → only the existing `server.ts` line 8 warning. `vp fmt --check` → clean.
+- Real server (scratch base dir, port 13990): first start ran migrations and listened. Stopped, then seeded a team, member and a claim held by a thread id that does not exist. Second start logged "Released team claims." with reason "its thread was archived or deleted"; the claim had `released_at` set and the activity line read "Released Seeder's claims on src/login.ts: its thread was archived or deleted." No errors in either log. Both servers stopped by the PID captured at start, after checking they owned the port.
+- Not done: no real agent run, no real archive/merge through the UI. That is the manual test below.
+
+**Manual test (to run)**
+
+Given in chat on 2026-09-30: fresh project `~/code/team-demo3`, control test in a separate plain folder.
+
+**What's left**
+
+- The manual test.
+- Decide open question 5 (poll branch-only pull requests).
+- M1.4: `team_memory_search` and freshness marks.
+- M2: limit registration-on-first-use to host mode.
+
+**Unsure about / notes**
+
+- Not detected in M1: a pull request T3 only found from the branch (for example the agent ran `gh pr create`), merged outside T3. T3 stores no state for those, so no event fires. Its claims stay until the thread is archived or deleted. Linking the pull request in T3, or creating it with T3's create-PR action, avoids this.
+- Linked-merge release depends on this server's one-minute pull request sync and its git host login, like D9. If the server is off when the pull request merges, the release comes at the next sync after it starts.
+- The briefing is now 146 of 150 estimated tokens at worst. The next addition must cut something.
+- `where` compares folders exactly. Two local-mode threads in different projects of one repo would be called "their own copy" though they share a checkout. Rare; not handled.
+- In the M1.3 test no code released chat A's claim: the agent chose to, and the old wording never told it not to.
+
 ## 2026-09-30 — M1.3 team briefing
 
 **What changed**

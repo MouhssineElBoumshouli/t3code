@@ -78,6 +78,14 @@ export interface ReleasePathsInput {
   readonly paths?: ReadonlyArray<string> | undefined;
 }
 
+export interface ReleaseThreadClaimsInput {
+  readonly thread: TeamThreadRef;
+  /** Why, for the activity feed, e.g. "its pull request merged". */
+  readonly reason: string;
+  /** Only claims made at or before this time (ISO); omit to release all. */
+  readonly claimedBefore?: string | undefined;
+}
+
 export interface CreateTaskInput {
   readonly teamId: TeamId;
   readonly actorMemberId: TeamMemberId;
@@ -151,6 +159,17 @@ export class TeamService extends Context.Service<
     readonly listActiveClaims: (
       teamId: TeamId,
     ) => Effect.Effect<ReadonlyArray<TeamClaim>, TeamServiceError>;
+    /**
+     * Releases every active claim of a thread, in any team, when its work is
+     * merged or dropped (team/DESIGN.md D5). Returns the claims it released.
+     */
+    readonly releaseThreadClaims: (
+      input: ReleaseThreadClaimsInput,
+    ) => Effect.Effect<ReadonlyArray<TeamClaim>, TeamServiceError>;
+    /** Threads of this environment that hold active claims. */
+    readonly listClaimedThreads: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<ReadonlyArray<ThreadId>, TeamServiceError>;
     readonly createTask: (input: CreateTaskInput) => Effect.Effect<TeamTask, TeamServiceError>;
     readonly updateTask: (input: UpdateTaskInput) => Effect.Effect<TeamTask, TeamServiceError>;
     readonly getTask: (
@@ -261,12 +280,15 @@ const ActivityRow = Schema.Struct({
   createdAt: Schema.String,
 });
 
+const ClaimedThreadRow = Schema.Struct({ threadId: ThreadId });
+
 const decodeTeamRows = Schema.decodeUnknownEffect(Schema.Array(TeamRow));
 const decodeMemberRows = Schema.decodeUnknownEffect(Schema.Array(MemberRow));
 const decodeClaimRows = Schema.decodeUnknownEffect(Schema.Array(ClaimRow));
 const decodeTaskRows = Schema.decodeUnknownEffect(Schema.Array(TaskRow));
 const decodeHandoffRows = Schema.decodeUnknownEffect(Schema.Array(HandoffRow));
 const decodeActivityRows = Schema.decodeUnknownEffect(Schema.Array(ActivityRow));
+const decodeClaimedThreadRows = Schema.decodeUnknownEffect(Schema.Array(ClaimedThreadRow));
 
 const decodeRows =
   <A, E>(decode: (rows: unknown) => Effect.Effect<A, E>, operation: string) =>
@@ -435,14 +457,20 @@ export const make = Effect.gen(function* () {
       `.pipe(storage("recordActivity"));
     });
 
-  const selectActiveClaims = (teamId: TeamId) =>
+  const selectActiveClaims = (scope: TeamId | TeamThreadRef) =>
     sql`
       SELECT claim_id AS "claimId", team_id AS "teamId", member_id AS "memberId",
         environment_id AS "environmentId", thread_id AS "threadId", paths_json AS "paths",
         note, claimed_at AS "claimedAt", released_at AS "releasedAt"
       FROM team_claims
-      WHERE team_id = ${teamId} AND released_at IS NULL
-      ORDER BY claimed_at, claim_id
+      WHERE released_at IS NULL
+        ${
+          typeof scope === "string"
+            ? sql`AND team_id = ${scope}`
+            : sql`AND environment_id = ${scope.environmentId} AND thread_id = ${scope.threadId}`
+        }
+      -- rowid keeps claim order for claims made in the same millisecond.
+      ORDER BY claimed_at, rowid
     `.pipe(
       storage("listActiveClaims"),
       Effect.flatMap(decodeRows(decodeClaimRows, "listActiveClaims")),
@@ -621,6 +649,46 @@ export const make = Effect.gen(function* () {
       }
       return changed;
     }).pipe(sql.withTransaction, Effect.catchTag("SqlError", storageFailure("releasePaths")));
+  });
+
+  const releaseThreadClaims: TeamService["Service"]["releaseThreadClaims"] = Effect.fn(
+    "TeamService.releaseThreadClaims",
+  )(function* (input) {
+    return yield* Effect.gen(function* () {
+      // No time, or one that does not parse: release them all.
+      const parsed = Date.parse(input.claimedBefore ?? "");
+      const before = Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+      const held = (yield* selectActiveClaims(input.thread)).filter(
+        (claim) => Date.parse(claim.claimedAt) <= before,
+      );
+      if (held.length === 0) return [];
+      const releasedAt = yield* nowIso;
+      for (const claim of held) {
+        yield* sql`
+          UPDATE team_claims SET released_at = ${releasedAt} WHERE claim_id = ${claim.claimId}
+        `.pipe(storage("releaseThreadClaims"));
+      }
+      // A thread works for one member, but its claims could span teams.
+      for (const claims of Map.groupBy(held, (claim) => claim.teamId).values()) {
+        const { teamId, memberId } = claims[0]!;
+        const members = yield* selectMembers(teamId);
+        const name = members.find((member) => member.memberId === memberId)?.displayName;
+        yield* recordActivity({
+          teamId,
+          memberId,
+          kind: "claim.released",
+          summary: `Released ${name ?? "a teammate"}'s claims on ${describePaths(
+            claims.flatMap((claim) => claim.paths),
+          )}: ${input.reason}.`,
+          thread: input.thread,
+          createdAt: releasedAt,
+        });
+      }
+      return held.map((claim) => ({ ...claim, releasedAt }));
+    }).pipe(
+      sql.withTransaction,
+      Effect.catchTag("SqlError", storageFailure("releaseThreadClaims")),
+    );
   });
 
   const createTask: TeamService["Service"]["createTask"] = Effect.fn("TeamService.createTask")(
@@ -802,6 +870,17 @@ export const make = Effect.gen(function* () {
     claimPaths,
     releasePaths,
     listActiveClaims: selectActiveClaims,
+    releaseThreadClaims,
+    listClaimedThreads: (environmentId) =>
+      sql`
+        SELECT DISTINCT thread_id AS "threadId" FROM team_claims
+        WHERE environment_id = ${environmentId} AND released_at IS NULL
+        ORDER BY thread_id
+      `.pipe(
+        storage("listClaimedThreads"),
+        Effect.flatMap(decodeRows(decodeClaimedThreadRows, "listClaimedThreads")),
+        Effect.map((rows) => rows.map((row) => row.threadId)),
+      ),
     createTask,
     updateTask,
     getTask: (teamId, taskId) =>

@@ -4,7 +4,9 @@
  *
  * Cursor, Grok and Antigravity add runtime instructions to every user message,
  * so the briefing holds only things that rarely change: the team, the member,
- * how to use the team tools, and where the rules are. Live state (claims,
+ * how to use the team tools, and where the rules are. Claims outlive the
+ * turn: the team layer releases them when the work merges or the thread is
+ * archived or deleted (`TeamClaimAutoRelease`). Live state (claims,
  * tasks, handoffs) comes only from the team tools.
  *
  * Adapters read it with {@link readTeamBriefing}. The team layer installs the
@@ -44,8 +46,8 @@ export function renderTeamBriefing(input: TeamBriefingInput): string {
     "<team_context>",
     `This project is in team "${toBriefingName(input.teamName)}". You are "${toBriefingName(input.memberName)}".`,
     "Before editing files, call team_status, then team_claim the paths you will touch.",
-    "If team_claim reports overlaps, tell the user before editing those files.",
-    "When you finish or stop, write a team_handoff.",
+    "If it reports overlaps, tell the user before editing those files.",
+    "When you finish or stop, write a team_handoff, but keep your claims: release them only if the user drops the work.",
     `Project rules are in ${input.rulebookPath}; read it before your first change.`,
     "Code is the truth; team notes can be out of date.",
     "</team_context>",

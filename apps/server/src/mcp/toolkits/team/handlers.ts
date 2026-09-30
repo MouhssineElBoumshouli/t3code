@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
+import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -22,6 +23,15 @@ import {
 
 /** Caps on `team_status`, which every team agent may call often. Oldest items go first. */
 export const TEAM_STATUS_LIMITS = { tasks: 8, claims: 10, pathsPerClaim: 5, activity: 5 };
+
+/**
+ * Where another thread's claimed work is. In worktree mode it is in that
+ * thread's own copy until it merges, so this agent cannot see those edits.
+ */
+export const CLAIM_WHERE = {
+  ownCopy: "their own copy; not merged into yours yet",
+  sameCheckout: "same checkout as you",
+} as const;
 
 const sameThread = (left: TeamThreadRef | null, right: TeamThreadRef) =>
   left !== null && left.environmentId === right.environmentId && left.threadId === right.threadId;
@@ -43,6 +53,7 @@ const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const path = yield* Path.Path;
+  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const { resolve } = yield* makeTeamResolver;
 
   /** Runs `run` for a team project, and answers with the not-in-team result otherwise. */
@@ -79,15 +90,58 @@ const make = Effect.gen(function* () {
     };
   };
 
+  /** A thread's working folder on this server: its worktree, else its project root. */
+  const workingFolderOf = (thread: TeamThreadRef) =>
+    snapshots.getThreadShellById(thread.threadId).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed(null),
+          onSome: (shell) =>
+            shell.worktreePath !== null
+              ? Effect.succeed(shell.worktreePath)
+              : snapshots
+                  .getProjectShellById(shell.projectId)
+                  .pipe(
+                    Effect.map(
+                      Option.match({ onNone: () => null, onSome: (p) => p.workspaceRoot }),
+                    ),
+                  ),
+        }),
+      ),
+      Effect.orElseSucceed(() => null),
+    );
+
+  /** Where each claiming thread's work is, looked up once per thread. */
+  const makeWhereOf = (context: TeamContext) => {
+    const known = new Map<string, string>();
+    return (thread: TeamThreadRef) =>
+      Effect.gen(function* () {
+        const key = `${thread.environmentId}/${thread.threadId}`;
+        const cached = known.get(key);
+        if (cached !== undefined) return cached;
+        // Another server's thread is always in another copy.
+        const folder =
+          thread.environmentId === context.thread.environmentId
+            ? yield* workingFolderOf(thread)
+            : null;
+        const where =
+          folder === context.workingFolder ? CLAIM_WHERE.sameCheckout : CLAIM_WHERE.ownCopy;
+        known.set(key, where);
+        return where;
+      });
+  };
+
   /** `tasks` tells one person's threads apart: each claim shows its thread's task. */
   const summarizeClaim = (
     claim: Pick<TeamClaim, "memberId" | "thread" | "note">,
     paths: ReadonlyArray<string>,
     names: ReadonlyMap<string, string>,
     tasks: ReadonlyArray<TeamTask>,
+    where: string,
   ) => ({
     who: names.get(claim.memberId) ?? "Unknown member",
     task: tasks.findLast((task) => sameThread(task.thread, claim.thread))?.title ?? "no task",
+    where,
     paths: capPaths(paths),
     ...(claim.note === null ? {} : { note: claim.note }),
   });
@@ -142,6 +196,14 @@ const make = Effect.gen(function* () {
           const otherClaims = claims
             .filter((claim) => !sameThread(claim.thread, context.thread))
             .toSorted(byNewest((claim) => claim.claimedAt));
+          const whereOf = makeWhereOf(context);
+          const shownClaims = yield* Effect.forEach(
+            otherClaims.slice(0, TEAM_STATUS_LIMITS.claims),
+            (claim) =>
+              whereOf(claim.thread).pipe(
+                Effect.map((where) => summarizeClaim(claim, claim.paths, names, tasks, where)),
+              ),
+          );
           const droppedTasks = Math.max(0, openTasks.length - TEAM_STATUS_LIMITS.tasks);
           const droppedClaims = Math.max(0, otherClaims.length - TEAM_STATUS_LIMITS.claims);
           const omitted = [
@@ -156,9 +218,7 @@ const make = Effect.gen(function* () {
             tasks: openTasks
               .slice(0, TEAM_STATUS_LIMITS.tasks)
               .map((task) => summarizeTask(task, names)),
-            claims: otherClaims
-              .slice(0, TEAM_STATUS_LIMITS.claims)
-              .map((claim) => summarizeClaim(claim, claim.paths, names, tasks)),
+            claims: shownClaims,
             yourClaims: capPaths([
               ...new Set(
                 claims
@@ -214,16 +274,24 @@ const make = Effect.gen(function* () {
             overlaps.length === 0
               ? []
               : yield* teams.listTasks(teamId).pipe(Effect.mapError(fromService("claim")));
+          const whereOf = makeWhereOf(context);
+          const shown = yield* Effect.forEach(overlaps, (overlap) =>
+            whereOf(overlap.claim.thread).pipe(
+              Effect.map((where) =>
+                summarizeClaim(overlap.claim, overlap.paths, names, tasks, where),
+              ),
+            ),
+          );
           return {
             claimed: claim.paths,
             released: [],
-            overlaps: overlaps.map((overlap) =>
-              summarizeClaim(overlap.claim, overlap.paths, names, tasks),
-            ),
+            overlaps: shown,
             message:
-              overlaps.length === 0
+              shown.length === 0
                 ? "Claimed. No overlaps."
-                : "Claimed, but teammates hold overlapping paths. Tell the user before editing those.",
+                : shown.some((overlap) => overlap.where === CLAIM_WHERE.ownCopy)
+                  ? "Claimed, but teammates hold overlapping paths. Their changes are in their own copy and not merged yet, so you may not see them. Tell the user before editing those."
+                  : "Claimed, but teammates hold overlapping paths. Tell the user before editing those.",
           };
         }),
       ),

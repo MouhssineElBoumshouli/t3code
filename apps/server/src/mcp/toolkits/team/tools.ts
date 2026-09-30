@@ -43,6 +43,8 @@ const ClaimSummary = Schema.Struct({
   who: Schema.String,
   /** The claiming thread's task title, or "no task". */
   task: Schema.String,
+  /** Where the claimed work is, so the agent knows why it cannot see it. */
+  where: Schema.String,
   paths: Schema.Array(Schema.String),
   note: Schema.optionalKey(Schema.String),
 });
@@ -110,11 +112,15 @@ const TeamStatusTool = Tool.make("team_status", {
 
 const TeamClaimTool = Tool.make("team_claim", {
   description:
-    "Claim files or folders before editing ones you have not touched, so teammates know. Returns overlaps with others' claims; coordinate before editing those. release: true releases the paths, or all your claims without paths.",
+    "Claim files or folders before editing them; returns overlaps with others' claims. Claims last until your work merges or this thread is archived: don't release when done. release: true only if the user drops the work.",
   parameters: Schema.Struct({
     paths: Schema.optional(PathList),
     note: Schema.optional(Schema.String.annotate({ description: "Why, in a few words." })),
-    release: Schema.optional(Schema.Boolean),
+    release: Schema.optional(
+      Schema.Boolean.annotate({
+        description: "Releases the paths, or all your claims without paths.",
+      }),
+    ),
   }),
   success: Schema.Union([NotInTeamResult, TeamClaimResult]),
   failure: TeamToolFailure,
