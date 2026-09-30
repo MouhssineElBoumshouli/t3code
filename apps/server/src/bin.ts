@@ -23,6 +23,8 @@ import { claudeHistoryCommand } from "./cli/claudeHistory.ts";
 import { serviceLauncherCommand } from "./cli/serviceLauncher.ts";
 import { servicePreflightCommand } from "./cli/servicePreflight.ts";
 import { sshHelperCommand } from "./cli/sshHelper.ts";
+// team-layer: `t3 team` commands (fork-only, see team/DESIGN.md).
+import { teamCommand } from "./cli/team.ts";
 import { themeCommand } from "./cli/theme.ts";
 import { traceCommand } from "./cli/trace.ts";
 import { triageCommand } from "./cli/triage.ts";
@@ -74,6 +76,8 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       themeCommand,
       traceCommand,
       triageCommand,
+      // team-layer: `t3 team` commands.
+      teamCommand,
       cloudEnabled ? connectCommand : connectUnavailableCommand,
     ]),
   );

@@ -2,6 +2,43 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-09-30 — M1.1 foundation: schemas, storage, team service, `t3 team init`
+
+**What changed**
+
+- Contracts: `packages/contracts/src/team.ts` with the team file (`teamId`, `name`), team, member, claim, claim overlap, task, handoff (with files and commit) and activity schemas, plus path helpers (`normalizeTeamPath`, `teamPathsOverlap`) and word caps (rulebook 1,500, handoff 150).
+- Storage: our own migrator (`apps/server/src/team/TeamMigrations.ts`) with table `team_sql_migrations`, and migration `001_TeamCore` creating `team_teams`, `team_members`, `team_claims`, `team_tasks`, `team_handoffs`, `team_activity`. Upstream's migration list is untouched.
+- Service: `apps/server/src/team/TeamService.ts`. It creates a team with its owner (safe to call again), reads teams and members, claims and releases paths (returns overlaps with other threads' claims; releasing a folder releases paths inside it), creates, updates and finds tasks (by id or thread), writes and lists handoffs (150-word cap), and records every write in the activity feed. Runs team migrations when built.
+- Server start: `TeamService.layer` added to `RuntimeCoreDependenciesLive` in `server.ts`, just above `PersistenceLayerLive`.
+- CLI: `t3 team init [path] [--name]` (`apps/server/src/cli/team.ts`, logic in `apps/server/src/team/TeamProjectFiles.ts`). Finds the repo root by walking up to `.git`. Writes `.team/team.json` and `.team/rulebook.md` only if missing. Sets `"defaultThreadEnvMode": "worktree"` in `t3.json` by editing only that field, so comments, trailing commas and other keys stay; the edit is re-parsed and compared before it is written. Checks everything before writing anything. Never commits; prints what it did and says to review and commit.
+- DESIGN.md: answered open questions 2 (second migrator) and 5 (where the layer starts, where CLI commands register) in section 6; updated D3, D6 layer 4, the section 4 table and milestones.
+
+**Files touched**
+
+- New: `packages/contracts/src/team.ts`, `apps/server/src/team/TeamErrors.ts`, `apps/server/src/team/TeamMigrations.ts`, `apps/server/src/team/Migrations/001_TeamCore.ts`, `apps/server/src/team/TeamService.ts`, `apps/server/src/team/TeamProjectFiles.ts`, `apps/server/src/cli/team.ts`, and tests `apps/server/src/team/TeamMigrations.test.ts`, `apps/server/src/team/TeamService.test.ts`, `apps/server/src/team/TeamProjectFiles.test.ts`, `apps/server/src/cli/team.test.ts`.
+- Upstream edits, all marked `team-layer:` (10 lines in 3 files): `packages/contracts/src/index.ts` (one export), `apps/server/src/server.ts` (import + one layer line), `apps/server/src/bin.ts` (import + one subcommand).
+- `team/DESIGN.md`, `team/PROGRESS.md`.
+
+**How it was checked**
+
+- Tests, from `apps/server`: `vp test run src/team/TeamMigrations.test.ts src/team/TeamService.test.ts src/team/TeamProjectFiles.test.ts src/cli/team.test.ts` → 4 files, 24 tests passed.
+- Typecheck: `npx tsc --noEmit` in `apps/server` → 0 errors; in `packages/contracts` → 0 errors.
+- Lint: `vp lint --report-unused-disable-directives` on every changed and new file → no findings in our code. One existing upstream warning remains in `server.ts` line 8 (unused `ProviderDriverKind` import); it is in the committed upstream file and I did not touch it.
+- Real CLI run: `node apps/server/src/bin.ts team init <scratch repo made with git init> --name "Demo team"` created the three files and kept a comment in the existing `t3.json`. A second run reported all three unchanged. `git log` showed no commits.
+- Real server run: `node apps/server/src/bin.ts serve --base-dir <scratch> --port 13987 --no-browser`. The log shows upstream migrations, then "Team migrations ran successfully" (`1_TeamCore`) about 0.4 s later. The database had `team_sql_migrations` = [1], `effect_sql_migrations` = 1-54, and all seven `team_*` tables. A restart ran no migrations and logged no errors.
+- No repo-wide checks were run.
+
+**What's left**
+
+- M1.2: the five team tools in `apps/server/src/mcp/toolkits/team/`, the call-time membership check, and registering the team in the database from `.team/team.json` (the service's `ensureTeam`) when a team project is first used. `t3 team init` writes files only and does not touch the database.
+- M1.3: the `teamContext` block in runtime instructions.
+
+**Unsure about / notes**
+
+- A mistake during the server check: my first background start used `setsid`, so the PID I recorded was the wrapper's, not the server's. My first "restart" then ran against a port that was still in use, and that second server exited with address-in-use. I found the real server by its port, confirmed its working folder and arguments, stopped it, and redid the restart check with the correct PID. No other process was touched.
+- `t3.json` with the key only inside a comment before the real key cannot be edited safely; `t3 team init` then stops and asks the user to add the field by hand. Covered by a test.
+- `.team/team.json` uses a UUID for `teamId`.
+
 ## 2026-09-30 — Design doc v2
 
 **What changed**

@@ -102,7 +102,7 @@ When a member opens a project whose `.team/team.json` has a `teamId` they joined
 
 The `.team/` folder is in the user's project, not in our app's repo.
 
-**Tables.** Team tables live in the same SQLite database as the rest of T3, all named `team_*`. They get their own migrator with its own tracking table, `team_sql_migrations`, started from our team layer. [checked: the migrator accepts a `table` option] [verify: that a second migrator runs cleanly on the same `SqlClient` at startup] We never add to upstream's `migrationEntries` in `persistence/Migrations.ts`: any id we pick would clash with upstream's next one or make the migrator skip upstream's future migrations. [checked]
+**Tables.** Team tables live in the same SQLite database as the rest of T3, all named `team_*`. They get their own migrator with its own tracking table, `team_sql_migrations`, started from our team layer. [checked: the migrator accepts a `table` option] A second migrator runs cleanly on the same `SqlClient` at startup, after upstream's. [checked in M1.1: `apps/server/src/team/TeamMigrations.ts`, its tests, and a real server start; see section 6] We never add to upstream's `migrationEntries` in `persistence/Migrations.ts`: any id we pick would clash with upstream's next one or make the migrator skip upstream's future migrations. [checked]
 
 Decisions are written by people, or by agents with normal file edits. The rulebook explains the format. There is no decision tool in v1 (D5).
 
@@ -157,7 +157,7 @@ Five layers, cheapest first:
    - Only use events with `status: "ready"`. Mid-turn placeholders have `status: "missing"` and no files. [checked]
    - Treat every file as "touched". The event's `kind` is always `"modified"`, even for new or deleted files. [checked]
    - Works for every provider and every permission mode, because it does not rely on the agent obeying. [checked]
-4. **Separate copies.** Each thread works on its own worktree and branch. Worktrees are opt-in in T3 (default `"local"`), so **creating a team turns them on**: team creation writes `.team/team.json` and sets `"defaultThreadEnvMode": "worktree"` in the project's `t3.json` (creating the file or adding the field), in one commit the creator reviews and pushes. [checked: t3.json field exists] A member's per-project setting can still override the file. [checked] If it is set to `"local"`, the team UI shows a notice, because in local mode a turn's diff also includes human edits and other threads' edits in the same checkout. [checked]
+4. **Separate copies.** Each thread works on its own worktree and branch. Worktrees are opt-in in T3 (default `"local"`), so **creating a team turns them on**: `t3 team init` writes `.team/team.json` and sets `"defaultThreadEnvMode": "worktree"` in the project's `t3.json` (creating the file or adding the field, keeping everything else). It never commits; it tells the creator to review and commit the files. [checked: t3.json field exists; built in M1.1] A member's per-project setting can still override the file. [checked] If it is set to `"local"`, the team UI shows a notice, because in local mode a turn's diff also includes human edits and other threads' edits in the same checkout. [checked]
 5. **Pull requests.** Git stays the final judge.
 
 Later, not v1:
@@ -226,27 +226,29 @@ Smart features on top of the board, after v1:
 
 **Upstream files we expect to edit:**
 
-| File                                                     | Why                                                                                                                                                                            |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `apps/server/src/provider/RuntimeInstructions.ts`        | Optional `teamContext` input (D4). [checked]                                                                                                                                   |
-| `apps/server/src/provider/Layers/ClaudeAdapter.ts`       | Pass `teamContext` (D4). [checked]                                                                                                                                             |
-| `apps/server/src/provider/Layers/CodexSessionRuntime.ts` | Pass the T3 thread id's `teamContext` down (D4). [checked]                                                                                                                     |
-| `apps/server/src/provider/CodexDeveloperInstructions.ts` | Accept and forward `teamContext` (D4). [checked]                                                                                                                               |
-| `apps/server/src/provider/Layers/CursorAdapter.ts`       | Pass `teamContext` (D4). [checked]                                                                                                                                             |
-| `apps/server/src/provider/Layers/GrokAdapter.ts`         | Pass `teamContext` (D4). [checked]                                                                                                                                             |
-| `apps/server/src/provider/Layers/OpenCodeAdapter.ts`     | Pass `teamContext` (D4). [checked]                                                                                                                                             |
-| `apps/server/src/provider/Layers/AntigravityAdapter.ts`  | Pass `teamContext` (D4). [checked]                                                                                                                                             |
-| `apps/server/src/mcp/McpHttpServer.ts`                   | Add the team toolkit to `layer` (D5). [checked]                                                                                                                                |
-| `packages/contracts/src/auth.ts`                         | Add `team:read`, `team:write`, and add them to `AuthAdministrativeScopes` (D1). [checked]                                                                                      |
-| `apps/server/src/server.ts`                              | Merge the team HTTP API into the routes layer, and start the team layer (D1). [verify: best place to start the team reactor; `OrchestrationReactor.ts` is the other candidate] |
-| CLI command registration                                 | Add `t3 team` commands (create, invite). [verify: which file registers subcommands]                                                                                            |
-| Web UI entry points                                      | Team screens (M3 and later). [verify]                                                                                                                                          |
+| File                                                     | Why                                                                                                                                                                                                    |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `apps/server/src/provider/RuntimeInstructions.ts`        | Optional `teamContext` input (D4). [checked]                                                                                                                                                           |
+| `apps/server/src/provider/Layers/ClaudeAdapter.ts`       | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
+| `apps/server/src/provider/Layers/CodexSessionRuntime.ts` | Pass the T3 thread id's `teamContext` down (D4). [checked]                                                                                                                                             |
+| `apps/server/src/provider/CodexDeveloperInstructions.ts` | Accept and forward `teamContext` (D4). [checked]                                                                                                                                                       |
+| `apps/server/src/provider/Layers/CursorAdapter.ts`       | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
+| `apps/server/src/provider/Layers/GrokAdapter.ts`         | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
+| `apps/server/src/provider/Layers/OpenCodeAdapter.ts`     | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
+| `apps/server/src/provider/Layers/AntigravityAdapter.ts`  | Pass `teamContext` (D4). [checked]                                                                                                                                                                     |
+| `apps/server/src/mcp/McpHttpServer.ts`                   | Add the team toolkit to `layer` (D5). [checked]                                                                                                                                                        |
+| `packages/contracts/src/index.ts`                        | One `export * from "./team.ts"` line for the team schemas. [checked: done in M1.1]                                                                                                                     |
+| `packages/contracts/src/auth.ts`                         | Add `team:read`, `team:write`, and add them to `AuthAdministrativeScopes` (D1). [checked]                                                                                                              |
+| `apps/server/src/server.ts`                              | Start the team layer: `TeamService.layer` in `RuntimeCoreDependenciesLive`, just above `PersistenceLayerLive` (D3). Later, merge the team HTTP API into the routes layer (D1). [checked: done in M1.1] |
+| `apps/server/src/bin.ts`                                 | Register `t3 team` in `makeCli`'s subcommand list (`init` now, `invite` in M2). [checked: done in M1.1]                                                                                                |
+| Web UI entry points                                      | Team screens (M3 and later). [verify]                                                                                                                                                                  |
 
 **Upstream files we do not edit:** `persistence/Migrations.ts`, `persistence/Layers/Sqlite.ts`, `WsRpcGroup` in contracts, `auth/RpcAuthorization.ts`, `mcp/McpInvocationContext.ts`, `provider/Layers/ProviderService.ts`, and `EnvironmentHttpApi` in `packages/contracts/src/environmentHttp.ts`.
 
 ## 5. Milestones
 
 - **M1, solo:** team tools, host mode on your own machine, `<team_context>` block through `teamContext`, handoff notes, `.team/` files (`team.json`, rulebook, decisions), own migrator and `team_*` tables, team creation that turns on worktrees. Pass the cold start test with Claude Code and Codex.
+  - **M1.1, foundation (done 2026-09-30):** team schemas in contracts, own migrator and `team_*` tables, `TeamService` (teams, members, claims, tasks, handoffs, activity), `t3 team init`. No tools, networking or UI yet.
 - **M2, two people:** team HTTP API, `team:read` / `team:write` scopes, `t3 team invite`, member join with `bootstrapRemoteBearerSession`, member push (AgentAwarenessRelay pattern) and 15-30 second polling, offline queue. Test with one friend over Tailscale.
 - **M3, conflicts:** overlap detection from turn diffs, overlap warnings, team board in the UI.
 - **M4, team features:** the self-moving task board (D9), catch me up, handoff UI, then guide mode.
@@ -254,11 +256,23 @@ Smart features on top of the board, after v1:
 
 ## 6. Open questions before building
 
-The 9 questions from v1 are answered in [team/CODE_FINDINGS.md](CODE_FINDINGS.md). These are still open, each marked [verify] above:
+The 9 questions from v1 are answered in [team/CODE_FINDINGS.md](CODE_FINDINGS.md). Still open, each marked [verify] above:
 
 1. Can a separate `HttpApiBuilder.layer` for the team API reuse `environmentAuthenticatedAuthLayer` and be merged into `makeRoutesLayer` in `server.ts`? (D1)
-2. Does a second `Migrator.make({ table: "team_sql_migrations" })` run cleanly on the same `SqlClient` at startup, after upstream's migrations? (D3)
-3. Do Cursor, Grok and Antigravity keep earlier user-message text in context, so the team block could be sent only on the first turn? (D4)
-4. Which providers emit mid-turn file-change events, and what do they contain? (D6 research item)
-5. Where is the best place to start the team layer: `server.ts` or `OrchestrationReactor.ts`? Which file registers CLI subcommands? (Section 4)
-6. Which web UI files are the entry points for team screens? (Section 4)
+2. Do Cursor, Grok and Antigravity keep earlier user-message text in context, so the team block could be sent only on the first turn? (D4)
+3. Which providers emit mid-turn file-change events, and what do they contain? (D6 research item)
+4. Which web UI files are the entry points for team screens? (Section 4)
+
+### Answered in M1.1
+
+**Does a second migrator run cleanly on the same `SqlClient`, after upstream's?** Yes.
+
+- `apps/server/src/team/TeamMigrations.ts` calls the same `Migrator` with `table: "team_sql_migrations"`. The table name is an option of the migrator's run call, not of `Migrator.make`.
+- `TeamService` runs it when the service is built. It asks for the `SqlClient` from the SQLite persistence layer, and that layer finishes upstream's migrations before it hands the client out. So team migrations always run second.
+- Tests (`apps/server/src/team/TeamMigrations.test.ts`): team migrations run and record only in their own table; running them again does nothing; with upstream migrated to an older id, then team migrations, then a newer upstream, every newer upstream migration still runs; running team migrations first leaves all of upstream's to run.
+- A real server start against a scratch home dir logged upstream's "Migrations ran successfully" at 16:50:50.676 and "Team migrations ran successfully" at 16:50:51.110. `team_sql_migrations` held `1 TeamCore`, and `effect_sql_migrations` held ids 1-54 only. A second start ran neither.
+
+**Where does the team layer start, and which file registers CLI subcommands?**
+
+- The team layer starts in `apps/server/src/server.ts`, as one `Layer.provideMerge(TeamService.layer)` in `RuntimeCoreDependenciesLive`, just above `Layer.provideMerge(PersistenceLayerLive)`. That placement gives it the persistence layer's `SqlClient` (after upstream's migrations), and makes `TeamService` available to the layers above it, including the MCP toolkit we add in M1.2. `OrchestrationReactor.ts` was not needed: the service is storage, not a reactor. Where M3's turn-diff reactor starts is still to be decided then.
+- CLI subcommands are registered in `apps/server/src/bin.ts`, in the `Command.withSubcommands([...])` list inside `makeCli`.
