@@ -2,6 +2,35 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-09-30 — Design doc added and checked against the code
+
+**What changed**
+
+- Copied DESIGN.md from the Windows Downloads folder to team/DESIGN.md, unchanged.
+- Wrote team/CODE_FINDINGS.md: answers to the 9 questions in DESIGN.md section 6, a re-check of every [checked] claim, and a list of design parts the code says won't work, with what to do instead. Research only; no feature code.
+
+**Files touched**
+
+- team/DESIGN.md (new, byte-identical copy)
+- team/CODE_FINDINGS.md (new)
+- team/PROGRESS.md
+
+**How it was checked**
+
+- `cmp` between the Downloads file and team/DESIGN.md: identical.
+- Every answer comes from reading the code at the file and line numbers given in CODE_FINDINGS.md. Nothing was run; no typecheck or tests, because only Markdown changed.
+- Did not pull from upstream.
+
+**What's left**
+
+- Decide on the design changes in the last section of CODE_FINDINGS.md before M1. The big ones: a small static instruction block instead of the full board in runtime instructions, a separate team migration table, an HTTP API for team calls instead of WebSocket RPCs, and an explicit team id instead of `canonicalKey` alone.
+
+**Unsure about / notes**
+
+- Claim 4 in the design (`canonicalKey` matches across clones) is partly wrong: the key prefers the `upstream` remote.
+- Not checked: the web UI's scope display, every HTTP route's scope check, and whether all six providers read CLAUDE.md/AGENTS.md. Listed at the end of CODE_FINDINGS.md.
+- AGENTS.md says not to commit research notes. These two files were asked for explicitly, so I committed them under team/.
+
 ## 2026-09-30 — Dev environment setup and fork working rules
 
 **What changed**
