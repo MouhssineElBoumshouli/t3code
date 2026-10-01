@@ -619,14 +619,19 @@ describe("team toolkit", () => {
         files: ["src/login.ts"],
       });
       assert.match(handoff!.when, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/u);
-      assert.equal(fromA.message, "Code wins over notes.");
+      assert.equal(
+        fromA.message,
+        "Each mark compares the note with the files in your copy now. Code wins over notes.",
+      );
 
       // Someone changes the file after the handoff.
       writeFile(root, "src/login.ts", "v3\n");
       const afterEdit = inTeam(yield* call("team_memory_search", { query: "src/login.ts" }));
       assert.deepEqual(
         afterEdit.results.map((result) => result.freshness),
-        ["maybe outdated: src/login.ts changed since"],
+        [
+          "maybe outdated: content of src/login.ts changed since this note was written (+1 -1 lines)",
+        ],
       );
 
       // Chat B's copy never got chat A's work.
@@ -634,7 +639,10 @@ describe("team toolkit", () => {
       assert.deepEqual(
         fromB.results.map((result) => [result.kind, result.freshness]),
         [
-          ["handoff", "not merged yet"],
+          [
+            "handoff",
+            "not merged yet: this note's version of src/login.ts is not in your copy's history (another chat's uncommitted or unmerged work)",
+          ],
           ["decision", "fresh"],
         ],
       );
@@ -654,9 +662,15 @@ describe("team toolkit", () => {
       const search = inTeam(yield* call("team_memory_search", { query: "cache" }));
       assert.deepEqual(
         search.results.map((result) => [result.says, result.freshness]),
-        [7, 6, 5, 4, 3].map((index) => [`Cache step ${index}.`, "unknown"]),
+        [7, 6, 5, 4, 3].map((index) => [
+          `Cache step ${index}.`,
+          "unknown: the note names no files to check",
+        ]),
       );
-      assert.equal(search.message, "2 more matches left out. Code wins over notes.");
+      assert.equal(
+        search.message,
+        "2 more matches left out. Each mark compares the note with the files in your copy now. Code wins over notes.",
+      );
 
       const none = inTeam(yield* call("team_memory_search", { query: "billing" }));
       assert.deepEqual(none, {
@@ -665,6 +679,38 @@ describe("team toolkit", () => {
       });
       const empty = yield* call("team_memory_search", { query: "why is the" }).pipe(Effect.flip);
       assert.equal(empty.message, "Pass a few keywords or file paths.");
+    }),
+  );
+
+  it.effect("shows automatic notes below real handoffs, marked as automatic", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      initRepo(root, { "src/login.ts": "v1\n" });
+      const { call, teams } = yield* makeHarness({ workspaceRoot: root, realGit: true });
+      yield* call("team_handoff", { changed: "Login form.", files: ["src/login.ts"] }, THREAD_B);
+      yield* TestClock.adjust("1 minute");
+      const [owner] = yield* teams.listMembers(TEAM_ID);
+      // Newer, and matches more of the query, but was not written by an agent.
+      yield* teams.saveAutomaticNote({
+        teamId: TEAM_ID,
+        memberId: owner!.memberId,
+        thread: { environmentId: ENVIRONMENT_ID, threadId: THREAD_C },
+        files: ["src/login.ts", "src/form.ts"],
+        fileHashes: { "src/login.ts": git(root, "hash-object", "src/login.ts") },
+      });
+
+      const search = inTeam(yield* call("team_memory_search", { query: "login form src/form.ts" }));
+      assert.deepEqual(
+        search.results.map(({ kind, says, freshness }) => ({ kind, says, freshness })),
+        [
+          { kind: "handoff", says: "Login form.", freshness: "fresh" },
+          {
+            kind: "automatic note",
+            says: "Automatic note, not written by the agent: this chat changed 2 files.",
+            freshness: "fresh",
+          },
+        ],
+      );
     }),
   );
 

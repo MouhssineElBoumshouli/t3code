@@ -18,6 +18,8 @@ export const TEAM_RULEBOOK_FILE_NAME = "rulebook.md";
 export const TEAM_RULEBOOK_MAX_WORDS = 1_500;
 /** Cap on a handoff note's text (changed + left + risks). */
 export const TEAM_HANDOFF_MAX_WORDS = 150;
+/** Most files an automatic note keeps; the files of the latest turns are kept. */
+export const TEAM_AUTOMATIC_NOTE_MAX_FILES = 50;
 /** Folder inside {@link TEAM_DIRECTORY_NAME} that holds one Markdown file per decision. */
 export const TEAM_DECISIONS_DIRECTORY_NAME = "decisions";
 
@@ -136,6 +138,12 @@ export const TeamHandoff = Schema.Struct({
    * not committed yet (D7). Null for older notes; folders are left out.
    */
   fileHashes: Schema.NullOr(Schema.Record(TeamPath, Schema.NullOr(TrimmedNonEmptyString))),
+  /**
+   * Saved by the team layer after a turn, not written by the agent: the files
+   * the thread changed. One per thread, updated in place; no word cap (D7).
+   */
+  automatic: Schema.Boolean,
+  /** For an automatic note, when it was last updated. */
   createdAt: IsoDateTime,
 });
 export type TeamHandoff = typeof TeamHandoff.Type;

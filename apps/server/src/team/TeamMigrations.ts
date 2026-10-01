@@ -17,12 +17,14 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 
 import Migration0001 from "./Migrations/001_TeamCore.ts";
 import Migration0002 from "./Migrations/002_TeamHandoffFileHashes.ts";
+import Migration0003 from "./Migrations/003_TeamAutomaticNotes.ts";
 
 export const TEAM_MIGRATIONS_TABLE = "team_sql_migrations";
 
 const teamMigrationEntries = [
   [1, "TeamCore", Migration0001],
   [2, "TeamHandoffFileHashes", Migration0002],
+  [3, "TeamAutomaticNotes", Migration0003],
 ] as const;
 
 export const teamMigrationManifest = teamMigrationEntries.map(([id, name]) => [id, name] as const);

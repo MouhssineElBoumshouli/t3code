@@ -97,6 +97,7 @@ import * as ThreadPullRequestReactor from "./orchestration/ThreadPullRequestReac
 // team-layer: team service (fork-only, see team/DESIGN.md).
 import * as TeamService from "./team/TeamService.ts";
 import { TeamBriefingLive } from "./mcp/toolkits/team/briefing.ts";
+import { TeamAutoNotesLive } from "./team/TeamAutoNotes.ts";
 import { TeamClaimAutoReleaseLive } from "./team/TeamClaimAutoRelease.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
@@ -281,6 +282,8 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(TeamBriefingLive),
   // team-layer: release claims when a thread's work merges or is dropped (team/DESIGN.md D5).
   Layer.provideMerge(TeamClaimAutoReleaseLive),
+  // team-layer: an automatic note per thread after each turn (team/DESIGN.md D7).
+  Layer.provideMerge(TeamAutoNotesLive),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 

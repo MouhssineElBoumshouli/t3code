@@ -1,5 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, TeamFile, TeamId, TeamMemberId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  TEAM_AUTOMATIC_NOTE_MAX_FILES,
+  TeamFile,
+  TeamId,
+  TeamMemberId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -331,6 +338,126 @@ describe("TeamService", () => {
           .pipe(Effect.flip);
         assert.equal(tooLong._tag, "TeamHandoffTooLongError");
         assert.lengthOf(yield* teams.listHandoffs(teamFile.teamId), 2);
+      }),
+    ),
+  );
+
+  it.effect(
+    "keeps one automatic note per thread, updated in place, newest turn's files first",
+    () =>
+      withTeamService(
+        Effect.gen(function* () {
+          const { teams, owner } = yield* setUpTeam;
+          const task = yield* teams.createTask({
+            teamId: teamFile.teamId,
+            actorMemberId: owner.memberId,
+            title: "Login page",
+            thread: threadA,
+          });
+          const activityBefore = (yield* teams.listActivity(teamFile.teamId)).length;
+          const first = yield* teams.saveAutomaticNote({
+            teamId: teamFile.teamId,
+            memberId: owner.memberId,
+            thread: threadA,
+            taskId: task.taskId,
+            files: ["./src/login.ts", "src/form.ts"],
+            commit: "abc1234",
+            fileHashes: { "src/login.ts": "aaa1", "src/form.ts": "bbb1" },
+          });
+          assert.isTrue(first.automatic);
+          assert.equal(
+            first.changed,
+            'Automatic note, not written by the agent: this chat changed 2 files for task "Login page".',
+          );
+
+          yield* TestClock.adjust("1 minute");
+          const second = yield* teams.saveAutomaticNote({
+            teamId: teamFile.teamId,
+            memberId: owner.memberId,
+            thread: threadA,
+            taskId: task.taskId,
+            files: ["src/api.ts", "src/login.ts"],
+            commit: "def5678",
+            // src/api.ts could not be hashed (a folder, say): no hash for it.
+            fileHashes: { "src/login.ts": "aaa2" },
+          });
+          assert.equal(second.handoffId, first.handoffId);
+          assert.deepEqual(second.files, ["src/api.ts", "src/login.ts", "src/form.ts"]);
+          // This turn's hashes replace the old ones; earlier files keep theirs.
+          assert.deepEqual(second.fileHashes, { "src/login.ts": "aaa2", "src/form.ts": "bbb1" });
+          assert.equal(second.commit, "def5678");
+          assert.isAbove(Date.parse(second.createdAt), Date.parse(first.createdAt));
+          assert.equal(
+            second.changed,
+            'Automatic note, not written by the agent: this chat changed 3 files for task "Login page".',
+          );
+
+          // Another thread gets its own note; a real handoff stays separate and untouched.
+          yield* teams.saveAutomaticNote({
+            teamId: teamFile.teamId,
+            memberId: owner.memberId,
+            thread: threadB,
+            files: ["docs/a.md"],
+          });
+          const handoff = yield* teams.writeHandoff({
+            teamId: teamFile.teamId,
+            memberId: owner.memberId,
+            thread: threadA,
+            changed: "Login form done.",
+            files: ["src/login.ts"],
+          });
+          yield* teams.saveAutomaticNote({
+            teamId: teamFile.teamId,
+            memberId: owner.memberId,
+            thread: threadA,
+            files: ["src/login.ts"],
+          });
+          const forThreadA = yield* teams.listHandoffs(teamFile.teamId, { thread: threadA });
+          assert.sameDeepMembers(
+            forThreadA.map(({ handoffId, automatic, changed }) => ({
+              handoffId,
+              automatic,
+              changed,
+            })),
+            [
+              { handoffId: handoff.handoffId, automatic: false, changed: "Login form done." },
+              {
+                handoffId: first.handoffId,
+                automatic: true,
+                changed: "Automatic note, not written by the agent: this chat changed 3 files.",
+              },
+            ],
+          );
+          assert.lengthOf(yield* teams.listHandoffs(teamFile.teamId), 3);
+          // Automatic notes never write activity lines; the handoff wrote one.
+          assert.lengthOf(yield* teams.listActivity(teamFile.teamId), activityBefore + 1);
+        }),
+      ),
+  );
+
+  it.effect("caps an automatic note's files, and never counts them against the handoff cap", () =>
+    withTeamService(
+      Effect.gen(function* () {
+        const { teams, owner } = yield* setUpTeam;
+        const many = Array.from({ length: 60 }, (_, index) => `src/file-${index}.ts`);
+        const note = yield* teams.saveAutomaticNote({
+          teamId: teamFile.teamId,
+          memberId: owner.memberId,
+          thread: threadA,
+          files: many,
+        });
+        assert.lengthOf(note.files, TEAM_AUTOMATIC_NOTE_MAX_FILES);
+        assert.deepEqual(note.files.slice(0, 2), ["src/file-0.ts", "src/file-1.ts"]);
+
+        // The thread can still write a full 150-word handoff, and only its own words count.
+        const handoff = yield* teams.writeHandoff({
+          teamId: teamFile.teamId,
+          memberId: owner.memberId,
+          thread: threadA,
+          changed: Array.from({ length: 150 }, () => "word").join(" "),
+          files: many,
+        });
+        assert.isFalse(handoff.automatic);
       }),
     ),
   );

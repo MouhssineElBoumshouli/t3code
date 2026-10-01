@@ -94,12 +94,13 @@ export const TeamHandoffResult = Schema.Struct({
 export type TeamHandoffResult = typeof TeamHandoffResult.Type;
 
 const MemoryResult = Schema.Struct({
-  kind: Schema.Literals(["handoff", "decision"]),
+  /** "automatic note": saved after a turn, not written by the agent; ranked below the rest. */
+  kind: Schema.Literals(["handoff", "automatic note", "decision"]),
   says: Schema.String,
   who: Schema.String,
   when: Schema.String,
   files: Schema.Array(Schema.String),
-  /** "fresh", "maybe outdated: <files> changed since", "not merged yet" or "unknown" (D7). */
+  /** "fresh", or "maybe outdated: …", "not merged yet: …" or "unknown: …" with why (D7). */
   freshness: Schema.String,
   /** Decisions: the file it came from. */
   source: Schema.optionalKey(Schema.String),
@@ -190,7 +191,7 @@ const TeamHandoffTool = Tool.make("team_handoff", {
 
 const TeamMemorySearchTool = Tool.make("team_memory_search", {
   description:
-    "Search the team's handoff notes and decisions by keywords or file paths. Returns up to 5 short matches, each marked fresh, maybe outdated, not merged yet, or unknown for your copy.",
+    "Search the team's handoff notes, automatic notes and decisions by keywords or file paths. Returns up to 5 short matches, each marked fresh, maybe outdated, not merged yet, or unknown for your copy, with why.",
   parameters: Schema.Struct({
     query: Schema.String.annotate({ description: "A few keywords or file paths." }),
   }),

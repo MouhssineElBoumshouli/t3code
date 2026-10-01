@@ -15,6 +15,7 @@ import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import {
   checkFreshness,
+  currentCommit,
   handoffEntry,
   hashFiles,
   type MemoryEntry,
@@ -170,23 +171,6 @@ const make = Effect.gen(function* () {
         ),
       ]),
     );
-
-  const currentCommit = (workingFolder: string) =>
-    git
-      .execute({
-        operation: "TeamToolkit.currentCommit",
-        cwd: workingFolder,
-        args: ["rev-parse", "HEAD"],
-        allowNonZeroExit: true,
-      })
-      .pipe(
-        Effect.map((result) => {
-          const sha = result.stdout.trim();
-          return result.exitCode === 0 && sha.length > 0 ? sha : null;
-        }),
-        // No Git, or no commit yet: the note is still worth saving.
-        Effect.orElseSucceed(() => null),
-      );
 
   const withFiles = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) =>
     effect.pipe(
@@ -386,10 +370,10 @@ const make = Effect.gen(function* () {
           const task = yield* teams
             .findTaskForThread(teamId, context.thread)
             .pipe(Effect.mapError(fromService("handoff")));
-          const commit = yield* currentCommit(context.workingFolder);
+          const commit = yield* currentCommit(git, context.workingFolder);
           // Freshness compares these later, since the work is often not committed yet (D7).
           const fileHashes = Object.fromEntries(
-            yield* hashFiles(git, context.teamRoot, files).pipe(withFiles),
+            yield* hashFiles(git, context.teamRoot, files, { store: true }).pipe(withFiles),
           );
           const handoff = yield* teams
             .writeHandoff({
@@ -459,9 +443,14 @@ const make = Effect.gen(function* () {
           const message =
             results.length === 0
               ? "No handoff notes or decisions match. Read the code."
-              : matched > results.length
-                ? `${matched - results.length} more matches left out. Code wins over notes.`
-                : "Code wins over notes.";
+              : [
+                  matched > results.length
+                    ? `${matched - results.length} more matches left out.`
+                    : null,
+                  "Each mark compares the note with the files in your copy now. Code wins over notes.",
+                ]
+                  .filter((part) => part !== null)
+                  .join(" ");
           return { results, message } satisfies TeamMemorySearchResult;
         }),
       ),

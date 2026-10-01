@@ -2,6 +2,60 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-01 — M1.5: freshness reasons, automatic notes, cold start test setup
+
+**What changed**
+
+- From manual test round 4 (passed: "not merged yet", "fresh", "maybe outdated" after a hand edit, and "not in a team" all showed up right). Two problems it found are fixed here.
+- Freshness reasons. The agent got "maybe outdated: src/login.ts changed since", said it meant the work was not committed, and told the user to commit. Every mark but "fresh" now says why: "maybe outdated: content of src/login.ts changed since this note was written (+1 -0 lines)"; deleted and new files named as such; commit-only notes say "changed since commit abc1234, when this was written (+1 -1 lines)"; "not merged yet: this note's version of src/login.ts is not in your copy's history (another chat's uncommitted or unmerged work)" or the commit reason; "unknown: <why>" for no files, not a Git checkout, nothing stored, or a failed check. The search message now says "Each mark compares the note with the files in your copy now. Code wins over notes."
+- Line counts need the old content, which for uncommitted work Git never had. `team_handoff` (and automatic notes) now store it with `git hash-object -w`. Unreferenced objects, pruned by `git gc` after two weeks by default; then the counts are just left out. Counts use the `diff` package already in the server; files over 256 KB or binary get none.
+- Automatic notes. Chat A wrote no handoff until asked. New `apps/server/src/team/TeamAutoNotes.ts`: on each ready turn diff with files, it saves one automatic note per thread (files changed across turns, newest first, max 50; content hashes; `HEAD`; task), updated in place. Migration `3_TeamAutomaticNotes`: `automatic` column plus a unique index per thread for automatic rows. No activity line, no word cap, never touches real handoffs. Search shows kind `automatic note`, always below matching handoffs and decisions.
+- Bug found by the new tests, from M1.4: `git hash-object --stdin-paths` reads paths from the repo root, so when `.team/` is in a repo subfolder, handoffs stored no hashes and fell back to the commit. Hashing now passes full paths.
+- Cold start test (D8): `apps/server/scripts/team-cold-start-seed.ts` builds `~/code/team-demo5` and seeds the team in `~/.t3-dev` through `TeamService`; `team/COLD_START_TEST.md` has the steps, the five questions and the expected answers.
+- DESIGN.md: D5 (search row, ranking), D7 (reasons, stored content, automatic notes), D8 (M1 setup), section 4 `server.ts` row, milestones.
+
+**Design points to flag (none blocking, all written into DESIGN.md)**
+
+- Storing note content in the repo's Git objects (`hash-object -w`) is new. Invisible to the user, deduplicated by Git, pruned by `gc`. The alternative was storing file content in our database.
+- D8 Q4 "What is left on my task?" does not fit M1 as is: a new chat has no task card, and every chat on this server is the same member. The seed makes "my task" a task owned by you, linked to no chat; the agent must spot it in `team_status` by owner. If agents fail Q4 this way, `team_status` could list "your other tasks"; not done, your call.
+- "Claims from two other chats" are seeded as chats of two teammates (Sara, Omar) on other servers: claims of this server's threads that do not exist are released at server start (claim lifetime), so fake chats of your own would lose them on restart.
+- Automatic notes add up files across a thread's turns. In local mode they can name files changed by someone else in the same checkout (same limit as D6).
+
+**Files touched**
+
+- New: `apps/server/src/team/TeamAutoNotes.ts`, `TeamAutoNotes.test.ts`, `apps/server/src/team/Migrations/003_TeamAutomaticNotes.ts`, `apps/server/scripts/team-cold-start-seed.ts`, `team/COLD_START_TEST.md`.
+- Our files: `mcp/toolkits/team/{memory,memory.test,handlers,handlers.test,tools}.ts`, `team/{TeamService,TeamService.test,TeamMigrations}.ts`, `packages/contracts/src/team.ts` (`automatic` on `TeamHandoff`, `TEAM_AUTOMATIC_NOTE_MAX_FILES`).
+- Upstream edit, marked `team-layer:`: `apps/server/src/server.ts` (1 import + 1 layer line).
+- `team/DESIGN.md`, `team/PROGRESS.md`.
+
+**How it was checked**
+
+- New tests. Reasons: line counts from stored content (+1 -0), deleted, new, three-file list with counts and "+2 more", no counts without stored content, "not merged yet" reason, commit-only reasons (changed with counts, not in history, unknown commit), each "unknown" reason; hashing from a `.team/` subfolder. Automatic notes: one per thread updated in place (same id, files merged newest turn first, old hashes kept, unhashable file loses its hash, time moves), separate per thread, a real handoff on the same thread untouched, no activity line, 50-file cap, a full 150-word handoff still allowed; ranking below handoffs and decisions even with a higher score and newer, in `rankMemory` and through the tool; reactor with real Git: placeholder, empty and non-team turn diffs skipped, hashes and stored content, second turn updates the same note, paths mapped from a repo subfolder and a worktree, files outside the project dropped.
+- Deliberate breaks, each made tests fail, all restored: no automatic-last ranking (2 failed), relative hash paths (2), no line counts (5), handoff not storing content (1), any diff status counts (1), always insert a new automatic note (2), merge dropping earlier turns' files (2).
+- `vp test run src/team/ src/mcp/toolkits/team/` 5 times in a row → 84 passed each time. Wider, from `apps/server`: `vp test run src/team/ src/mcp/toolkits/team/ src/provider/RuntimeInstructions.test.ts src/provider/Layers/CodexTeamBriefing.test.ts src/mcp/McpHttpServer.test.ts src/server.test.ts` → 14 files, 317 tests passed.
+- Typecheck: `npx tsc --noEmit` in `apps/server` (includes `scripts/`) and `packages/contracts` → 0 errors. `vp lint --report-unused-disable-directives` on the 14 changed `.ts` files → only the old `server.ts` line 8 warning. `vp fmt --check` → clean.
+- Seed script, against a scratch home (a `VACUUM INTO` copy of `~/.t3-dev`, plus its environment id) and a scratch project: ran, re-ran (same row counts: 1 team, 3 members, 2 tasks, 2 claims, 2 handoffs, 7 activity lines), refused a foreign folder (left it alone), `~/.t3`, and a folder inside this repo.
+- What a fresh chat would see: a throwaway test (deleted after) called the real tool handlers on the seeded scratch database from a new worktree of the demo repo. `team_status`, `team_task`, and three searches returned what the expected answers in COLD_START_TEST.md say; Sara's handoff was "maybe outdated: content of src/pins/search.ts changed since this note was written (+1 -1 lines)" (the demo commit was then fixed to really ignore case; it now changes 2 lines, re-seeded, not re-probed).
+- Real server on the scratch home (port 13992): started, no errors or warnings, `team_sql_migrations` = 1, 2, 3, and the seeded teammates' claims were still active after startup. Stopped by the PID captured at start, after checking it owned the port.
+- Not done: no real agent turn has produced an automatic note yet, and no agent has seen the new reasons. That is the manual test. I did not run the seed script against `~/.t3-dev` or `~/code/team-demo5`; you run it as step 2 of the test.
+
+**Manual test (to run)**
+
+`team/COLD_START_TEST.md`: seed, start the dev server with `--home-dir ~/.t3-dev`, add `~/code/team-demo5`, new chat, five questions, grade; then the automatic-note check at the end.
+
+**What's left**
+
+- The cold start test, per provider (Claude Code and Codex for M1).
+- Decide whether `team_status` should list your tasks that no chat holds (if Q4 fails).
+- Decide open question 5 (poll branch-only pull requests).
+- M2: limit registration-on-first-use to host mode; team HTTP API and invites. M3's overlap detection can reuse the turn-diff subscription in `TeamAutoNotes.ts`.
+
+**Unsure about / notes**
+
+- Stored content objects live in the user's repo until `git gc` prunes them. I think that is fine; say if you would rather keep content in our database.
+- An automatic note's text is fixed, so a keyword search finds it mainly by file path, author name or task title.
+- Line counts are counted by the `diff` package (`diffLines`), not by Git, for hash-based notes; they match Git's numbers on the tested cases.
+
 ## 2026-10-01 — M1.4 `team_memory_search`, and manual tests move to `~/.t3-dev`
 
 **What changed**

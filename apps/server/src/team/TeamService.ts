@@ -21,6 +21,7 @@ import {
   type TeamFile,
   type TeamHandoff,
   TeamHandoffId,
+  TEAM_AUTOMATIC_NOTE_MAX_FILES,
   TEAM_HANDOFF_MAX_WORDS,
   TeamId,
   type TeamMember,
@@ -125,6 +126,18 @@ export interface WriteHandoffInput {
   readonly fileHashes?: Readonly<Record<string, string | null>> | undefined;
 }
 
+export interface SaveAutomaticNoteInput {
+  readonly teamId: TeamId;
+  readonly memberId: TeamMemberId;
+  readonly thread: TeamThreadRef;
+  readonly taskId?: TeamTaskId | undefined;
+  /** The files this turn changed. */
+  readonly files: ReadonlyArray<string>;
+  readonly commit?: string | undefined;
+  /** Blob hash per file now, null for a missing file. Keys must be in `files`. */
+  readonly fileHashes?: Readonly<Record<string, string | null>> | undefined;
+}
+
 export class TeamService extends Context.Service<
   TeamService,
   {
@@ -188,7 +201,17 @@ export class TeamService extends Context.Service<
     readonly writeHandoff: (
       input: WriteHandoffInput,
     ) => Effect.Effect<TeamHandoff, TeamServiceError>;
-    /** Newest first. */
+    /**
+     * Saves the thread's automatic note (D7): one per thread, updated in place,
+     * never an activity line. This turn's files come first with their new
+     * hashes; files of earlier turns keep theirs, up to
+     * {@link TEAM_AUTOMATIC_NOTE_MAX_FILES}. No word cap: it is not the
+     * agent's handoff.
+     */
+    readonly saveAutomaticNote: (
+      input: SaveAutomaticNoteInput,
+    ) => Effect.Effect<TeamHandoff, TeamServiceError>;
+    /** Newest first; automatic notes included. */
     readonly listHandoffs: (
       teamId: TeamId,
       options?: { readonly thread?: TeamThreadRef; readonly limit?: number },
@@ -266,6 +289,7 @@ const HandoffRow = Schema.Struct({
   files: PathsJson,
   commit: NullableText,
   fileHashes: FileHashesJson,
+  automatic: Schema.Number,
   createdAt: Schema.String,
 });
 
@@ -341,6 +365,7 @@ const toHandoff = (row: typeof HandoffRow.Type): TeamHandoff => ({
   files: row.files,
   commit: row.commit,
   fileHashes: row.fileHashes,
+  automatic: row.automatic === 1,
   createdAt: row.createdAt,
 });
 
@@ -805,6 +830,7 @@ export const make = Effect.gen(function* () {
     options?: {
       readonly thread?: TeamThreadRef;
       readonly handoffId?: TeamHandoffId;
+      readonly automatic?: boolean;
       readonly limit?: number;
     },
   ) =>
@@ -812,10 +838,11 @@ export const make = Effect.gen(function* () {
       SELECT handoff_id AS "handoffId", team_id AS "teamId", member_id AS "memberId",
         environment_id AS "environmentId", thread_id AS "threadId", task_id AS "taskId",
         changed, left_text AS "left", risks, files_json AS "files", commit_sha AS "commit",
-        file_hashes_json AS "fileHashes", created_at AS "createdAt"
+        file_hashes_json AS "fileHashes", automatic, created_at AS "createdAt"
       FROM team_handoffs
       WHERE team_id = ${teamId}
         ${options?.handoffId === undefined ? sql`` : sql`AND handoff_id = ${options.handoffId}`}
+        ${options?.automatic === undefined ? sql`` : sql`AND automatic = ${options.automatic ? 1 : 0}`}
         ${
           options?.thread === undefined
             ? sql``
@@ -881,6 +908,74 @@ export const make = Effect.gen(function* () {
     }).pipe(sql.withTransaction, Effect.catchTag("SqlError", storageFailure("writeHandoff")));
   });
 
+  const saveAutomaticNote: TeamService["Service"]["saveAutomaticNote"] = Effect.fn(
+    "TeamService.saveAutomaticNote",
+  )(function* (input) {
+    const turnFiles = yield* normalizeClaimPaths(input.files);
+    const turnHashes = keepHashesOf(turnFiles, input.fileHashes) ?? {};
+    return yield* Effect.gen(function* () {
+      yield* requireMember(input.teamId, input.memberId);
+      const [existing] = yield* selectHandoffs(input.teamId, {
+        thread: input.thread,
+        automatic: true,
+        limit: 1,
+      });
+      const files = [
+        ...turnFiles,
+        ...(existing?.files ?? []).filter((file) => !turnFiles.includes(file)),
+      ].slice(0, TEAM_AUTOMATIC_NOTE_MAX_FILES);
+      const hashes: Record<string, string | null> = {};
+      for (const file of files) {
+        // A file of this turn that could not be hashed loses its old hash too.
+        const hash = turnFiles.includes(file) ? turnHashes[file] : existing?.fileHashes?.[file];
+        if (hash !== undefined) hashes[file] = hash;
+      }
+      const task =
+        input.taskId === undefined
+          ? undefined
+          : (yield* selectTasks(input.teamId, { taskId: input.taskId }))[0];
+      const changed = `Automatic note, not written by the agent: this chat changed ${files.length} ${
+        files.length === 1 ? "file" : "files"
+      }${task === undefined ? "" : ` for task "${task.title}"`}.`;
+      const fileHashes = Object.keys(hashes).length === 0 ? null : hashes;
+      const savedAt = yield* nowIso;
+      const handoffId = existing?.handoffId ?? TeamHandoffId.make(yield* newId);
+      if (existing === undefined) {
+        yield* sql`
+          INSERT INTO team_handoffs (
+            handoff_id, team_id, member_id, environment_id, thread_id, task_id,
+            changed, left_text, risks, files_json, commit_sha, file_hashes_json, automatic, created_at
+          ) VALUES (
+            ${handoffId}, ${input.teamId}, ${input.memberId}, ${input.thread.environmentId},
+            ${input.thread.threadId}, ${task?.taskId ?? null}, ${changed}, NULL, NULL,
+            ${encodePaths(files)}, ${optionalText(input.commit)}, ${encodeFileHashes(fileHashes)},
+            1, ${savedAt}
+          )
+        `.pipe(storage("saveAutomaticNote"));
+      } else {
+        yield* sql`
+          UPDATE team_handoffs SET
+            member_id = ${input.memberId},
+            task_id = ${task?.taskId ?? null},
+            changed = ${changed},
+            files_json = ${encodePaths(files)},
+            commit_sha = ${optionalText(input.commit)},
+            file_hashes_json = ${encodeFileHashes(fileHashes)},
+            created_at = ${savedAt}
+          WHERE handoff_id = ${handoffId}
+        `.pipe(storage("saveAutomaticNote"));
+      }
+      const [note] = yield* selectHandoffs(input.teamId, { handoffId });
+      if (!note) {
+        return yield* new TeamStorageError({
+          operation: "saveAutomaticNote",
+          cause: new Error("The automatic note was not found after saving."),
+        });
+      }
+      return note;
+    }).pipe(sql.withTransaction, Effect.catchTag("SqlError", storageFailure("saveAutomaticNote")));
+  });
+
   return TeamService.of({
     ensureTeam,
     getTeam: selectTeam,
@@ -915,6 +1010,7 @@ export const make = Effect.gen(function* () {
       ),
     listTasks: (teamId) => selectTasks(teamId),
     writeHandoff,
+    saveAutomaticNote,
     listHandoffs: (teamId, options) => selectHandoffs(teamId, options),
     listActivity: (teamId, options) =>
       sql`

@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import type { TeamHandoff } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -12,6 +13,7 @@ import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import {
   checkFreshness,
   FRESHNESS,
+  handoffEntry,
   hashFiles,
   type MemoryEntry,
   parseDecision,
@@ -19,6 +21,7 @@ import {
   rankMemory,
   readDecisions,
   TEAM_MEMORY_LIMITS,
+  UNKNOWN_WHY,
 } from "./memory.ts";
 
 const GitLayer = GitVcsDriver.layer.pipe(
@@ -44,11 +47,14 @@ const entry = (overrides: Partial<MemoryEntry> & Pick<MemoryEntry, "searchText">
   ...overrides,
 });
 
-/** A note written in `root` about `files`: their hashes now and the current commit. */
-const noteNow = (root: string, files: ReadonlyArray<string>) =>
+/**
+ * A note written in `root` about `files`: their hashes now and the current
+ * commit. With `store`, Git keeps the content, as `team_handoff` does.
+ */
+const noteNow = (root: string, files: ReadonlyArray<string>, store = false) =>
   Effect.gen(function* () {
     const gitDriver = yield* GitVcsDriver.GitVcsDriver;
-    const hashes = yield* hashFiles(gitDriver, root, files);
+    const hashes = yield* hashFiles(gitDriver, root, files, { store });
     return {
       files,
       commit: git(root, "rev-parse", "HEAD"),
@@ -103,6 +109,48 @@ describe("rankMemory", () => {
       top.map((item) => item.searchText),
       ["cache note 7", "cache note 6", "cache note 5", "cache note 4", "cache note 3"],
     );
+  });
+});
+
+describe("automatic notes in search", () => {
+  it("ranks them below handoffs and decisions, whatever they match", () => {
+    const auto = entry({
+      kind: "automatic note",
+      searchText: "login session src/login.ts",
+      when: "2026-10-01T00:00:00.000Z",
+    });
+    const olderAuto = entry({
+      kind: "automatic note",
+      searchText: "login",
+      when: "2026-09-30T00:00:00.000Z",
+    });
+    const handoff = entry({ searchText: "login", when: "2026-09-01T00:00:00.000Z" });
+    const decision = entry({ kind: "decision", searchText: "session" });
+    const { top, matched } = rankMemory(
+      [olderAuto, auto, decision, handoff],
+      queryTerms("login session"),
+    );
+    assert.deepEqual(top, [handoff, decision, auto, olderAuto]);
+    assert.equal(matched, 4);
+  });
+
+  it("marks a saved automatic note as one", () => {
+    const base = {
+      handoffId: "h1",
+      teamId: "t1",
+      memberId: "m1",
+      thread: { environmentId: "e1", threadId: "th1" },
+      taskId: null,
+      changed: "Automatic note, not written by the agent: this chat changed 1 file.",
+      left: null,
+      risks: null,
+      files: ["src/a.ts"],
+      commit: null,
+      fileHashes: null,
+      createdAt: "2026-10-01T10:00:00.000Z",
+    } as unknown as TeamHandoff;
+    assert.equal(handoffEntry({ ...base, automatic: true }, "Ana").kind, "automatic note");
+    assert.equal(handoffEntry({ ...base, automatic: false }, "Ana").kind, "handoff");
   });
 });
 
@@ -194,13 +242,20 @@ describe("checkFreshness with file hashes", () => {
       assert.equal(yield* freshness(root, note, true), FRESHNESS.fresh);
 
       writeFile(root, "src/new.ts", "new2\n");
-      assert.equal(yield* freshness(root, note, true), "maybe outdated: src/new.ts changed since");
+      // Hashed without storing the content, so Git cannot count the lines.
+      assert.equal(
+        yield* freshness(root, note, true),
+        "maybe outdated: content of src/new.ts changed since this note was written",
+      );
       // Committing the noted content changes nothing; a later change is found from history.
       writeFile(root, "src/new.ts", "new1\n");
       commitAll(root, "work");
       assert.equal(yield* freshness(root, note, false), FRESHNESS.fresh);
-      writeFile(root, "src/new.ts", "new3\n");
-      assert.equal(yield* freshness(root, note, false), "maybe outdated: src/new.ts changed since");
+      writeFile(root, "src/new.ts", "new1\nnew3\n");
+      assert.equal(
+        yield* freshness(root, note, false),
+        "maybe outdated: content of src/new.ts changed since this note was written (+1 -0 lines)",
+      );
     }).pipe(Effect.provide(GitLayer)),
   );
 
@@ -215,7 +270,10 @@ describe("checkFreshness with file hashes", () => {
       writeFile(worktree, "src/new.ts", "new1\n");
       const note = yield* noteNow(worktree, ["src/a.ts", "src/new.ts"]);
 
-      assert.equal(yield* freshness(main, note, false), FRESHNESS.notMerged);
+      assert.equal(
+        yield* freshness(main, note, false),
+        "not merged yet: this note's version of src/a.ts is not in your copy's history (another chat's uncommitted or unmerged work)",
+      );
 
       commitAll(worktree, "chat a work");
       git(main, "merge", "--quiet", "--squash", "chat-a");
@@ -223,21 +281,72 @@ describe("checkFreshness with file hashes", () => {
       assert.equal(yield* freshness(main, note, false), FRESHNESS.fresh);
 
       writeFile(main, "src/a.ts", "a3\n");
-      assert.equal(yield* freshness(main, note, false), "maybe outdated: src/a.ts changed since");
+      assert.equal(
+        yield* freshness(main, note, false),
+        "maybe outdated: content of src/a.ts changed since this note was written (+1 -1 lines)",
+      );
     }).pipe(Effect.provide(GitLayer)),
   );
 
-  it.effect("lists at most 3 changed files in the mark", () =>
+  it.effect("lists at most 3 changed files in the reason, with line counts", () =>
     Effect.gen(function* () {
       const root = yield* tempDir;
       const files = ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"];
       initRepo(root, Object.fromEntries(files.map((file) => [file, "1\n"])));
       const note = yield* noteNow(root, files);
-      for (const file of files) writeFile(root, file, "2\n");
+      for (const file of files) writeFile(root, file, "2\n3\n");
       assert.equal(
         yield* freshness(root, note, true),
-        "maybe outdated: a.ts, b.ts, c.ts +2 more changed since",
+        "maybe outdated: content of a.ts (+2 -1 lines), b.ts (+2 -1 lines), c.ts (+2 -1 lines) +2 more changed since this note was written",
       );
+    }).pipe(Effect.provide(GitLayer)),
+  );
+
+  it.effect("counts lines from content stored with the note, and names new and deleted files", () =>
+    Effect.gen(function* () {
+      const root = yield* tempDir;
+      initRepo(root, { "src/login.ts": "base\n", "src/old.ts": "old\n" });
+      // Uncommitted work, stored when the note is written (as team_handoff does).
+      writeFile(root, "src/login.ts", "one\ntwo\n");
+      const note = yield* noteNow(root, ["src/login.ts", "src/old.ts", "src/later.ts"], true);
+
+      writeFile(root, "src/login.ts", "one\ntwo\nthree\n");
+      assert.equal(
+        yield* freshness(root, note, true),
+        "maybe outdated: content of src/login.ts changed since this note was written (+1 -0 lines)",
+      );
+      writeFile(root, "src/login.ts", "one\ntwo\n");
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fs.remove(path.join(root, "src/old.ts"));
+      assert.equal(
+        yield* freshness(root, note, true),
+        "maybe outdated: src/old.ts was deleted since this note was written",
+      );
+      writeFile(root, "src/old.ts", "old\n");
+      writeFile(root, "src/later.ts", "later\n");
+      assert.equal(
+        yield* freshness(root, note, true),
+        "maybe outdated: src/later.ts is new since this note was written",
+      );
+      yield* fs.remove(path.join(root, "src/old.ts"));
+      writeFile(root, "src/login.ts", "one\n");
+      assert.equal(
+        yield* freshness(root, note, true),
+        "maybe outdated: content of src/login.ts (+0 -1 lines), src/old.ts (deleted), src/later.ts (new) changed since this note was written",
+      );
+    }).pipe(Effect.provide(GitLayer)),
+  );
+});
+
+describe("hashFiles", () => {
+  it.effect("hashes files from the folder holding .team when it is a subfolder of the repo", () =>
+    Effect.gen(function* () {
+      const repo = yield* tempDir;
+      const path = yield* Path.Path;
+      initRepo(repo, { "app/src/db.ts": "db1\n" });
+      const note = yield* noteNow(path.join(repo, "app"), ["src/db.ts"]);
+      assert.deepEqual(note.fileHashes, { "src/db.ts": git(repo, "hash-object", "app/src/db.ts") });
     }).pipe(Effect.provide(GitLayer)),
   );
 });
@@ -258,7 +367,7 @@ describe("checkFreshness with a commit only", () => {
       writeFile(root, "src/db.ts", "db2\n");
       assert.equal(
         yield* freshness(root, decision, false),
-        "maybe outdated: src/db.ts changed since",
+        `maybe outdated: content of src/db.ts changed since commit ${base.slice(0, 7)}, when this was written (+1 -1 lines)`,
       );
 
       git(root, "checkout", "--quiet", "-b", "side", base);
@@ -267,11 +376,11 @@ describe("checkFreshness with a commit only", () => {
       git(root, "checkout", "--quiet", "main");
       assert.equal(
         yield* freshness(root, { ...decision, commit: sideCommit }, false),
-        FRESHNESS.notMerged,
+        `not merged yet: commit ${sideCommit.slice(0, 7)}, which this was written at, is not in your copy's history`,
       );
       assert.equal(
         yield* freshness(root, { ...decision, commit: "f".repeat(40) }, false),
-        FRESHNESS.notMerged,
+        "not merged yet: this repo does not have commit fffffff, which this was written at",
       );
     }).pipe(Effect.provide(GitLayer)),
   );
@@ -288,7 +397,7 @@ describe("checkFreshness with a commit only", () => {
           { files: ["src/db.ts"], commit: base, fileHashes: null },
           false,
         ),
-        "maybe outdated: src/db.ts changed since",
+        `maybe outdated: content of src/db.ts changed since commit ${base.slice(0, 7)}, when this was written (+1 -1 lines)`,
       );
     }).pipe(Effect.provide(GitLayer)),
   );
@@ -303,17 +412,17 @@ describe("checkFreshness when it cannot tell", () => {
         const base = initRepo(repo, { "a.ts": "1\n" });
         assert.equal(
           yield* freshness(repo, { files: [], commit: base, fileHashes: null }, false),
-          FRESHNESS.unknown,
+          "unknown: the note names no files to check",
         );
         assert.equal(
           yield* freshness(repo, { files: ["a.ts"], commit: null, fileHashes: null }, false),
-          FRESHNESS.unknown,
+          "unknown: no commit or file contents were stored to compare with",
         );
         const plain = yield* tempDir;
         writeFile(plain, "a.ts", "1\n");
         assert.equal(
           yield* freshness(plain, { files: ["a.ts"], commit: base, fileHashes: null }, false),
-          FRESHNESS.unknown,
+          "unknown: your folder is not a Git checkout",
         );
         assert.equal(
           yield* freshness(
@@ -321,7 +430,7 @@ describe("checkFreshness when it cannot tell", () => {
             { files: ["a.ts"], commit: base, fileHashes: { "a.ts": "abc" } },
             false,
           ),
-          FRESHNESS.unknown,
+          FRESHNESS.unknown(UNKNOWN_WHY.checkFailed),
         );
       }).pipe(Effect.provide(GitLayer)),
   );
