@@ -2,6 +2,53 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-01 — M1.4 `team_memory_search`, and manual tests move to `~/.t3-dev`
+
+**What changed**
+
+- Setup fix: round 3's dev server ran with `--home-dir ~/code/t3code/.t3`, so chat worktrees lived inside this repo. Agents in demo projects walked up the folders, read this repo's CLAUDE.md and WORKING_RULES.md, and followed them (one asked to push to origin main, one wrote team/PROGRESS.md in a demo project). WORKING_RULES.md has a new "Manual tests" section: always `vp run dev --home-dir ~/.t3-dev`, never a home folder inside this repo, never `~/.t3/userdata`. The setup entry below notes the old command is no longer used. `~/code/t3code/.t3` (round 1-3 state and worktrees) was left as is.
+- Design problem found before building, and fixed with the developer's go-ahead: handoffs stored only `HEAD`, but agents hand off before committing. In round 3's database, two of the three handoffs that named files stored the "team setup" commit while their files were uncommitted. D7 as written would have called a new uncommitted file "fresh" forever, an edited one "maybe outdated" at once, and never said "not merged yet" in another chat's copy. Now `team_handoff` also stores each file's content hash (`git hash-object`; null for a missing file; folders skipped) in a new `file_hashes_json` column, through our own migration `2_TeamHandoffFileHashes`.
+- New tool `team_memory_search` (31-word description): keyword search over the newest 200 handoffs and up to 200 `.team/decisions/*.md` files in the caller's checkout. Score = distinct query words found (stop words dropped, paths kept); ties newest first; top 5, with "N more matches left out" when more matched. Each result: kind, says (about 40 words at most), who, when, files (5 at most), freshness, and the file for decisions. An empty query (only stop words) is a tool error; no matches is a normal result.
+- Freshness, checked in the caller's folder holding `.team/`: "fresh", "maybe outdated: <files> changed since" (3 files at most, then "+N more"), "not merged yet", or "unknown". Handoffs with hashes compare content, then ask Git whether the noted content ever reached this copy's history (`git log --find-object`), so squash merges work. Decisions and older handoffs use the commit only (`merge-base --is-ancestor`, then `git diff <commit>` including uncommitted edits). Every check is caught and becomes "unknown"; each Git call has a 5 second limit.
+- Decision files: front matter `title`, `author`, `date`, `files`, `commit`, all optional. The `t3 team init` rulebook template now shows this format.
+- The briefing is unchanged (146 of 150 tokens). DESIGN.md: D3 (decision format), D5 (tool row, caps, "Memory search (v1)" with smarter search later), D7 rewritten (hashes, why, marks table, limits), milestones.
+
+**Files touched**
+
+- New: `apps/server/src/mcp/toolkits/team/memory.ts`, `memory.test.ts`, `apps/server/src/team/Migrations/002_TeamHandoffFileHashes.ts`, `apps/server/src/team/testing/gitRepo.ts` (test helper).
+- Our files: `mcp/toolkits/team/{tools,handlers,handlers.test}.ts`, `team/{TeamService,TeamService.test,TeamMigrations,TeamMigrations.test,TeamProjectFiles}.ts`, `packages/contracts/src/team.ts` (`fileHashes` on `TeamHandoff`, `TEAM_DECISIONS_DIRECTORY_NAME`).
+- No upstream files.
+- `team/DESIGN.md`, `team/WORKING_RULES.md`, `team/PROGRESS.md`. Outside the repo: my saved notes now say to use `~/.t3-dev`.
+
+**How it was checked**
+
+- New tests: query words; ranking by matches then newest, undated last; cap of 5 with the count; decision parsing (inline and dash lists, quotes, `..` dropped, no front matter, heading or file name as title, 40-word cap); decisions folder missing, non-Markdown and oversized files skipped. Freshness with real Git repos: fresh, then "maybe outdated" after an edit in the same checkout (new and edited uncommitted files); "not merged yet" from another worktree, "fresh" after a squash merge, "maybe outdated" after a later edit there; 3-file cap in the mark; commit-only fresh, unrelated commits still fresh, uncommitted edit "maybe outdated", commit on another branch and unknown commit "not merged yet"; a `.team` folder below the repo root; "unknown" for no files, no commit or hashes, a plain folder, and a missing folder.
+- Through the tool, with real Git: handoff and decision ranked and shaped right; "maybe outdated" after editing the file; "not merged yet" from a second chat's worktree; 7 handoffs → 5 results and "2 more matches left out"; no decisions folder; no matches; stop-words-only query; the not-in-team result; stored hashes (null for a missing file, folder skipped). `TeamService`: hash keys normalized, extra keys dropped, notes without hashes read back null. Migration tests now take ids from the manifest.
+- Deliberate breaks, each made tests fail, all restored: no history check, ignore same checkout, no newest-first tie break, no hashes on handoff, unreachable commit not "not merged yet", no catch around a check, no result cap.
+- `vp test run src/team/ src/mcp/toolkits/team/` 8 times in a row → 75 passed each time. Wider, from `apps/server`: `vp test run src/team/ src/mcp/toolkits/team/ src/provider/RuntimeInstructions.test.ts src/provider/Layers/CodexTeamBriefing.test.ts src/mcp/McpHttpServer.test.ts src/server.test.ts` → 13 files, 308 tests passed.
+- Typecheck: `npx tsc --noEmit` in `apps/server` and `packages/contracts` → 0 errors. `vp lint --report-unused-disable-directives` on the 13 changed `.ts` files → no findings. `vp fmt --check` → clean.
+- Real server on a `VACUUM INTO` copy of round 3's database (scratch base dir, port 13991): logged "Team migrations ran successfully" with `2_TeamHandoffFileHashes`; `team_sql_migrations` = 1, 2; the 7 old handoffs kept, all with null hashes. No errors. Stopped by the PID captured at start, after checking it owned the port.
+- Not done: no real agent has called the tool yet. That is the manual test.
+
+**Manual test (to run)**
+
+Given in chat on 2026-10-01: fresh project `~/code/team-demo4`, dev server with `--home-dir ~/.t3-dev` (new home: pair again, re-add projects). Covers fresh, "not merged yet" from a second chat, "maybe outdated" after a hand edit, a decision going "maybe outdated", "unknown", and a control project.
+
+**What's left**
+
+- The manual test.
+- Decide open question 5 (poll branch-only pull requests).
+- M2: limit registration-on-first-use to host mode; team HTTP API and invites.
+- Delete `~/code/t3code/.t3` once you no longer need rounds 1-3 (then `git worktree prune` in team-demo, team-demo2, team-demo3).
+
+**Unsure about / notes**
+
+- Round 3's old handoffs have no hashes, so they use the commit-only check and can get the wrong mark. New handoffs are fine.
+- Keyword matching is substring based: "log" matches "login". Fine for v1; DESIGN.md says a smarter search can come later.
+- `team_memory_search` is not in the briefing (no room). Agents find it from the tool list; whether they do so unprompted is part of the manual test.
+- A file that did not exist when the note was written cannot be traced through history, so it counts as "maybe outdated" once it appears.
+- Decisions only have a commit, so one written before its code is committed shows "maybe outdated" once the code lands.
+
 ## 2026-09-30 — Claim lifetime fix (from the M1.3 manual test)
 
 **What changed**
@@ -260,7 +307,7 @@ Given in chat on 2026-09-30. The steps never name the tools: they check whether 
 **How it was checked**
 
 - `vp i` finished with exit 0 (one warning: peer dependency issues; `pnpm peers check` lists them). Working tree was clean afterwards.
-- `vp run dev --home-dir ~/code/t3code/.t3` started. Server listened on 127.0.0.1:13773, web on 127.0.0.1:5733. State went to the repo's gitignored `.t3`, not ~/.t3/userdata. Web root returned HTTP 200 with title "T3 Code (Alpha)". Pairing from the Windows browser worked (confirmed by the developer).
+- `vp run dev --home-dir ~/code/t3code/.t3` started (no longer used: since 2026-10-01 manual tests use `--home-dir ~/.t3-dev`, see WORKING_RULES.md). Server listened on 127.0.0.1:13773, web on 127.0.0.1:5733. State went to the repo's gitignored `.t3`, not ~/.t3/userdata. Web root returned HTTP 200 with title "T3 Code (Alpha)". Pairing from the Windows browser worked (confirmed by the developer).
 - Dev server stopped by signalling the process group it was started in, after confirming both port owners belonged to that group and had cwd inside the repo. Both ports were free afterwards.
 - No typecheck or tests run: this step changed only Markdown.
 

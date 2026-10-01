@@ -5,6 +5,7 @@ import {
   type TeamThreadRef,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
@@ -12,12 +13,23 @@ import * as ProjectionSnapshotQuery from "../../../orchestration/Services/Projec
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import {
+  checkFreshness,
+  handoffEntry,
+  hashFiles,
+  type MemoryEntry,
+  queryTerms,
+  rankMemory,
+  readDecisions,
+  TEAM_MEMORY_LIMITS,
+} from "./memory.ts";
 import { toProjectPaths } from "./paths.ts";
 import { fromService, makeTeamResolver, type TeamContext } from "./resolve.ts";
 import {
   type NotInTeamResult,
   TeamToolError,
   TeamToolkit,
+  type TeamMemorySearchResult,
   type TeamStatusResult,
 } from "./tools.ts";
 
@@ -53,6 +65,7 @@ const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
   const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const { resolve } = yield* makeTeamResolver;
 
@@ -174,6 +187,21 @@ const make = Effect.gen(function* () {
         // No Git, or no commit yet: the note is still worth saving.
         Effect.orElseSucceed(() => null),
       );
+
+  const withFiles = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) =>
+    effect.pipe(
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(FileSystem.FileSystem, fs),
+    );
+
+  /** Whether a handoff was written in the caller's own checkout (its thread works there). */
+  const writtenHere = (entry: MemoryEntry, context: TeamContext) => {
+    const thread = entry.handoff?.thread;
+    if (thread === undefined) return Effect.succeed(false);
+    if (sameThread(context.thread, thread)) return Effect.succeed(true);
+    if (thread.environmentId !== context.thread.environmentId) return Effect.succeed(false);
+    return workingFolderOf(thread).pipe(Effect.map((folder) => folder === context.workingFolder));
+  };
 
   return TeamToolkit.of({
     team_status: () =>
@@ -359,6 +387,10 @@ const make = Effect.gen(function* () {
             .findTaskForThread(teamId, context.thread)
             .pipe(Effect.mapError(fromService("handoff")));
           const commit = yield* currentCommit(context.workingFolder);
+          // Freshness compares these later, since the work is often not committed yet (D7).
+          const fileHashes = Object.fromEntries(
+            yield* hashFiles(git, context.teamRoot, files).pipe(withFiles),
+          );
           const handoff = yield* teams
             .writeHandoff({
               teamId,
@@ -370,6 +402,7 @@ const make = Effect.gen(function* () {
               risks: input.risks,
               files,
               commit: commit ?? undefined,
+              fileHashes,
             })
             .pipe(Effect.mapError(fromService("handoff")));
           return {
@@ -380,6 +413,56 @@ const make = Effect.gen(function* () {
             files: handoff.files,
             commit: handoff.commit,
           };
+        }),
+      ),
+
+    team_memory_search: (input) =>
+      inTeam((context) =>
+        Effect.gen(function* () {
+          const terms = queryTerms(input.query);
+          if (terms.length === 0) {
+            return yield* new TeamToolError({ detail: "Pass a few keywords or file paths." });
+          }
+          const names = yield* namesOf(context);
+          const handoffs = yield* teams
+            .listHandoffs(context.teamFile.teamId, { limit: TEAM_MEMORY_LIMITS.handoffs })
+            .pipe(Effect.mapError(fromService("search")));
+          const decisions = yield* readDecisions(context.teamRoot).pipe(withFiles);
+          const { top, matched } = rankMemory(
+            [
+              ...handoffs.map((handoff) =>
+                handoffEntry(handoff, names.get(handoff.memberId) ?? "Unknown member"),
+              ),
+              ...decisions,
+            ],
+            terms,
+          );
+          const results = yield* Effect.forEach(
+            top,
+            (entry) =>
+              writtenHere(entry, context).pipe(
+                Effect.flatMap((sameCheckout) =>
+                  checkFreshness(git, context.teamRoot, entry, sameCheckout).pipe(withFiles),
+                ),
+                Effect.map((freshness) => ({
+                  kind: entry.kind,
+                  says: entry.says,
+                  who: entry.who,
+                  when: entry.whenLabel,
+                  files: capPaths(entry.files),
+                  freshness,
+                  ...(entry.source === undefined ? {} : { source: entry.source }),
+                })),
+              ),
+            { concurrency: TEAM_MEMORY_LIMITS.results },
+          );
+          const message =
+            results.length === 0
+              ? "No handoff notes or decisions match. Read the code."
+              : matched > results.length
+                ? `${matched - results.length} more matches left out. Code wins over notes.`
+                : "Code wins over notes.";
+          return { results, message } satisfies TeamMemorySearchResult;
         }),
       ),
   });

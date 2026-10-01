@@ -93,6 +93,25 @@ export const TeamHandoffResult = Schema.Struct({
 });
 export type TeamHandoffResult = typeof TeamHandoffResult.Type;
 
+const MemoryResult = Schema.Struct({
+  kind: Schema.Literals(["handoff", "decision"]),
+  says: Schema.String,
+  who: Schema.String,
+  when: Schema.String,
+  files: Schema.Array(Schema.String),
+  /** "fresh", "maybe outdated: <files> changed since", "not merged yet" or "unknown" (D7). */
+  freshness: Schema.String,
+  /** Decisions: the file it came from. */
+  source: Schema.optionalKey(Schema.String),
+});
+
+export const TeamMemorySearchResult = Schema.Struct({
+  /** Best matches first, then newest, capped. */
+  results: Schema.Array(MemoryResult),
+  message: Schema.optionalKey(Schema.String),
+});
+export type TeamMemorySearchResult = typeof TeamMemorySearchResult.Type;
+
 const PathList = Schema.Array(Schema.String).annotate({
   description: "Project-relative or full paths inside the project.",
 });
@@ -169,9 +188,26 @@ const TeamHandoffTool = Tool.make("team_handoff", {
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
+const TeamMemorySearchTool = Tool.make("team_memory_search", {
+  description:
+    "Search the team's handoff notes and decisions by keywords or file paths. Returns up to 5 short matches, each marked fresh, maybe outdated, not merged yet, or unknown for your copy.",
+  parameters: Schema.Struct({
+    query: Schema.String.annotate({ description: "A few keywords or file paths." }),
+  }),
+  success: Schema.Union([NotInTeamResult, TeamMemorySearchResult]),
+  failure: TeamToolFailure,
+  dependencies,
+})
+  .annotate(Tool.Title, "Search team memory")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 export const TeamToolkit = Toolkit.make(
   TeamStatusTool,
   TeamClaimTool,
   TeamTaskTool,
   TeamHandoffTool,
+  TeamMemorySearchTool,
 );

@@ -18,6 +18,8 @@ export const TEAM_RULEBOOK_FILE_NAME = "rulebook.md";
 export const TEAM_RULEBOOK_MAX_WORDS = 1_500;
 /** Cap on a handoff note's text (changed + left + risks). */
 export const TEAM_HANDOFF_MAX_WORDS = 150;
+/** Folder inside {@link TEAM_DIRECTORY_NAME} that holds one Markdown file per decision. */
+export const TEAM_DECISIONS_DIRECTORY_NAME = "decisions";
 
 const teamEntityId = <Brand extends string>(brand: Brand) =>
   TrimmedNonEmptyString.pipe(Schema.brand(brand));
@@ -128,6 +130,12 @@ export const TeamHandoff = Schema.Struct({
   files: Schema.Array(TeamPath),
   /** Commit the note was written at. Null outside a Git checkout. */
   commit: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * Git blob hash of each file when the note was written, null for a file
+   * that did not exist. Freshness compares these, because the work is often
+   * not committed yet (D7). Null for older notes; folders are left out.
+   */
+  fileHashes: Schema.NullOr(Schema.Record(TeamPath, Schema.NullOr(TrimmedNonEmptyString))),
   createdAt: IsoDateTime,
 });
 export type TeamHandoff = typeof TeamHandoff.Type;

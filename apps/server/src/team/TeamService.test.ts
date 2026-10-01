@@ -287,12 +287,15 @@ describe("TeamService", () => {
           risks: "",
           files: ["./src/auth/login.ts"],
           commit: "abc1234",
+          // Keys are normalized like files; hashes of files not in the note are dropped.
+          fileHashes: { "./src/auth/login.ts": "f00d", "src/other.ts": "beef" },
         });
         assert.equal(handoff.changed, "Login form posts to the new endpoint.");
         assert.equal(handoff.left, "Error states.");
         assert.isNull(handoff.risks);
         assert.deepEqual(handoff.files, ["src/auth/login.ts"]);
         assert.equal(handoff.commit, "abc1234");
+        assert.deepEqual(handoff.fileHashes, { "src/auth/login.ts": "f00d" });
 
         yield* TestClock.adjust("1 second");
         yield* teams.writeHandoff({
@@ -302,6 +305,9 @@ describe("TeamService", () => {
           changed: "Other thread.",
           files: [],
         });
+
+        // Notes without hashes (and every note from before they existed) read back as null.
+        assert.isNull((yield* teams.listHandoffs(teamFile.teamId, { limit: 1 }))[0]?.fileHashes);
 
         const forThreadA = yield* teams.listHandoffs(teamFile.teamId, { thread: threadA });
         assert.deepEqual(

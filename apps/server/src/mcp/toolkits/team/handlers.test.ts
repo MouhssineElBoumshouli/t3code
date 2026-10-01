@@ -20,11 +20,14 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import type { Tool } from "effect/unstable/ai";
 
+import * as ServerConfig from "../../../config.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
+import * as VcsProcess from "../../../vcs/VcsProcess.ts";
+import { commitAll, git, initRepo, writeFile } from "../../../team/testing/gitRepo.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CLAIM_WHERE, TEAM_STATUS_LIMITS, TeamToolkitHandlersLive } from "./handlers.ts";
 import { type NotInTeamResult, TeamToolkit } from "./tools.ts";
@@ -95,7 +98,15 @@ interface HarnessOptions {
   readonly worktreePath?: string | null;
   /** Worktrees for single threads, over `worktreePath`. */
   readonly worktrees?: Partial<Record<ThreadId, string | null>>;
+  /** Run real Git instead of the mock (`gitCalls` stays empty). */
+  readonly realGit?: boolean;
 }
+
+const RealGitLayer = GitVcsDriver.layer.pipe(
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-team-memory-git-" })),
+  Layer.provideMerge(VcsProcess.layer),
+  Layer.provideMerge(NodeServices.layer),
+);
 
 const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: HarnessOptions) {
   const gitCalls = yield* Ref.make<ReadonlyArray<GitVcsDriver.ExecuteGitInput>>([]);
@@ -113,18 +124,20 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
         ),
       getProjectShellById: () => Effect.succeed(Option.some(makeProject(options.workspaceRoot))),
     }),
-    Layer.mock(GitVcsDriver.GitVcsDriver)({
-      execute: (input) =>
-        Ref.update(gitCalls, (calls) => [...calls, input]).pipe(
-          Effect.as({
-            exitCode: 0 as never,
-            stdout: `${COMMIT}\n`,
-            stderr: "",
-            stdoutTruncated: false,
-            stderrTruncated: false,
-          }),
-        ),
-    }),
+    options.realGit === true
+      ? RealGitLayer
+      : Layer.mock(GitVcsDriver.GitVcsDriver)({
+          execute: (input) =>
+            Ref.update(gitCalls, (calls) => [...calls, input]).pipe(
+              Effect.as({
+                exitCode: 0 as never,
+                stdout: `${COMMIT}\n`,
+                stderr: "",
+                stdoutTruncated: false,
+                stderrTruncated: false,
+              }),
+            ),
+        }),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
       getDescriptor: Effect.succeed({
@@ -199,6 +212,7 @@ describe("team toolkit", () => {
         yield* call("team_claim", { paths: ["src/a.ts"] }),
         yield* call("team_task", { title: "Anything" }),
         yield* call("team_handoff", { changed: "Something." }),
+        yield* call("team_memory_search", { query: "login" }),
       ];
       for (const result of results) {
         assert.deepEqual(result, {
@@ -554,4 +568,120 @@ describe("team toolkit", () => {
     assert.include(claim, "don't release when done");
     assert.include(claim, "release: true only if the user drops the work");
   });
+  it.effect("searches handoffs and decisions, best match first, with freshness per copy", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      const path = yield* Path.Path;
+      const fs = yield* FileSystem.FileSystem;
+      const base = initRepo(root, { "src/login.ts": "v1\n", "src/session.ts": "s1\n" });
+      writeFile(
+        root,
+        ".team/decisions/0001-session-cookie.md",
+        `---\ntitle: One session cookie\nauthor: Ana\ndate: 2026-09-20\nfiles: [src/session.ts]\ncommit: ${base}\n---\nThe login and the API share one session cookie.\n`,
+      );
+      commitAll(root, "decision");
+      // Chat B works in its own worktree, made before chat A's work.
+      const worktree = path.join(yield* fs.makeTempDirectoryScoped(), "chat-b");
+      git(root, "worktree", "add", "--quiet", "-b", "chat-b", worktree);
+      const { call } = yield* makeHarness({
+        workspaceRoot: root,
+        worktrees: { [THREAD_B]: worktree },
+        realGit: true,
+      });
+
+      // Chat A edits login.ts in the main checkout and leaves it uncommitted.
+      writeFile(root, "src/login.ts", "v2\n");
+      yield* call("team_handoff", {
+        changed: "Login form posts to /api/login.",
+        left: "Error states.",
+        files: ["src/login.ts"],
+      });
+
+      const fromA = inTeam(yield* call("team_memory_search", { query: "login session cookie" }));
+      assert.deepEqual(
+        fromA.results.map((result) => [result.kind, result.freshness]),
+        [
+          ["decision", "fresh"],
+          ["handoff", "fresh"],
+        ],
+      );
+      const [decision, handoff] = fromA.results;
+      assert.deepInclude(decision, {
+        says: "One session cookie: The login and the API share one session cookie.",
+        who: "Ana",
+        when: "2026-09-20",
+        files: ["src/session.ts"],
+        source: ".team/decisions/0001-session-cookie.md",
+      });
+      assert.deepInclude(handoff, {
+        says: "Login form posts to /api/login. Left: Error states.",
+        who: "Mouhssine's laptop",
+        files: ["src/login.ts"],
+      });
+      assert.match(handoff!.when, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/u);
+      assert.equal(fromA.message, "Code wins over notes.");
+
+      // Someone changes the file after the handoff.
+      writeFile(root, "src/login.ts", "v3\n");
+      const afterEdit = inTeam(yield* call("team_memory_search", { query: "src/login.ts" }));
+      assert.deepEqual(
+        afterEdit.results.map((result) => result.freshness),
+        ["maybe outdated: src/login.ts changed since"],
+      );
+
+      // Chat B's copy never got chat A's work.
+      const fromB = inTeam(yield* call("team_memory_search", { query: "login form" }, THREAD_B));
+      assert.deepEqual(
+        fromB.results.map((result) => [result.kind, result.freshness]),
+        [
+          ["handoff", "not merged yet"],
+          ["decision", "fresh"],
+        ],
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("caps results at 5, works without a decisions folder, and needs keywords", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      const { call } = yield* makeHarness({ workspaceRoot: root });
+      for (let index = 1; index <= 7; index++) {
+        yield* call("team_handoff", { changed: `Cache step ${index}.` });
+        yield* TestClock.adjust("1 second");
+      }
+      yield* call("team_handoff", { changed: "Payments page." });
+
+      const search = inTeam(yield* call("team_memory_search", { query: "cache" }));
+      assert.deepEqual(
+        search.results.map((result) => [result.says, result.freshness]),
+        [7, 6, 5, 4, 3].map((index) => [`Cache step ${index}.`, "unknown"]),
+      );
+      assert.equal(search.message, "2 more matches left out. Code wins over notes.");
+
+      const none = inTeam(yield* call("team_memory_search", { query: "billing" }));
+      assert.deepEqual(none, {
+        results: [],
+        message: "No handoff notes or decisions match. Read the code.",
+      });
+      const empty = yield* call("team_memory_search", { query: "why is the" }).pipe(Effect.flip);
+      assert.equal(empty.message, "Pass a few keywords or file paths.");
+    }),
+  );
+
+  it.effect("stores each handoff file's content hash, null for a missing file", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      initRepo(root, { "src/a.ts": "a\n" });
+      const { call, teams } = yield* makeHarness({ workspaceRoot: root, realGit: true });
+      yield* call("team_handoff", {
+        changed: "Work.",
+        files: ["src/a.ts", "src/gone.ts", "src"],
+      });
+      const [handoff] = yield* teams.listHandoffs(TEAM_ID);
+      assert.deepEqual(handoff?.fileHashes, {
+        "src/a.ts": git(root, "hash-object", "src/a.ts"),
+        "src/gone.ts": null,
+      });
+    }),
+  );
 });

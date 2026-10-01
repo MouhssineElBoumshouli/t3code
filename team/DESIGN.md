@@ -104,7 +104,7 @@ The `.team/` folder is in the user's project, not in our app's repo.
 
 **Tables.** Team tables live in the same SQLite database as the rest of T3, all named `team_*`. They get their own migrator with its own tracking table, `team_sql_migrations`, started from our team layer. [checked: the migrator accepts a `table` option] A second migrator runs cleanly on the same `SqlClient` at startup, after upstream's. [checked in M1.1: `apps/server/src/team/TeamMigrations.ts`, its tests, and a real server start; see section 6] We never add to upstream's `migrationEntries` in `persistence/Migrations.ts`: any id we pick would clash with upstream's next one or make the migrator skip upstream's future migrations. [checked]
 
-Decisions are written by people, or by agents with normal file edits. The rulebook explains the format. There is no decision tool in v1 (D5).
+Decisions are written by people, or by agents with normal file edits. The rulebook template (`t3 team init`) shows the front matter: `title`, `author`, `date`, `files` (`[a, b]` or a `- ` list) and `commit`. All are optional; a file without front matter is still searched, with its first heading or file name as title, "unknown" author and date, and "unknown" freshness. [checked: built in M1.4] There is no decision tool in v1 (D5).
 
 ### D4. How memory reaches agents
 
@@ -151,7 +151,7 @@ A new toolkit at `apps/server/src/mcp/toolkits/team/`, built like `pullRequests/
 | `team_claim`         | Claim paths (files or folders) with a short note. Returns any overlap with others' claims. `release: true` only for dropped work. |
 | `team_task`          | Read this thread's task card, or update its status and note. With no card yet, pass a title to create one for this thread.        |
 | `team_handoff`       | Save a handoff for this thread: what changed, what's left, risks. Max 150 words. The commit is filled in from the working folder. |
-| `team_memory_search` | Search decisions and handoffs. Returns the top 3 to 5, short, each marked fresh or maybe-outdated (D7). Comes in M1.4.            |
+| `team_memory_search` | Search decisions and handoffs by keywords. Returns the top 5, short, each with a freshness mark (D7). Built in M1.4.              |
 
 `team_decision_propose` is dropped for now.
 
@@ -184,7 +184,9 @@ A new toolkit at `apps/server/src/mcp/toolkits/team/`, built like `pullRequests/
 - At startup the layer also releases claims of threads that are no longer active (archived or deleted while it was not listening). [checked: tests and a real server start]
 - Every release writes an activity line, for example "Released Mouhssine's claims on src/login.ts: its pull request merged."
 
-**Token cost.** Every agent in every project sees the tool list, so each tool description stays under 40 words (a test checks it). `team_status` is capped: 8 open tasks, 10 other threads' claims (5 paths each), 5 activity lines, newest first, with a count of what was left out. Done tasks are not listed.
+**Token cost.** Every agent in every project sees the tool list, so each tool description stays under 40 words (a test checks it). `team_status` is capped: 8 open tasks, 10 other threads' claims (5 paths each), 5 activity lines, newest first, with a count of what was left out. Done tasks are not listed. `team_memory_search` is capped at 5 results (5 files each, about 40 words of text each) and says how many more matched. The briefing (D4) does not mention it: it is at about 146 of 150 tokens, and the tool's own description is enough for an agent to find it.
+
+**Memory search (v1).** `team_memory_search` takes a query and searches the newest 200 handoff notes in the team database and up to 200 `.team/decisions/*.md` files (32 KB each at most) in the caller's own checkout (D5). Matching is simple: the query is split into lowercase words and paths, common stop words are dropped, and an entry's score is the number of distinct words found anywhere in its text, author or files. Results are ranked by score, then newest first (decisions with no date last). Each result says what the note says, who wrote it, when, which files, its freshness (D7), and for decisions, the file. [checked: built in M1.4] A smarter search (word stems, synonyms, embeddings, or SQLite full-text search) can replace the matching later without changing the tool.
 
 ### D6. Conflicts
 
@@ -207,9 +209,20 @@ Later, not v1:
 
 ### D7. Keeping memory fresh
 
-- Every decision and handoff stores the files it is about and the commit it was written at.
-- When `team_memory_search` returns it, the server checks whether those files changed since that commit, in the thread's own checkout (D5). If yes, it is marked "maybe outdated: files changed since".
-- Code always wins over memory. Instructions say so.
+- Every decision and handoff stores the files it is about and the commit it was written at. Handoffs also store each file's content hash (`git hash-object`) at that moment, or null for a file that did not exist; folders are not hashed. [checked: built in M1.4, own migration `2_TeamHandoffFileHashes`]
+- **Why hashes, not only the commit:** agents usually write the handoff before committing, so the stored commit is the base commit, not the work. In the round 3 manual test, two of the three handoffs that named files stored the "team setup" commit while their files were uncommitted. With the commit alone, a new uncommitted file always looked fresh, an edited one always looked outdated, and another chat's copy could never be told it was "not merged yet". [checked: round 3 database]
+- When `team_memory_search` returns a result, the server checks it in the caller's own checkout (the folder holding `.team/`, D5) and marks it:
+
+| Mark                                    | Handoff with hashes                                                                                                                                                                                 | Decision, or older handoff (commit only)                                                            |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| "fresh"                                 | Every hashed file has the same content as when the note was written.                                                                                                                                | The commit is in this copy's history and no listed file changed since it (uncommitted edits count). |
+| "maybe outdated: <files> changed since" | Some files differ, and the note's content did reach this copy: the note was written in this same checkout, or Git finds that content in `HEAD`'s history for that path (also after a squash merge). | The commit is in this copy's history and a listed file changed since.                               |
+| "not merged yet"                        | Some files differ, and the note's content for one of them never reached this copy's history (another chat's uncommitted or unmerged work).                                                          | The commit is not in this copy's history, or this repo does not have it.                            |
+| "unknown"                               | No files; not a Git checkout; or any check failed or took over 5 seconds.                                                                                                                           | No files, no commit, not a Git checkout, or a check failed.                                         |
+
+- One failed check marks that result "unknown"; it never fails the search. [checked: tests]
+- Limits we accept: a decision written before its code is committed shows "maybe outdated" once that code lands (it only has a commit). A file that did not exist when the note was written cannot be traced, so it counts as "maybe outdated" when it appears. If the noted content was changed again before it was ever committed, other copies will say "not merged yet" even after the later version merges. Notes from before M1.4 have no hashes and use the commit only.
+- Code always wins over memory. The briefing says so, and every search result message says "Code wins over notes."
 - Later: a cleaner job after merges to main that merges duplicates and flags stale decisions for a human.
 
 ### D8. Proof: the cold start test
@@ -293,7 +306,7 @@ Smart features on top of the board, after v1:
   - **M1.2, team tools (done 2026-09-30):** `team_status`, `team_claim` (with release), `team_task`, `team_handoff` in `apps/server/src/mcp/toolkits/team/`, with the call-time team check and registration (D5).
   - **M1.3, team briefing (done 2026-09-30):** the `teamContext` block in runtime instructions for all six providers (D4), and the task of each claim in `team_status` and `team_claim` (D5).
   - **Claim lifetime fix (done 2026-09-30):** claims last until the work merges or is dropped; auto-release on merge, archive and delete; `where` on claims (D5).
-  - **M1.4:** `team_memory_search` and freshness marks (D5, D7).
+  - **M1.4, memory search (done 2026-10-01):** `team_memory_search` over handoffs and `.team/decisions/`, keyword ranking, and freshness marks from file hashes and commits (D5, D7).
 - **M2, two people:** team HTTP API, `team:read` / `team:write` scopes, `t3 team invite`, member join with `bootstrapRemoteBearerSession`, member push (AgentAwarenessRelay pattern) and 15-30 second polling, offline queue. Test with one friend over Tailscale.
 - **M3, conflicts:** overlap detection from turn diffs, overlap warnings, team board in the UI.
 - **M4, team features:** the self-moving task board (D9), catch me up, handoff UI, then guide mode.

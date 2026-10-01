@@ -102,7 +102,19 @@ One or two sentences.
 
 ## Decisions
 
-Write one short file per decision in \`.team/decisions/NNNN-short-title.md\`. Its front matter lists the files it is about and the commit it was written at. Code always wins over these notes.
+Write one short file per decision in \`.team/decisions/NNNN-short-title.md\`, starting with:
+
+\`\`\`
+---
+title: Short title
+author: Your name
+date: YYYY-MM-DD
+files: [src/a.ts, src/b/]
+commit: output of git rev-parse HEAD
+---
+\`\`\`
+
+Then say what was decided and why, in a few lines. Code always wins over these notes.
 `;
 
 type JsonObject = { readonly [key: string]: unknown };

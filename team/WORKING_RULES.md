@@ -15,6 +15,12 @@ This repo is a fork of T3 Code. We are adding a team layer: a shared Brain, shar
 3. Push to origin main. Not pushed = not done.
 4. Add an entry to team/PROGRESS.md with: date, what changed, files touched, how you checked it, what's left, anything you're unsure about.
 
+## Manual tests
+
+- Start the dev server with `--home-dir ~/.t3-dev`: `vp run dev --home-dir ~/.t3-dev`. Never use a home folder inside this repo (such as `~/code/t3code/.t3`): chat worktrees live under the home folder, and agents in demo projects walk up the folders, find this repo's CLAUDE.md and these rules, and follow them.
+- Never use `~/.t3/userdata` (the real T3 install) for tests.
+- Each round uses a fresh project (`~/code/team-demo4`, then `team-demo5`...). Control tests use a separate plain folder, never this repo.
+
 ## Honesty
 
 - Never say something works unless you ran it and saw it work.

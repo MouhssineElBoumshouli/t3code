@@ -15,6 +15,7 @@ import {
 import * as TeamService from "./TeamService.ts";
 
 const latestUpstreamId = migrationManifest.at(-1)![0];
+const teamIds = teamMigrationManifest.map(([id]) => id);
 
 const recordedIds = (table: string) =>
   Effect.gen(function* () {
@@ -51,11 +52,11 @@ describe("team migrations", () => {
           "team_tasks",
           "team_teams",
         ]);
-        assert.deepEqual(yield* recordedIds(TEAM_MIGRATIONS_TABLE), [1]);
+        assert.deepEqual(yield* recordedIds(TEAM_MIGRATIONS_TABLE), teamIds);
 
         // Running again is a no-op.
         assert.deepEqual(yield* runTeamMigrations(), []);
-        assert.deepEqual(yield* recordedIds(TEAM_MIGRATIONS_TABLE), [1]);
+        assert.deepEqual(yield* recordedIds(TEAM_MIGRATIONS_TABLE), teamIds);
       }),
     );
   });
@@ -78,7 +79,7 @@ describe("team migrations", () => {
             range(olderUpstream + 1, latestUpstreamId),
           );
           assert.deepEqual(yield* recordedIds("effect_sql_migrations"), range(1, latestUpstreamId));
-          assert.deepEqual(yield* recordedIds(TEAM_MIGRATIONS_TABLE), [1]);
+          assert.deepEqual(yield* recordedIds(TEAM_MIGRATIONS_TABLE), teamIds);
         }),
       );
     },
@@ -93,7 +94,7 @@ describe("team migrations", () => {
           ran.map(([id]) => id),
           range(1, latestUpstreamId),
         );
-        assert.deepEqual(yield* recordedIds(TEAM_MIGRATIONS_TABLE), [1]);
+        assert.deepEqual(yield* recordedIds(TEAM_MIGRATIONS_TABLE), teamIds);
       }),
     );
   });
@@ -102,7 +103,7 @@ describe("team migrations", () => {
     Effect.gen(function* () {
       yield* TeamService.TeamService;
       assert.deepEqual(yield* recordedIds("effect_sql_migrations"), range(1, latestUpstreamId));
-      assert.deepEqual(yield* recordedIds(TEAM_MIGRATIONS_TABLE), [1]);
+      assert.deepEqual(yield* recordedIds(TEAM_MIGRATIONS_TABLE), teamIds);
       assert.include(yield* teamTables, "team_teams");
     }).pipe(
       Effect.provide(

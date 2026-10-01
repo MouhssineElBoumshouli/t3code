@@ -121,6 +121,8 @@ export interface WriteHandoffInput {
   readonly risks?: string | undefined;
   readonly files: ReadonlyArray<string>;
   readonly commit?: string | undefined;
+  /** Blob hash per file at writing time, null for a missing file. Keys must be in `files`. */
+  readonly fileHashes?: Readonly<Record<string, string | null>> | undefined;
 }
 
 export class TeamService extends Context.Service<
@@ -204,6 +206,10 @@ const DEFAULT_LIST_LIMIT = 50;
 const PathsJson = Schema.fromJsonString(Schema.Array(TeamPath));
 const encodePaths = Schema.encodeSync(PathsJson);
 const NullableText = Schema.NullOr(TrimmedNonEmptyString);
+const FileHashesJson = Schema.NullOr(
+  Schema.fromJsonString(Schema.Record(TeamPath, Schema.NullOr(TrimmedNonEmptyString))),
+);
+const encodeFileHashes = Schema.encodeSync(FileHashesJson);
 
 const TeamRow = Schema.Struct({
   teamId: TeamId,
@@ -259,6 +265,7 @@ const HandoffRow = Schema.Struct({
   risks: NullableText,
   files: PathsJson,
   commit: NullableText,
+  fileHashes: FileHashesJson,
   createdAt: Schema.String,
 });
 
@@ -333,6 +340,7 @@ const toHandoff = (row: typeof HandoffRow.Type): TeamHandoff => ({
   risks: row.risks,
   files: row.files,
   commit: row.commit,
+  fileHashes: row.fileHashes,
   createdAt: row.createdAt,
 });
 
@@ -375,6 +383,20 @@ const normalizeClaimPaths = (paths: ReadonlyArray<string>) =>
     }
     return normalized;
   });
+
+/** The hashes of the note's own files, keyed like `files`; null when there are none. */
+const keepHashesOf = (
+  files: ReadonlyArray<string>,
+  hashes: Readonly<Record<string, string | null>> | undefined,
+) => {
+  if (hashes === undefined) return null;
+  const kept: Record<string, string | null> = {};
+  for (const [raw, hash] of Object.entries(hashes)) {
+    const path = normalizeTeamPath(raw);
+    if (files.includes(path)) kept[path] = hash?.trim() || null;
+  }
+  return Object.keys(kept).length === 0 ? null : kept;
+};
 
 const sameThread = (left: TeamThreadRef, right: TeamThreadRef) =>
   left.environmentId === right.environmentId && left.threadId === right.threadId;
@@ -790,7 +812,7 @@ export const make = Effect.gen(function* () {
       SELECT handoff_id AS "handoffId", team_id AS "teamId", member_id AS "memberId",
         environment_id AS "environmentId", thread_id AS "threadId", task_id AS "taskId",
         changed, left_text AS "left", risks, files_json AS "files", commit_sha AS "commit",
-        created_at AS "createdAt"
+        file_hashes_json AS "fileHashes", created_at AS "createdAt"
       FROM team_handoffs
       WHERE team_id = ${teamId}
         ${options?.handoffId === undefined ? sql`` : sql`AND handoff_id = ${options.handoffId}`}
@@ -818,6 +840,7 @@ export const make = Effect.gen(function* () {
       return yield* new TeamHandoffTooLongError({ words, maxWords: TEAM_HANDOFF_MAX_WORDS });
     }
     const files = yield* normalizeClaimPaths(input.files);
+    const fileHashes = keepHashesOf(files, input.fileHashes);
     return yield* Effect.gen(function* () {
       const member = yield* requireMember(input.teamId, input.memberId);
       if (input.taskId !== undefined) {
@@ -831,11 +854,12 @@ export const make = Effect.gen(function* () {
       yield* sql`
         INSERT INTO team_handoffs (
           handoff_id, team_id, member_id, environment_id, thread_id, task_id,
-          changed, left_text, risks, files_json, commit_sha, created_at
+          changed, left_text, risks, files_json, commit_sha, file_hashes_json, created_at
         ) VALUES (
           ${handoffId}, ${input.teamId}, ${input.memberId}, ${input.thread.environmentId},
           ${input.thread.threadId}, ${input.taskId ?? null}, ${changed}, ${left}, ${risks},
-          ${encodePaths(files)}, ${optionalText(input.commit)}, ${createdAt}
+          ${encodePaths(files)}, ${optionalText(input.commit)}, ${encodeFileHashes(fileHashes)},
+          ${createdAt}
         )
       `.pipe(storage("writeHandoff"));
       yield* recordActivity({
