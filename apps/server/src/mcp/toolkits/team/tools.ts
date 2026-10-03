@@ -59,6 +59,8 @@ const TaskSummary = Schema.Struct({
 export const TeamStatusResult = Schema.Struct({
   team: Schema.String,
   you: Schema.String,
+  /** The rulebook's "Do not touch" list, capped; absent when it has none. */
+  doNotTouch: Schema.optionalKey(Schema.Array(Schema.String)),
   yourTask: Schema.NullOr(TaskSummary),
   /** Newest first, capped. */
   tasks: Schema.Array(TaskSummary),
@@ -90,6 +92,8 @@ export const TeamHandoffResult = Schema.Struct({
   words: Schema.Int,
   files: Schema.Array(Schema.String),
   commit: Schema.NullOr(Schema.String),
+  /** Set when the note looks unneeded: this thread changed no files and holds no claims. */
+  message: Schema.optionalKey(Schema.String),
 });
 export type TeamHandoffResult = typeof TeamHandoffResult.Type;
 
@@ -119,7 +123,7 @@ const PathList = Schema.Array(Schema.String).annotate({
 
 const TeamStatusTool = Tool.make("team_status", {
   description:
-    "See your team: open tasks, who claimed which paths, and recent activity. Call before starting work.",
+    "See your team: open tasks, who claimed which paths, what the rulebook says not to touch, and recent activity. Call before starting work.",
   success: Schema.Union([NotInTeamResult, TeamStatusResult]),
   failure: TeamToolFailure,
   dependencies,
@@ -172,7 +176,7 @@ const TeamTaskTool = Tool.make("team_task", {
 
 const TeamHandoffTool = Tool.make("team_handoff", {
   description:
-    "Save a handoff note for whoever continues this work: what changed, what is left, risks. Max 150 words in all. The current commit is added for you.",
+    "Save a handoff note after editing files, or when the user stops work partway: what changed, what is left, risks. Not after only answering questions. Max 150 words. The current commit is added for you.",
   parameters: Schema.Struct({
     changed: Schema.String,
     left: Schema.optional(Schema.String),

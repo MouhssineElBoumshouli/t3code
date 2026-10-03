@@ -36,13 +36,13 @@ describe("renderTeamBriefing", () => {
     assert.include(briefing, 'This project is in team "Core". You are "Mouhssine\'s laptop".');
     assert.include(briefing, "call team_status, then team_claim the paths you will touch");
     assert.include(briefing, "If it reports overlaps, tell the user before editing");
-    assert.include(briefing, "When you finish or stop, write a team_handoff");
+    assert.include(briefing, "Write a team_handoff only after editing files");
     assert.include(briefing, "Project rules are in .team/rulebook.md; read it before your first");
     assert.include(briefing, "Code is the truth; team notes can be out of date.");
     assert.match(briefing, /^<team_context>\n[\s\S]*\n<\/team_context>$/u);
   });
 
-  it("says claims outlive the turn: keep them when done, release only dropped work", () => {
+  it("asks for a handoff only after file edits or stopped work, and keeps claims", () => {
     const briefing = renderTeamBriefing({
       teamName: "Core",
       memberName: "Mouhssine's laptop",
@@ -50,8 +50,10 @@ describe("renderTeamBriefing", () => {
     });
     assert.include(
       briefing,
-      "When you finish or stop, write a team_handoff, but keep your claims: release them only if the user drops the work.",
+      "Write a team_handoff only after editing files or if the user stops work partway; keep claims unless the user drops it.",
     );
+    // Codex gets the briefing every turn: nothing may read as "hand off at every turn end".
+    assert.notMatch(briefing, /when you (finish|stop)|at the end of (a|each|every) turn/iu);
     // Nothing in it asks the agent to release claims when a turn or task ends.
     assert.notMatch(briefing, /release (them |your claims )?(when|after|at the end)/iu);
   });

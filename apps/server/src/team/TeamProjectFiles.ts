@@ -79,6 +79,9 @@ const encodePrettyJson = Schema.encodeSync(fromJsonStringPretty(Schema.Unknown))
 const WORKTREE_KEY = "defaultThreadEnvMode";
 const WORKTREE_VALUE = "worktree";
 
+/** The template's "Do not touch" example line; `team_status` leaves it out. */
+export const TEAM_RULEBOOK_DO_NOT_TOUCH_EXAMPLE = "Files or folders that need a human first.";
+
 export const TEAM_RULEBOOK_TEMPLATE = `# Project rulebook
 
 Keep this file under ${TEAM_RULEBOOK_MAX_WORDS.toLocaleString("en-US")} words. Every agent on the team reads all of it before its first change, so cut anything that is not a rule.
@@ -98,7 +101,7 @@ One or two sentences.
 
 ## Do not touch
 
-- Files or folders that need a human first.
+- ${TEAM_RULEBOOK_DO_NOT_TOUCH_EXAMPLE}
 
 ## Decisions
 

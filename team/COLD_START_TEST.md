@@ -71,6 +71,8 @@ Their claimed work is in their own copies, so you may not see their changes yet.
 
 Pass: the three claimed files. Full marks with `data/` too. Fail: missing a claimed file, or telling you to avoid your own task's files.
 
+In the M1 run (2026-10-03) neither Claude nor Codex named `data/`: neither read the rulebook to answer a question. Since the M1 wrap-up, `team_status` lists it under `doNotTouch`, so a rerun should get full marks.
+
 ## Grading
 
 Pass = all five correct from a cold start. For each answer, write down which tools the agent called (`team_status`, `team_task`, `team_memory_search`, file reads) and whether it read the rulebook first.

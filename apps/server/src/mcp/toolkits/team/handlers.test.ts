@@ -24,12 +24,18 @@ import * as ServerConfig from "../../../config.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
+import { TEAM_RULEBOOK_TEMPLATE } from "../../../team/TeamProjectFiles.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import { commitAll, git, initRepo, writeFile } from "../../../team/testing/gitRepo.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { CLAIM_WHERE, TEAM_STATUS_LIMITS, TeamToolkitHandlersLive } from "./handlers.ts";
+import {
+  CLAIM_WHERE,
+  HANDOFF_NOTHING_CHANGED_MESSAGE,
+  TEAM_STATUS_LIMITS,
+  TeamToolkitHandlersLive,
+} from "./handlers.ts";
 import { type NotInTeamResult, TeamToolkit } from "./tools.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
@@ -405,6 +411,76 @@ describe("team toolkit", () => {
       }).pipe(Effect.flip);
       assert.include(outside.message, "is outside this project");
     }),
+  );
+
+  it.effect("saves a handoff from a chat that changed nothing, but says it was not needed", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      const { call, teams } = yield* makeHarness({ workspaceRoot: root });
+      const thread = (threadId: ThreadId) => ({ environmentId: ENVIRONMENT_ID, threadId });
+
+      // The cold start test's Codex note: no files, no claims, no edits in the chat.
+      const quiet = inTeam(
+        yield* call("team_handoff", {
+          changed: "No code changes; reviewed the live team status for a progress update.",
+        }),
+      );
+      assert.equal(quiet.message, HANDOFF_NOTHING_CHANGED_MESSAGE);
+      assert.isTrue(quiet.saved);
+
+      // Each sign of real work keeps the message away.
+      const namesFiles = inTeam(
+        yield* call("team_handoff", { changed: "Looked into it.", files: ["src/a.ts"] }, THREAD_B),
+      );
+      assert.notProperty(namesFiles, "message");
+      yield* call("team_claim", { paths: ["src/b.ts"] }, THREAD_C);
+      const holdsClaims = inTeam(yield* call("team_handoff", { changed: "Halfway." }, THREAD_C));
+      assert.notProperty(holdsClaims, "message");
+      const [owner] = yield* teams.listMembers(TEAM_ID);
+      yield* teams.saveAutomaticNote({
+        teamId: TEAM_ID,
+        memberId: owner!.memberId,
+        thread: thread(THREAD_A),
+        files: ["src/c.ts"],
+        fileHashes: {},
+      });
+      const editedEarlier = inTeam(yield* call("team_handoff", { changed: "Done with c." }));
+      assert.notProperty(editedEarlier, "message");
+
+      const saved = yield* teams.listHandoffs(TEAM_ID);
+      assert.lengthOf(
+        saved.filter((note) => !note.automatic),
+        4,
+      );
+    }),
+  );
+
+  it("asks for handoffs only after edits or stopped work", () => {
+    const handoff = TeamToolkit.tools.team_handoff.description ?? "";
+    assert.include(handoff, "after editing files, or when the user stops work partway");
+    assert.include(handoff, "Not after only answering questions.");
+  });
+
+  it.effect(
+    "lists the rulebook's do-not-touch items in team_status, only when there are some",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* makeProjectFolder(true);
+        const { call } = yield* makeHarness({ workspaceRoot: root });
+        const statusOf = () => call("team_status", {}).pipe(Effect.map(inTeam));
+
+        assert.notProperty(yield* statusOf(), "doNotTouch");
+        writeFile(root, ".team/rulebook.md", TEAM_RULEBOOK_TEMPLATE);
+        assert.notProperty(yield* statusOf(), "doNotTouch");
+        writeFile(
+          root,
+          ".team/rulebook.md",
+          "# Rules\n\n## Do not touch\n\n- `data/`: the sample data. A human updates it.\n\n## Decisions\n\n- x\n",
+        );
+        const status = yield* statusOf();
+        assert.deepEqual(status.doNotTouch, ["`data/`: the sample data. A human updates it."]);
+        assert.deepEqual(Object.keys(status).slice(0, 3), ["team", "you", "doNotTouch"]);
+      }),
   );
 
   it.effect("keeps team_status short, dropping the oldest tasks and claims first", () =>

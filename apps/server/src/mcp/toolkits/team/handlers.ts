@@ -25,6 +25,7 @@ import {
   TEAM_MEMORY_LIMITS,
 } from "./memory.ts";
 import { toProjectPaths } from "./paths.ts";
+import { readDoNotTouch } from "./rulebook.ts";
 import { fromService, makeTeamResolver, type TeamContext } from "./resolve.ts";
 import {
   type NotInTeamResult,
@@ -33,6 +34,16 @@ import {
   type TeamMemorySearchResult,
   type TeamStatusResult,
 } from "./tools.ts";
+
+/**
+ * Told to an agent that hands off from a thread that changed no files and holds
+ * no claims, in a note naming no files: in the cold start test Codex read "when
+ * you finish or stop" as every turn end and handed off after a question. The
+ * note is still saved, since "looked into X, nothing to change" can be worth
+ * keeping; the server cannot tell that from a note about nothing.
+ */
+export const HANDOFF_NOTHING_CHANGED_MESSAGE =
+  "Saved, but this chat changed no files and holds no claims. Write a handoff only after editing files or when the user stops work partway, not after answering a question.";
 
 /** Caps on `team_status`, which every team agent may call often. Oldest items go first. */
 export const TEAM_STATUS_LIMITS = { tasks: 8, claims: 10, pathsPerClaim: 5, activity: 5 };
@@ -200,6 +211,7 @@ const make = Effect.gen(function* () {
           const activity = yield* teams
             .listActivity(teamId, { limit: TEAM_STATUS_LIMITS.activity })
             .pipe(Effect.mapError(fromService("status")));
+          const doNotTouch = yield* readDoNotTouch(context).pipe(withFiles);
 
           const yourTask = tasks.findLast((task) => sameThread(task.thread, context.thread));
           const openTasks = tasks
@@ -226,6 +238,7 @@ const make = Effect.gen(function* () {
           return {
             team: context.teamFile.name,
             you: context.member.displayName,
+            ...(doNotTouch.length === 0 ? {} : { doNotTouch }),
             yourTask: yourTask === undefined ? null : summarizeTask(yourTask, names),
             tasks: openTasks
               .slice(0, TEAM_STATUS_LIMITS.tasks)
@@ -370,6 +383,15 @@ const make = Effect.gen(function* () {
           const task = yield* teams
             .findTaskForThread(teamId, context.thread)
             .pipe(Effect.mapError(fromService("handoff")));
+          // Earlier turns' edits left an automatic note (D7). This turn's have none
+          // yet, but the briefing asks for claims before editing.
+          const nothingChanged =
+            files.length === 0 &&
+            (yield* heldPaths(context)).length === 0 &&
+            !(yield* teams.listHandoffs(teamId, { thread: context.thread }).pipe(
+              Effect.mapError(fromService("handoff")),
+              Effect.map((notes) => notes.some((note) => note.automatic)),
+            ));
           const commit = yield* currentCommit(git, context.workingFolder);
           // Freshness compares these later, since the work is often not committed yet (D7).
           const fileHashes = Object.fromEntries(
@@ -396,6 +418,7 @@ const make = Effect.gen(function* () {
             ),
             files: handoff.files,
             commit: handoff.commit,
+            ...(nothingChanged ? { message: HANDOFF_NOTHING_CHANGED_MESSAGE } : {}),
           };
         }),
       ),

@@ -115,9 +115,11 @@ The block holds only things that rarely change: the team, the member, and how to
 1. "This project is in team "<name>". You are "<member name>"."
 2. "Before editing files, call `team_status`, then `team_claim` the paths you will touch."
 3. "If it reports overlaps, tell the user before editing those files."
-4. "When you finish or stop, write a `team_handoff`, but keep your claims: release them only if the user drops the work." (See "Claim lifetime" in D5.)
+4. "Write a `team_handoff` only after editing files or if the user stops work partway; keep claims unless the user drops it." (See "Claim lifetime" and "Handoffs only after work" in D5.)
 5. "Project rules are in `.team/rulebook.md`; read it before your first change." (The path is relative to the thread's working folder, so a project in a repo subfolder gets `../../.team/rulebook.md`.)
 6. "Code is the truth; team notes can be out of date."
+
+Until the M1 wrap-up, item 4 said "When you finish or stop, write a `team_handoff`, but keep your claims: release them only if the user drops the work." Codex gets the block every turn and read "when you finish or stop" as every turn end: in the cold start test it wrote a handoff after question 2, with nothing changed. The new wording names the two cases. [checked: built in the M1 wrap-up; a test fails if the block says "when you finish" or "when you stop"]
 
 v2 also put the thread's task title in the block. M1.3 dropped it: a task changes during a session, so it would go stale for Claude and cost tokens on every message for Cursor, Grok and Antigravity. The task comes from `team_status` and `team_task`. [checked: built in M1.3]
 
@@ -145,13 +147,13 @@ Later, if 150 tokens per turn is too much for Cursor, Grok and Antigravity, send
 
 A new toolkit at `apps/server/src/mcp/toolkits/team/`, built like `pullRequests/`. [checked: pattern]
 
-| Tool                 | What it does                                                                                                                      |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `team_status`        | Returns the team board: who, what task, which paths.                                                                              |
-| `team_claim`         | Claim paths (files or folders) with a short note. Returns any overlap with others' claims. `release: true` only for dropped work. |
-| `team_task`          | Read this thread's task card, or update its status and note. With no card yet, pass a title to create one for this thread.        |
-| `team_handoff`       | Save a handoff for this thread: what changed, what's left, risks. Max 150 words. The commit is filled in from the working folder. |
-| `team_memory_search` | Search decisions, handoffs and automatic notes by keywords. Top 5, short, each with a freshness mark and why (D7). M1.4.          |
+| Tool                 | What it does                                                                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `team_status`        | Returns the team board: who, what task, which paths, and the rulebook's "Do not touch" list.                                                                                                     |
+| `team_claim`         | Claim paths (files or folders) with a short note. Returns any overlap with others' claims. `release: true` only for dropped work.                                                                |
+| `team_task`          | Read this thread's task card, or update its status and note. With no card yet, pass a title to create one for this thread.                                                                       |
+| `team_handoff`       | Save a handoff for this thread: what changed, what's left, risks. Max 150 words. The commit is filled in from the working folder. Only after editing files, or when the user stops work partway. |
+| `team_memory_search` | Search decisions, handoffs and automatic notes by keywords. Top 5, short, each with a freshness mark and why (D7). M1.4.                                                                         |
 
 `team_decision_propose` is dropped for now.
 
@@ -184,7 +186,11 @@ A new toolkit at `apps/server/src/mcp/toolkits/team/`, built like `pullRequests/
 - At startup the layer also releases claims of threads that are no longer active (archived or deleted while it was not listening). [checked: tests and a real server start]
 - Every release writes an activity line, for example "Released Mouhssine's claims on src/login.ts: its pull request merged."
 
-**Token cost.** Every agent in every project sees the tool list, so each tool description stays under 40 words (a test checks it). `team_status` is capped: 8 open tasks, 10 other threads' claims (5 paths each), 5 activity lines, newest first, with a count of what was left out. Done tasks are not listed. `team_memory_search` is capped at 5 results (5 files each, about 40 words of text each) and says how many more matched. The briefing (D4) does not mention it: it is at about 146 of 150 tokens, and the tool's own description is enough for an agent to find it.
+**Token cost.** Every agent in every project sees the tool list, so each tool description stays under 40 words (a test checks it). `team_status` is capped: 8 open tasks, 10 other threads' claims (5 paths each), 5 activity lines, newest first, with a count of what was left out. Done tasks are not listed. `team_memory_search` is capped at 5 results (5 files each, about 40 words of text each) and says how many more matched. `team_status` also shows at most 5 "Do not touch" items, 120 characters each. The briefing (D4) does not mention it: it is at about 148 of 150 tokens, and the tool's own description is enough for an agent to find it.
+
+**Do not touch in `team_status`.** In the cold start test neither agent read `.team/rulebook.md` to answer a question, so both missed that `data/` is off limits. `team_status` now carries the rulebook's "Do not touch" list as `doNotTouch`, right after `team` and `you` (`apps/server/src/mcp/toolkits/team/rulebook.ts`). It reads the first heading named "Do not touch" (or "Don't touch"), at any level, until the next heading of the same or a higher level: one item per list item or paragraph, wrapped lines joined, code blocks skipped. At most 5 items of 120 characters; past that, the last item says how many more are in the rulebook, with its path from the agent's working folder. The template's example line ("Files or folders that need a human first.") is left out. No section, an empty one, no rulebook, a rulebook over 64 KB, or a failed read: no `doNotTouch` field, and `team_status` still works. The rest of the rulebook stays in the file; the briefing still asks agents to read it before their first change. [checked: built in the M1 wrap-up]
+
+**Handoffs only after work.** The briefing and the `team_handoff` description ask for a handoff only after editing files or when the user stops work partway, "not after only answering questions". The server also checks: when a handoff names no files, the thread holds no claims, and it has no automatic note (D7: no turn of it changed files), the note is **saved** but the result carries a `message` saying the chat changed nothing and when to write one. Why warn instead of reject: the server cannot tell a junk note from a useful "looked into X, nothing to change" note, and rejecting would lose those. A reject-unless-confirmed flag would add a parameter that every agent sees, and agents would learn to pass it. The message corrects the agent in the same session, where the habit forms, and costs nothing on other calls. The cost of a junk note that still gets through is small: no files, so it is only found by keywords, and its freshness is "unknown: no files". Claims cover the first editing turn, whose automatic note is only written when the turn ends. [checked: built in the M1 wrap-up]
 
 **Memory search (v1).** `team_memory_search` takes a query and searches the newest 200 handoff notes in the team database and up to 200 `.team/decisions/*.md` files (32 KB each at most) in the caller's own checkout (D5). Matching is simple: the query is split into lowercase words and paths, common stop words are dropped, and an entry's score is the number of distinct words found anywhere in its text, author or files. Results are ranked with handoffs and decisions before automatic notes (D7), then by score, then newest first (decisions with no date last). Each result says its kind (`handoff`, `automatic note` or `decision`), what it says, who wrote it, when, which files, its freshness with the reason (D7), and for decisions, the file. The message says that each mark compares the note with the files in the caller's copy now, and that code wins over notes. [checked: built in M1.4, kinds and reasons in M1.5] A smarter search (word stems, synonyms, embeddings, or SQLite full-text search) can replace the matching later without changing the tool.
 
@@ -252,6 +258,11 @@ A test repo with a `.team/` folder and seeded host state. For each provider, ope
 5. Which files should I avoid right now?
 
 Pass = all 5 correct from a cold start. Manual in M1, scripted later.
+
+**M1 result (2026-10-03): passed 5/5 with Claude (Sonnet 5) and with Codex (GPT-5.6-Luna).** Two problems, both fixed in the M1 wrap-up:
+
+- Neither agent named `data/` for question 5 (the pass bar is the three claimed files; `data/` was for full marks). Neither read `.team/rulebook.md` to answer a question. `team_status` now includes the rulebook's "Do not touch" list (D5).
+- Codex wrote a handoff after question 2 with nothing changed: "No code changes; reviewed the live team status for a progress update." The briefing's "when you finish or stop" read as every turn end. Reworded (D4), and the server now warns on such notes (D5, "Handoffs only after work").
 
 **M1 setup (built in M1.5).** `apps/server/scripts/team-cold-start-seed.ts` builds `~/code/team-demo5` and seeds its team in `~/.t3-dev` through `TeamService`; the steps, exact questions and expected answers are in [team/COLD_START_TEST.md](COLD_START_TEST.md), outside the demo project. Two things M1 forces on the seed:
 
@@ -324,13 +335,14 @@ Smart features on top of the board, after v1:
 
 ## 5. Milestones
 
-- **M1, solo:** team tools, host mode on your own machine, `<team_context>` block through `teamContext`, handoff notes, `.team/` files (`team.json`, rulebook, decisions), own migrator and `team_*` tables, team creation that turns on worktrees. Pass the cold start test with Claude Code and Codex.
+- **M1, solo (done 2026-10-03):** team tools, host mode on your own machine, `<team_context>` block through `teamContext`, handoff notes, `.team/` files (`team.json`, rulebook, decisions), own migrator and `team_*` tables, team creation that turns on worktrees. Pass the cold start test with Claude Code and Codex.
   - **M1.1, foundation (done 2026-09-30):** team schemas in contracts, own migrator and `team_*` tables, `TeamService` (teams, members, claims, tasks, handoffs, activity), `t3 team init`. No tools, networking or UI yet.
   - **M1.2, team tools (done 2026-09-30):** `team_status`, `team_claim` (with release), `team_task`, `team_handoff` in `apps/server/src/mcp/toolkits/team/`, with the call-time team check and registration (D5).
   - **M1.3, team briefing (done 2026-09-30):** the `teamContext` block in runtime instructions for all six providers (D4), and the task of each claim in `team_status` and `team_claim` (D5).
   - **Claim lifetime fix (done 2026-09-30):** claims last until the work merges or is dropped; auto-release on merge, archive and delete; `where` on claims (D5).
   - **M1.4, memory search (done 2026-10-01):** `team_memory_search` over handoffs and `.team/decisions/`, keyword ranking, and freshness marks from file hashes and commits (D5, D7).
-  - **M1.5, cold start (built 2026-10-01, test to run):** plain reasons on freshness marks and automatic notes per thread (D7, from the round 4 manual test); the cold start seed script and questions (D8).
+  - **M1.5, cold start (built 2026-10-01; test passed 5/5 with Claude Sonnet 5 and Codex GPT-5.6-Luna, 2026-10-03):** plain reasons on freshness marks and automatic notes per thread (D7, from the round 4 manual test); the cold start seed script and questions (D8).
+  - **M1 wrap-up (done 2026-10-03):** from the cold start test: handoffs only after edits or stopped work (briefing, tool description, a warning on notes from chats that changed nothing), and the rulebook's "Do not touch" list in `team_status` (D4, D5, D8).
 - **M2, two people:** team HTTP API, `team:read` / `team:write` scopes, `t3 team invite`, member join with `bootstrapRemoteBearerSession`, member push (AgentAwarenessRelay pattern) and 15-30 second polling, offline queue. Test with one friend over Tailscale.
 - **M3, conflicts:** overlap detection from turn diffs, overlap warnings, team board in the UI.
 - **M4, team features:** the self-moving task board (D9), catch me up, handoff UI, then guide mode.

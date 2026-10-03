@@ -47,7 +47,8 @@ export function renderTeamBriefing(input: TeamBriefingInput): string {
     `This project is in team "${toBriefingName(input.teamName)}". You are "${toBriefingName(input.memberName)}".`,
     "Before editing files, call team_status, then team_claim the paths you will touch.",
     "If it reports overlaps, tell the user before editing those files.",
-    "When you finish or stop, write a team_handoff, but keep your claims: release them only if the user drops the work.",
+    // "only": Codex gets this every turn and read "when you finish or stop" as every turn end.
+    "Write a team_handoff only after editing files or if the user stops work partway; keep claims unless the user drops it.",
     `Project rules are in ${input.rulebookPath}; read it before your first change.`,
     "Code is the truth; team notes can be out of date.",
     "</team_context>",

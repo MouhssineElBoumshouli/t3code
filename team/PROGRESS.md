@@ -2,6 +2,51 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-03 — M1 done: cold start test passed; handoff wording and "Do not touch" in `team_status`
+
+**What changed**
+
+- Cold start test (D8) passed 5/5 with Claude (Sonnet 5) and with Codex (GPT-5.6-Luna), run by the developer. M1 is marked done in DESIGN.md (milestones, D8 result). Two problems from the run are fixed here.
+- Junk handoffs. In the Codex run, question 2 ("Who is working on what right now?") made Codex write a handoff. The note in `~/.t3-dev` (team "Demo team 5", 2026-10-03 00:03 UTC, no files, no task): changed "No code changes; reviewed the live team status for a progress update.", left "No implementation work was started in this thread.", risks "Status reflects the current claims and task notes at check time." Codex gets the briefing every turn, and "When you finish or stop, write a team_handoff" read as every turn end.
+  - Briefing line 4 is now "Write a team_handoff only after editing files or if the user stops work partway; keep claims unless the user drops it." 148 of 150 tokens with the longest names (was about 146). The `team_handoff` description (36 words) now starts "Save a handoff note after editing files, or when the user stops work partway" and says "Not after only answering questions."
+  - Server guard: warn, don't reject. When a handoff names no files, the thread holds no claims, and it has no automatic note (no turn of it changed files), the note is saved and the result gets a `message`: "Saved, but this chat changed no files and holds no claims. Write a handoff only after editing files or when the user stops work partway, not after answering a question."
+- "Do not touch" in `team_status`. Neither agent read `.team/rulebook.md` for question 5, so both missed `data/`. `team_status` now has `doNotTouch` (right after `team` and `you`): the items of the rulebook's "Do not touch" section, at most 5 of 120 characters, the last one saying "+N more in <rulebook path>" when cut. No section or an empty one: no field. The `t3 team init` template's example line is left out, so a fresh team shows nothing. The `team_status` description mentions it.
+
+**Why warn and not reject (the guard)**
+
+- The server cannot tell junk from a useful "looked into X, nothing to change" note; rejecting loses those, and you asked not to block them.
+- A reject-unless-confirmed parameter would show in every agent's tool schema, and agents would learn to pass it every time.
+- The warning corrects the agent in the same session, where the habit forms, at no cost to other calls. A junk note that still gets through costs little: no files, so search finds it only by keywords, with freshness "unknown: no files".
+- Signals used: files named in the note, the thread's active claims, and its automatic note. The first editing turn has no automatic note until it ends, but the briefing asks for claims before editing, so a normal edit-then-handoff turn gets no warning.
+
+**Files touched**
+
+- New: `apps/server/src/mcp/toolkits/team/rulebook.ts`, `rulebook.test.ts`.
+- Our files: `apps/server/src/mcp/toolkits/team/{handlers,handlers.test,tools}.ts`, `apps/server/src/team/{TeamBriefing,TeamBriefing.test,TeamProjectFiles}.ts` (the template's example line is now an exported constant).
+- No upstream files.
+- `team/DESIGN.md` (D4 item 4 and why, D5 table rows, token cost, "Do not touch in `team_status`", "Handoffs only after work", D8 result, milestones), `team/COLD_START_TEST.md` (note under question 5), `team/PROGRESS.md`.
+
+**How it was checked**
+
+- New tests. Briefing: the new sentence, and no "when you finish/stop" or "at the end of a turn"; the 150-token test still passes. Handoff: the Codex note gets the message and is still saved; no message when the note names files, when the thread holds claims, or when the thread has an automatic note; all 4 notes saved. Description test for `team_handoff`. Rulebook: the demo's list; nothing without a section, with an empty one, for an empty file, or for the init template; `*`, `+` and numbered items; wrapped lines and paragraphs; a subheading's items; code blocks skipped; "Don't touch ##"; a `###` section ending at `##`; caps (5 items, 120 characters, "+4 more in ../../.team/rulebook.md"). `team_status`: no field without a rulebook or with the template, the list right after `you` with one.
+- Deliberate breaks, each failed tests, all restored: no automatic-note check (1 failed), no claims check (1), no template filter (2), no section end (6).
+- `vp test run src/team/ src/mcp/toolkits/team/` 3 times → 11 files, 92 passed each time. Wider, from `apps/server`: the same plus `src/provider/RuntimeInstructions.test.ts src/provider/Layers/CodexTeamBriefing.test.ts src/mcp/McpHttpServer.test.ts src/server.test.ts` → 15 files, 325 passed.
+- Typecheck: `npx tsc --noEmit` in `apps/server` and `packages/contracts` → 0 errors (only old suggestions, none on changed lines). `vp lint --report-unused-disable-directives` on the 8 changed `.ts` files → exit 0, no output. `vp fmt --check` → clean.
+- The parser on the real `~/code/team-demo5/.team/rulebook.md` → ``["`data/`: the sample data. A human updates it."]``.
+- Read the handoff from a copy of `~/.t3-dev`'s database (not the live file).
+- Not done: no agent has seen the new briefing, description, warning or `doNotTouch` yet. A rerun of questions 2 and 5 with Codex would show whether the junk handoff is gone and `data/` is named. The junk note is still in `~/.t3-dev`; re-seeding resets the team.
+
+**What's left**
+
+- M2 (not started): limit registration-on-first-use to host mode; team HTTP API and invites.
+- Optional: rerun the cold start test (Codex questions 2 and 5) to confirm both fixes with a real agent.
+- Still open from M1.5: open question 5 (poll branch-only pull requests). Q4 passed, so `team_status` does not list "your other tasks".
+
+**Unsure about / notes**
+
+- Codex may still hand off after questions if it ignores the "only"; the server warning then corrects it once per session. If it keeps happening, the next step would be to hide such notes from search, not to reject them.
+- In local mode a thread's automatic note can come from someone else's edits in the same checkout (D6), so the warning may be skipped there. It never fires wrongly because of that.
+
 ## 2026-10-01 — M1.5: freshness reasons, automatic notes, cold start test setup
 
 **What changed**
