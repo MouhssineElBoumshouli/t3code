@@ -94,7 +94,25 @@ const makeFolder = (options: { readonly team: boolean }) =>
     return root;
   });
 
-const makeDependencies = (workspaceRoot: string, worktreePath: string | null = null) =>
+/** This server hosts the team, as after `t3 team init` (team/DESIGN.md M2.1). */
+const RegisterHostedTeam = Layer.effectDiscard(
+  TeamService.TeamService.pipe(
+    Effect.flatMap((teams) =>
+      teams.ensureTeam({
+        teamFile: TeamFile.make({ teamId: TEAM_ID, name: "Core" }),
+        canonicalKey: null,
+        owner: { environmentId: ENVIRONMENT_ID, displayName: "Mouhssine's laptop" },
+      }),
+    ),
+    Effect.orDie,
+  ),
+);
+
+const makeDependencies = (
+  workspaceRoot: string,
+  worktreePath: string | null = null,
+  options: { readonly hostsTeam?: boolean } = {},
+) =>
   Layer.mergeAll(
     TeamService.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     Layer.mock(ProjectionSnapshotQuery)({
@@ -114,13 +132,23 @@ const makeDependencies = (workspaceRoot: string, worktreePath: string | null = n
         capabilities: { repositoryIdentity: true },
       }),
     }),
-  ).pipe(Layer.provideMerge(NodeServices.layer));
+  ).pipe(
+    (dependencies) =>
+      options.hostsTeam === false
+        ? dependencies
+        : RegisterHostedTeam.pipe(Layer.provideMerge(dependencies)),
+    Layer.provideMerge(NodeServices.layer),
+  );
 
-const briefingIn = (workspaceRoot: string, worktreePath: string | null = null) =>
+const briefingIn = (
+  workspaceRoot: string,
+  worktreePath: string | null = null,
+  options: { readonly hostsTeam?: boolean } = {},
+) =>
   Effect.gen(function* () {
     const resolver = yield* makeTeamBriefingResolver;
     return yield* resolver(THREAD_ID);
-  }).pipe(Effect.provide(makeDependencies(workspaceRoot, worktreePath)));
+  }).pipe(Effect.provide(makeDependencies(workspaceRoot, worktreePath, options)));
 
 const EXPECTED = renderTeamBriefing({
   teamName: "Core",
@@ -139,20 +167,29 @@ describe("team briefing resolver", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("briefs a thread in a team, registering the team on first use", () =>
+  it.effect("briefs a thread in a team this server hosts", () =>
     Effect.gen(function* () {
       attachMcp();
       const root = yield* makeFolder({ team: true });
-      const briefing = yield* Effect.gen(function* () {
+      assert.strictEqual(yield* briefingIn(root), EXPECTED);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  // Security (team/DESIGN.md 7.2 S7, M2.1): no briefing and no team row for a clone.
+  it.effect("gives no briefing and registers nothing for a team hosted elsewhere", () =>
+    Effect.gen(function* () {
+      attachMcp();
+      const root = yield* makeFolder({ team: true });
+      const { briefing, team } = yield* Effect.gen(function* () {
         const resolver = yield* makeTeamBriefingResolver;
-        const first = yield* resolver(THREAD_ID);
-        const members = yield* TeamService.TeamService.pipe(
-          Effect.flatMap((teams) => teams.listMembers(TEAM_ID)),
+        const briefing = yield* resolver(THREAD_ID);
+        const team = yield* TeamService.TeamService.pipe(
+          Effect.flatMap((teams) => teams.getTeam(TEAM_ID)),
         );
-        assert.lengthOf(members, 1);
-        return first;
-      }).pipe(Effect.provide(makeDependencies(root)));
-      assert.strictEqual(briefing, EXPECTED);
+        return { briefing, team };
+      }).pipe(Effect.provide(makeDependencies(root, null, { hostsTeam: false })));
+      assert.isUndefined(briefing);
+      assert.isTrue(Option.isNone(team));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -199,7 +236,7 @@ describe("team briefing resolver", () => {
         });
         const resolver = yield* makeTeamBriefingResolver;
         return yield* resolver(THREAD_ID);
-      }).pipe(Effect.provide(makeDependencies(root)));
+      }).pipe(Effect.provide(makeDependencies(root, null, { hostsTeam: false })));
       assert.isUndefined(briefing);
     }).pipe(Effect.provide(NodeServices.layer)),
   );

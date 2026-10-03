@@ -63,13 +63,13 @@ One T3 environment on the team acts as the host. It stores team state and serves
 
 **Scopes.** Two new scopes, `team:read` and `team:write`, are added to the scope list and to the administrator preset, so the host owner can hand them out. [checked: delegation rule] Members never get `orchestration:read` or any other upstream scope. They cannot see the host's files, threads or agents.
 
-**Invites.** The host owner runs a command (for example `t3 team invite`) that makes a one-time pairing link with only `team:read` and `team:write`, like `t3 connect` does for `relay:write`. [checked: pattern] The link expires in 5 minutes, so it is meant to be used right away. The member pastes it into their own T3. Their server exchanges it with `bootstrapRemoteBearerSession` and stores the session locally. [checked: works in Node, used by desktop main]
+**Invites.** The host owner runs a command (for example `t3 team invite`) that makes a one-time pairing link with only `team:read` and `team:write`, like `t3 connect` does for `relay:write`. [checked: pattern] The link expires in 30 minutes by default, `--ttl` up to 24 hours (decided for M2, section 7.5; it was 5 minutes). The member pastes it into their own T3. Their server exchanges it with `bootstrapRemoteBearerSession` and stores the session locally. [checked: works in Node, used by desktop main]
 
 **Sessions.** A member's session lasts 30 days. When it expires, team features show "re-invite needed" and the member asks for a new invite. No refresh flow in v1.
 
 **Member → host.** The member's server has a small team client built on `HttpApiClient`. [checked: pattern] It copies the `AgentAwarenessRelay` pattern: listen to local orchestration events, turn them into team updates (claims, card status), push with retry.
 
-**Host → member.** The member's server polls the host every 15 to 30 seconds for the board and any warnings. No push channel in v1.
+**Host → member.** The member's server polls the host every 20 seconds for the board and any warnings, every 2 minutes while the host is offline (section 7.5). No push channel in v1.
 
 **The host owner is a member too.** Their own server reads and writes team state directly, not over HTTP.
 
@@ -135,7 +135,7 @@ The board, the task card, handoff notes and decisions come **only through tools*
 
 **Plumbing.** v2 planned a per-thread map of team blocks that adapters read, like `McpProviderSession`. Nothing could fill that map before a session starts without editing `ProviderService.ts` (on the "do not edit" list), and a reactor on orchestration events would race the provider command reactor. So M1.3 turned it around: the team layer installs a resolver at startup (`TeamBriefingLive`, one `team-layer:` line in `server.ts`), and each adapter asks for the thread's block with `readTeamBriefing(threadId)` when it builds its instructions. That is one small `team-layer:` edit per adapter, plus a few lines in `CodexSessionRuntime.ts` and `CodexDeveloperInstructions.ts` for Codex. [checked: built in M1.3]
 
-- The resolver uses the same thread → team lookup as the team tools (`mcp/toolkits/team/resolve.ts`), so the block appears exactly where the tools work, and it registers the team on first use the same way (D5).
+- The resolver uses the same thread → team lookup as the team tools (`mcp/toolkits/team/resolve.ts`), so the block appears exactly where the tools work. Neither registers a team (D5, since M2.1).
 - No block when the provider session has no `t3-code` MCP server (the agent could not call the tools the block names), when the project is not in a team, or when this server is not a member.
 - A failed or slow lookup (over 2 seconds) logs a warning and gives no block. It never holds up or breaks a turn.
 - Without the resolver (tests, or a build without the team layer), `readTeamBriefing` gives nothing, and `buildRuntimeInstructions` returns exactly what it did before.
@@ -160,7 +160,7 @@ A new toolkit at `apps/server/src/mcp/toolkits/team/`, built like `pullRequests/
 **No new MCP capability.** Every agent sees these five tools, the same way every agent sees the preview tools today. [checked] Each tool checks team membership **when it is called**: thread → project → working folder → `.team/team.json` → team and member. [checked: built in M1.2] Because the check happens at call time, a user who joins a team mid-session gets working tools without restarting the agent. This avoids edits to `McpInvocationContext.ts` and `ProviderService.ts`. [checked: capabilities are frozen at session start]
 
 - **No team file:** a normal result, `{ inTeam: false, message }`, not an error, so the agent does not retry.
-- **Team file, but the team is not in this server's database:** the server registers the team and adds itself as owner (`ensureTeam`). Right for M1, where every team lives on the owner's own server. **M2 must narrow this** to host mode: a member's server must not make itself owner of a team it only found in a cloned repo. Plan: M2.1 in section 7 (only `t3 team init` registers).
+- **Team file, but the team is not in this server's database:** a normal result saying the team is hosted on another T3 server and to ask its host for an invite. Nothing is registered. Until M2.1 the server registered the team on first use and made itself owner, which would let a member's server own a team it only found in a cloned repo; now only `t3 team init` on the host registers (section 7.1, M2.1). [checked: built in M2.1]
 - **Team known, but this server is not a member:** a normal "not a member" result.
 
 **Files come from the thread's own checkout.** Any team file read or write (reading `.team/team.json` and `.team/rulebook.md`, checking decision freshness with Git) uses `thread.worktreePath` when it is set, else the project's workspace root. A worktree can be on a branch whose `.team/` differs from the main checkout. [checked: thread shell has `worktreePath`] If `.team/team.json` is not in that working folder, the tools look at the root of its Git repo, because `t3 team init` writes `.team/` at the repo root and a project can be a subfolder of a repo. [checked: built in M1.2]
@@ -343,7 +343,8 @@ Smart features on top of the board, after v1:
   - **M1.4, memory search (done 2026-10-01):** `team_memory_search` over handoffs and `.team/decisions/`, keyword ranking, and freshness marks from file hashes and commits (D5, D7).
   - **M1.5, cold start (built 2026-10-01; test passed 5/5 with Claude Sonnet 5 and Codex GPT-5.6-Luna, 2026-10-03):** plain reasons on freshness marks and automatic notes per thread (D7, from the round 4 manual test); the cold start seed script and questions (D8).
   - **M1 wrap-up (done 2026-10-03):** from the cold start test: handoffs only after edits or stopped work (briefing, tool description, a warning on notes from chats that changed nothing), and the rulebook's "Do not touch" list in `team_status` (D4, D5, D8).
-- **M2, two people (planned 2026-10-03, not started):** team HTTP API, `team:read` / `team:write` scopes, `t3 team invite`, member join with `bootstrapRemoteBearerSession`, member push (AgentAwarenessRelay pattern) and 15-30 second polling, offline queue. Test with one friend over Tailscale. Slices M2.0 to M2.10, security checks, the two-server test setup and open questions: section 7.
+- **M2, two people (planned 2026-10-03, in progress):** team HTTP API, `team:read` / `team:write` scopes, `t3 team invite`, member join with `bootstrapRemoteBearerSession`, member push (AgentAwarenessRelay pattern) and 20 second polling, offline queue. Test with one friend over Tailscale. Slices M2.0 to M2.10, security checks, the two-server test setup and decisions: section 7.
+  - **M2.0, test bench, and M2.1, only the host registers a team (done 2026-10-03):** `apps/server/scripts/team-two-person-setup.ts`; `t3 team init --base-dir` registers, `t3 team status`, no registration on first use. Manual tests: [team/M2_MANUAL_TESTS.md](M2_MANUAL_TESTS.md).
 - **M3, conflicts:** overlap detection from turn diffs, overlap warnings, team board in the UI.
 - **M4, team features:** the self-moving task board (D9), catch me up, handoff UI, then guide mode.
 - **Later:** mid-turn file-change warnings (research first), plan to cards, waiting on, auto standup, decisions from merges, GitHub Issues sync, phone approvals, shared skills, usage per person, online host, own name, open source launch.
@@ -374,7 +375,7 @@ The 9 questions from v1 are answered in [team/CODE_FINDINGS.md](CODE_FINDINGS.md
 
 ## 7. M2 plan: a second person
 
-Status: plan, 2026-10-03. Docs only; nothing below is built yet. Based on D1 and CODE_FINDINGS.md, plus a new read of the auth code (marked [checked] with the file).
+Status: plan, 2026-10-03. M2.0 and M2.1 are built (2026-10-03); the rest is not. Based on D1 and CODE_FINDINGS.md, plus a new read of the auth code (marked [checked] with the file). Decisions on the open questions are in 7.5. Manual tests per slice: [team/M2_MANUAL_TESTS.md](M2_MANUAL_TESTS.md).
 
 **Goal.** Two people, each with their own T3 server, work on one repo as one team. One server is the host (D1). The other joins with an invite, reads and writes team state on the host over the team HTTP API, and keeps working when the host is off. A member can reach team data and nothing else on the host.
 
@@ -384,21 +385,25 @@ Status: plan, 2026-10-03. Docs only; nothing below is built yet. Based on D1 and
 
 Each slice ends with a commit, a push, a PROGRESS.md entry, and a manual test you can run. The order matters: M2.1 closes the "member makes itself owner" hole before any member exists, and M2.2 lands the security tests before any data endpoint does.
 
-**M2.0 Test bench.** No feature code.
+**M2.0 Test bench (done 2026-10-03).** No feature code.
 
-- A setup script, `apps/server/scripts/team-two-person-setup.ts`, like the cold start seed: makes a local bare Git remote and two clones of a small demo app (section 7.3). It refuses folders inside the t3code repo, `~/.t3`, and existing folders it did not make.
-- Check that two dev servers run side by side from one checkout, with `T3CODE_PORT_OFFSET` for the second one. [verify: two `vp run dev` processes from one checkout; the dev runner supports an offset, `scripts/dev-runner.ts:214`, checked]
-- Manual test: both servers start, both web UIs open in one browser (session cookie names include a hash of the state folder, `apps/server/src/auth/utils.ts:25`, checked, so they do not log each other out), each with its own project.
+- `apps/server/scripts/team-two-person-setup.ts` makes `<demo>-remote.git` (bare), `<demo>-host` (the Pinboard demo app, then `t3 team init --base-dir <host home>`, committed and pushed) and `<demo>-member` (a clone made after the push). Defaults: `--demo ~/code/team-demo6`, `--host-home ~/.t3-dev`, `--member-home ~/.t3-dev-member`, `--name` from the folder ("Demo team 6"). It runs the real `t3 team init` as a child process, so the bench also exercises M2.1. [checked: built]
+- Safe to re-run: each folder it makes holds a marker file (`.t3-team-two-person-setup`, in `.git/` for clones), and a re-run deletes only marked folders, plus the old team's rows in the host's database (read from the old host clone's `.team/team.json`). It refuses folders it did not make, anything inside the t3code repo, the real T3 home (`~/.t3`), and the same home for host and member. It never touches the member's home. Every check runs before anything is deleted. [checked: scratch runs of each refusal, and a re-run that removed the old team's rows]
+- The Pinboard app and the Git helpers moved from the cold start seed to `apps/server/scripts/teamDemoRepo.ts`, shared by both scripts. [checked: the seed still builds its demo against a scratch home]
+- Two dev servers from one checkout: [checked 2026-10-03] with the host's `vp run dev --home-dir ~/.t3-dev` running, `T3CODE_PORT_OFFSET=20 vp run dev --home-dir ~/.t3-dev-member` started on exactly 13793/5753 (`[dev-runner] mode=dev source=T3CODE_PORT_OFFSET=20 serverPort=13793 webPort=5753`), each answered `/.well-known/t3/environment` with its own environment id, directly and through its web port's proxy, and the host kept running. Both servers run `node --watch` on the same source, so editing server code restarts both. On this 8 GB laptop, two dev servers plus a typecheck ran out of memory (`tsc` was killed); stop the member server before typechecking.
+- A CLI writing `state.sqlite` while the server runs: [checked 2026-10-03] the setup script's `t3 team init --base-dir ~/.t3-dev` registered Demo team 6 while the host dev server ran on that home; the server kept serving with the same process. SQLite runs in WAL mode with a 5 second busy timeout (`persistence/Layers/Sqlite.ts`).
+- Manual test: [team/M2_MANUAL_TESTS.md](M2_MANUAL_TESTS.md), M2.0. Session cookie names include a hash of the state folder (`apps/server/src/auth/utils.ts:25`, checked), so the two web UIs should not log each other out; the manual test is what checks it in a browser.
 
-**M2.1 Only the host registers a team.** The D5 fix for "a member's server must not make itself owner".
+**M2.1 Only the host registers a team (done 2026-10-03).** The D5 fix for "a member's server must not make itself owner".
 
-- `t3 team init` registers the team in the database of the home folder it runs against, with this server as owner, at the same time it writes `.team/team.json`. Running it again changes nothing.
-- When `.team/team.json` already existed (a clone), `t3 team init` does not register. It says: "This repo is already team <name>. Ask its host for an invite, then run `t3 team join`." Taking over hosting is a separate, explicit step (open question 1).
-- The tool and briefing lookup (`resolve.ts`) no longer calls `ensureTeam`. A team file with no team row and no link gives a normal not-in-team result: "This project is in team <name>, but this T3 server has not joined it. Ask the team's host for an invite (`t3 team join`)."
-- The cold start seed already registers through `TeamService` and keeps working. Teams registered on first use in M1 stay as they are.
-- CLI commands take `--base-dir`, the same folder as the dev server's `--home-dir` (both end in `<folder>/userdata` when given, `apps/server/src/config.ts:138`, checked). Without it they use the real install's home, like `t3 pair` does. Every test command in this plan passes it.
-- Tests: the resolver never calls `ensureTeam`; a cloned repo on a fresh home gives "not joined" and writes no `team_*` rows; init on a fresh repo registers; init on a repo that already had the file does not.
-- Manual test: on the member server, open the member clone, new chat, "Call team_status". It says this server has not joined and names `t3 team join`. `t3 team status --base-dir ~/.t3-dev-member` lists no teams. On the host, `t3 team init` in a fresh repo, then `t3 team status --base-dir ~/.t3-dev` shows the team with you as owner before any chat.
+- `t3 team init <path> --base-dir <home>` registers the team in that home's database, with that server's environment id (the same `environment-id` file the server uses, created the same way if missing) and its name (the server's own label) as owner, and records the repo's `canonicalKey` when it has one. Registration runs after every file check and before any write (`initTeamProject`'s `register` step, `apps/server/src/team/TeamProjectFiles.ts`), so a refused or failed registration writes nothing. Running it again changes nothing and says "Already hosted by the T3 home at …". [checked: built, tests in `apps/server/src/cli/team.test.ts`]
+- When `.team/team.json` already existed and the home has no row for it (a clone), init writes and registers nothing and fails with: "This repo is already team "Demo team 6", and the T3 home at … does not host it. Its host is another T3 server: ask the host for an invite. Nothing was written or registered." Taking over hosting is `t3 team host --adopt` (decision 1 in 7.5, not built). This also covers a repo that M1's `t3 team init` set up but no chat ever used: it has no row, so init refuses it the same way; `--adopt` will be the way out.
+- `--base-dir` is required for now (decision 10): without it, init and status refuse with a message that says they would otherwise use the real install. [checked: test]
+- `t3 team status --base-dir <home>` lists the teams that home hosts, with members and roles, or says it hosts none. A home with no database yet says so and gets no database. Member links are added in M2.4. [checked: tests]
+- The tool and briefing lookup (`resolve.ts`) no longer calls `ensureTeam`, and no longer needs `ServerEnvironment`. A team file with no team row gives a normal not-in-team result: "This project is in team Demo team 6, which is hosted on another T3 server. This server has not joined it, so team tools do nothing here. To join, ask the team's host for an invite." It does not name `t3 team join` yet, because the command does not exist until M2.4. Briefing and automatic notes use the same lookup, so they skip such projects too. [checked: tests]
+- The cold start seed registers through `TeamService` and keeps working. Teams registered on first use in M1 keep their rows, so they stay hosted where they are.
+- Tests: every tool, called from a project whose team file has no row on a fresh in-memory database, returns the hosted-elsewhere result, and every `team_*` table (listed from `sqlite_master`, so later tables are covered) stays empty; the briefing gives no block and registers nothing; init on a fresh repo registers one team and one owner; init twice keeps one of each; init on a clone with a fresh home refuses, writes no file, and leaves every team table empty; status on an empty home. The tool, briefing and automatic-note tests now register the team first, as `t3 team init` does.
+- Manual test: [team/M2_MANUAL_TESTS.md](M2_MANUAL_TESTS.md), M2.1.
 
 **M2.2 Scopes and the team API skeleton (host).**
 
@@ -413,7 +418,7 @@ Each slice ends with a commit, a push, a PROGRESS.md entry, and a manual test yo
 **M2.3 `t3 team invite` and the join endpoint (host).**
 
 - New table `team_invites` (own migration 4): invite id, team, member name, created by, pairing link id, created, expires, used at, used by session, revoked at. There is no role column: every invite makes a `member`.
-- `t3 team invite --name Sara [--ttl 30m] [--tailscale] [--member Sara]` makes a one-time pairing link through `EnvironmentAuth.createPairingLink` in the CLI process, the way `t3 pair` does (`apps/server/src/cli/pair.ts:436`, checked), with scopes exactly `[team:read, team:write]`, subject `team-invite:<invite id>`, and label "Team <team>: Sara". It prints the invite URL once (same URL builder as `t3 pair`) with its expiry. The URL is never logged and never written to the repo. `--member` re-invites an existing member (M2.9).
+- `t3 team invite --name Sara [--ttl 30m] [--tailscale] [--member Sara]` (default 30 minutes, `--ttl` at most 24 hours, decision 2) makes a one-time pairing link through `EnvironmentAuth.createPairingLink` in the CLI process, the way `t3 pair` does (`apps/server/src/cli/pair.ts:436`, checked), with scopes exactly `[team:read, team:write]`, subject `team-invite:<invite id>`, and label "Team <team>: Sara". It prints the invite URL once (same URL builder as `t3 pair`) with its expiry. The URL is never logged and never written to the repo. `--member` re-invites an existing member (M2.9).
 - `POST /api/team/v1/join` (`team:write`). The host reads the invite id from the session's subject (the session keeps the grant's subject, `EnvironmentAuth.ts:816`, checked), creates the member row with role `member` and the invite's name, stores the member's environment id from the request, binds the session id to the member, and marks the invite used. The same session calling again gets the same member. Rejected: a subject that is not a team invite, an invite already used by another session, a revoked invite, a removed team.
 - `t3 team invites [--revoke <id>]` lists pending, used and expired invites; revoke also revokes the pairing link.
 - Manual test: `t3 team invite --name Sara --ttl 2m --base-dir ~/.t3-dev` prints a URL and "expires at HH:MM". `t3 team invites` shows it pending; after 2 minutes, expired. A new invite, revoked, shows revoked.
@@ -421,7 +426,8 @@ Each slice ends with a commit, a push, a PROGRESS.md entry, and a manual test yo
 **M2.4 `t3 team join` (member).**
 
 - `t3 team join <invite URL> --base-dir ~/.t3-dev-member`: exchanges the credential with `bootstrapRemoteBearerSession` **without** asking for scopes (the token endpoint only accepts the 8 upstream scope names, `apps/server/src/auth/http.ts`, checked; with no request the session gets the link's scopes, `EnvironmentAuth.ts:809`, checked), then calls `/join` with this server's environment id.
-- Member-side table `team_links` (own migration): team id, team name, host origin, member id, member name, joined, session expiry, status (`ok`, `offline`, `re-invite needed`, `removed`). The bearer token goes in the server secret store (`team-link-<team id>`, in the secrets folder kept at mode 0700, `apps/server/src/auth/ServerSecretStore.ts:162`, checked), not in the table, the repo, or a log.
+- Member-side table `team_links` (own migration): team id, team name, host origin, member id, member name, joined, session expiry, status (`ok`, `offline`, `re-invite needed`, `removed`). The bearer token goes in the server secret store (`team-link-<team id>`, in the secrets folder kept at mode 0700, `apps/server/src/auth/ServerSecretStore.ts:162`, checked), not in the table, the repo, or a log. The token file itself must be mode 0600, readable only by its owner, with a test (decision 9).
+- Before sending anything, join checks the host origin (S13): HTTPS anywhere, plain HTTP only to localhost or a Tailscale address.
 - Prints: "Joined team Demo team 6 on http://127.0.0.1:5733 as Sara. Session ends 2026-11-02." Refuses with plain messages: invite used, expired, revoked, host unreachable, or this server already in the team.
 - Works whether the member server runs or not, like `t3 pair`. [verify: a CLI write to `state.sqlite` while the server runs; `t3 pair` already does it]
 - Manual test: join; `t3 team status --base-dir ~/.t3-dev-member` shows the link; `t3 team status --base-dir ~/.t3-dev` lists Sara as member. `git status` is clean in both clones. `grep -r` for the token's first 12 characters in `~/.t3-dev-member/userdata/logs` and both clones finds nothing. Running join again with the same URL fails with "already used".
@@ -430,7 +436,8 @@ Each slice ends with a commit, a push, a PROGRESS.md entry, and a manual test yo
 
 - `TeamBackend` (new, our files): for a team id it returns `Local` (team row here: `TeamService`), `Remote` (a `team_links` row: HTTP client), or `NotJoined`. The resolver, the briefing, the five tools, `TeamAutoNotes` and `TeamClaimAutoRelease` go through it instead of calling `TeamService` directly. The tool results stay the same shape on both sides.
 - Host read endpoints (`team:read`): board (team, members, open tasks, active claims with task and thread, activity; same caps as `team_status`), one task, task for a thread, newest 200 handoffs, my claimed threads.
-- Reads are live with a 3 second limit. Until M2.7, a failed read says "The team host is not reachable"; from M2.7 it falls back to the cached board (open question 4).
+- Reads are live with a 3 second limit. Until M2.7, a failed read says "The team host is not reachable"; from M2.7 it falls back to the cached board, and the result says "cached, as of <time>" (decision 4).
+- Tool results label text written by teammates (handoffs, task notes, claim notes, activity) as teammate-written data, not instructions (S14). On the host's own tools too.
 - Everything that reads files stays on the member: the rulebook, "Do not touch", decisions, freshness checks. Freshness of the host's notes works from hashes; line counts are left out when the host's stored content is not in the member's repo (expected, D7).
 - The member's own name in the briefing comes from `team_links`, so the briefing costs no host call.
 - Manual test: on the host, a chat claims `src/pins/search.ts` for a task. On the member, a new chat: "Who is working on what right now?" names the host member, the task and the file. "Search team memory for search" finds the host's handoff with a freshness mark. Stop nothing yet.
@@ -441,12 +448,13 @@ Each slice ends with a commit, a push, a PROGRESS.md entry, and a manual test yo
 - The member makes the ids (claim id, handoff id, one op id per call), and the host inserts or ignores by id, so a retried call never makes a duplicate. This is also what makes the outbox (M2.8) safe.
 - The host never trusts identity from the body: the member id comes from the session, and every thread in a request must carry the member's own environment id (S8).
 - The "handoff with no work" warning (D5) is computed on the host, which holds the thread's claims and automatic note.
+- Who may change a task (decision 7): a member changes only tasks it owns, or takes an unowned one (which makes it the owner); the host's owner can change any task. The rule lives in `TeamService.updateTask`, so it holds on the host's own tools too. Every task change writes an activity line naming who made it.
 - Manual test: member chat claims `src/api/routes.ts`; a host chat that claims the same file gets an overlap naming Sara, her task, and "their own copy; not merged into yours yet". Then the other way round. Member writes a handoff; the host's memory search shows it as "not merged yet" until the member pushes and the host pulls, then "fresh". Archive the member chat: within a few seconds its claims are gone from the host's `team_status`.
 
 **M2.7 Polling and the board cache (member).**
 
-- Every 20 seconds per linked team (open question 5), the member server fetches the board into `team_board_cache` and records the link state: last success, `offline` after 2 failed polls, `re-invite needed` on 401, `removed` on a removed-member 403. Offline backs off to every 2 minutes and returns to 20 seconds on success.
-- Tools read live and fall back to the cache with "Team host offline; board as of 14:02". With no cache, they say the host is unreachable.
+- Every 20 seconds per linked team (decision 5), the member server fetches the board into `team_board_cache` and records the link state: last success, `offline` after 2 failed polls, `re-invite needed` on 401, `removed` on a removed-member 403. Offline backs off to every 2 minutes and returns to 20 seconds on success.
+- Tools read live and fall back to the cache; the result says "cached, as of 14:02" (decision 4). With no cache, they say the host is unreachable.
 - `t3 team status` on the member shows each link's state, last sync, session expiry and outbox size.
 - Manual test: stop the host. Within a minute `t3 team status --base-dir ~/.t3-dev-member` says offline; a member chat's `team_status` answers from the cache with "as of". Start the host; the link is `ok` again within about 40 seconds.
 
@@ -454,8 +462,8 @@ Each slice ends with a commit, a push, a PROGRESS.md entry, and a manual test yo
 
 - Member-side `team_outbox` (own migration): op id, team, kind, payload, created, attempts, last error. Every write in M2.6 goes through it: it is saved first, then sent right away if online. The poller flushes it in order, oldest first, per team.
 - A 400 or 403 for one op: drop that op, keep a line in `t3 team status` and the server log. A 401: stop flushing and mark `re-invite needed`; nothing is dropped.
-- A claim made offline is saved and the result says "The team host is offline. Your claim is saved and sent when it is back; the last board (14:02) shows these overlaps: ...". Overlaps found when it is delivered show up on the board as usual (warnings to people are M3).
-- Cap: 1,000 ops or 7 days per team; past that, the oldest are dropped with a log line (open question 6).
+- A claim made offline is saved, and the result tells the agent plainly (decision 6): the team host is offline; the claim is not confirmed yet and is sent when the host is back; overlaps are unknown until then. It may add what the cached board (as of 14:02) shows, labelled as cached. Overlaps found when it is delivered show up on the board as usual (warnings to people are M3).
+- Cap: 1,000 ops or 7 days per team; past that, the oldest are dropped with a log line (decision 6).
 - Manual test: stop the host. In a member chat, claim `src/pins/tags.ts`, then make an edit (automatic note) and write a handoff. `t3 team status` shows 3 queued. Restart the member server: still 3. Start the host: within about 40 seconds the host's `team_status` shows the claim and memory search finds the handoff, each once.
 
 **M2.9 Member lifecycle.**
@@ -486,7 +494,7 @@ A member holds a bearer session with `team:read` and `team:write` on the host. I
 **S2. A member token on WebSocket RPCs.**
 
 - Blocked by: any session can get a WebSocket ticket (`auth/http.ts`, `webSocketTicket`, checked), but every RPC needs a scope from `RPC_REQUIRED_SCOPES`, and a missing entry is a type error (`auth/RpcAuthorization.ts`, checked). None of them is a team scope.
-- Tests: (a) no value in `RPC_REQUIRED_SCOPES` is `team:*`; (b) open `/ws` with a team-only ticket and call `subscribeServerConfig`, `subscribeShell`, `dispatchCommand`, `getTurnDiff`: each fails with a scope error; (c) the socket sends nothing before the first RPC. If (c) fails, block tickets for team-only sessions (open question 8).
+- Tests: (a) no value in `RPC_REQUIRED_SCOPES` is `team:*`; (b) open `/ws` with a team-only ticket and call `subscribeServerConfig`, `subscribeShell`, `dispatchCommand`, `getTurnDiff`: each fails with a scope error; (c) the socket sends nothing before the first RPC. If (c) fails, block tickets for team-only sessions (decision 8).
 
 **S3. Reading files on the host.**
 
@@ -511,12 +519,13 @@ A member holds a bearer session with `team:read` and `team:write` on the host. I
 **S7. A member making itself owner, or an admin.**
 
 - Blocked by: no API sets a role. `/join` has no role field and always makes `member`. `ensureTeam` and member management are not reachable over HTTP; `t3 team remove` and `t3 team invite` run on the host only. M2.1 removes registration on first use, so a member's server never creates the team locally either. A member editing its own database changes only its own server: the host is the source of truth.
-- Tests: `/join` with `role: "owner"` in the body is rejected (unknown fields fail decoding) or ignored, and the row is `member` either way; there is no route for roles, members or invites in `TeamHttpApi` (checked by listing the API); a cloned repo on a fresh server never gets a `team_teams` row (M2.1).
+- Tests: `/join` with `role: "owner"` in the body is rejected (unknown fields fail decoding) or ignored, and the row is `member` either way; there is no route for roles, members or invites in `TeamHttpApi` (checked by listing the API); a cloned repo on a fresh server never gets a `team_teams` row, from the tools, the briefing or `t3 team init` [checked: built in M2.1, `handlers.test.ts`, `briefing.test.ts`, `cli/team.test.ts`].
 
 **S8. Acting as another member.**
 
 - Blocked by: the member comes from the session binding, never from the body. Every thread in a request must have the member's own environment id.
-- Tests: member A releasing B's claim, writing a handoff or automatic note for B's thread, or claiming under B's thread gets 403 and changes nothing. A body with B's member id is rejected or ignored.
+- Also: a member changes only tasks it owns or takes an unowned one; only the host's owner changes any task (decision 7).
+- Tests: member A releasing B's claim, writing a handoff or automatic note for B's thread, or claiming under B's thread gets 403 and changes nothing. A body with B's member id is rejected or ignored. A updating B's task gets 403; A taking an unowned task becomes its owner; the host's owner can update both; each change writes an activity line naming who made it.
 
 **S9. Reading or writing another team on the same host.**
 
@@ -538,13 +547,23 @@ A member holds a bearer session with `team:read` and `team:write` on the host. I
 - Blocked by: the invite URL is printed once and not logged; the member's token lives in its secret store; `team_links` holds the host origin on the member's server only; `.team/team.json` never gets the host address (D2).
 - Tests: capture logs during invite and join and search them for the credential and the token; after join, `.team/team.json` and `git status` are unchanged.
 
+**S13. Sending a team token over plain HTTP.** (Decided 2026-10-03.)
+
+- Blocked by: one check before any request that carries an invite credential or a team bearer token (`t3 team join`, and every member → host call): the host origin must be `https:`, or `http:` only to localhost (`localhost`, `127.0.0.0/8`, `::1`) or a Tailscale address (`100.64.0.0/10`, the shared address range Tailscale uses, `fd7a:115c:a1e0::/48`, or a `*.ts.net` name). Anything else is refused before the request, with: "Refusing to send the team token over plain HTTP to <host>. Use HTTPS, localhost, or a Tailscale address." The check runs on every call, not only at join, so an edited `team_links` row cannot get around it. Lands in M2.4 (join) and M2.5 (the client).
+- Tests: the origin check for each allowed and refused case (including `http://192.168.1.5`, `http://example.com`, `http://100.63.0.1`, `http://100.64.0.1`, `http://pc.tail1234.ts.net`, `https://example.com`); `t3 team join` with a refused origin makes no request (a test HTTP server records none) and exits with the message; a member call with a refused stored origin sends nothing and reports the same.
+
+**S14. Instructions hidden in teammates' notes.** (Decided 2026-10-03.)
+
+- Blocked by: tool results label all text written by other people or their agents (handoffs, automatic notes, task titles and notes, claim notes, activity lines) as teammate-written data, not instructions: those fields sit under a part of the result marked that way, and the result's message says so in one line. On the host's own tools too, since local teammates' notes are the same risk. The briefing's "Code is the truth; team notes can be out of date" stays. This lowers the risk; no label makes a model immune.
+- Tests: `team_status`, `team_task` and `team_memory_search` results carry the label wherever they include teammate text, and a handoff that says "ignore the rulebook" comes back only inside the labelled part. Lands with M2.5, when teammates' text first crosses servers, on both sides.
+
 **Manual security checks (M2.4 on, and again in M2.10).** Take the member's token from its secret store (only for this test) and, from a shell, call `/api/orchestration/snapshot`, `/api/auth/pairing-token`, `/api/auth/clients` and `/api/team/v1/me`. Only the last one works. Open the host's web UI in a private window with the token: it shows no project or chat.
 
 **Not protected, on purpose.**
 
 - Team data is shared with every member of that team: names, tasks, claimed paths, handoff text, activity.
 - The host's owner can read everything members send.
-- Team notes can contain instructions aimed at agents (a handoff that says "ignore the rulebook"). Agents get them as data through tools, and the briefing says code wins over notes; nothing more for M2.
+- Team notes can contain instructions aimed at agents (a handoff that says "ignore the rulebook"). S14 labels them as teammate-written data, and the briefing says code wins over notes; an agent can still choose to follow them.
 - Anyone who can reach the host's port can already call its open endpoints (descriptor, session state, token exchange). M2 adds no open endpoint. Use Tailscale, not a public port.
 - A host can send a member odd or large data. The member decodes every response with the contract schemas and caps sizes; the host can never call the member (there is no member endpoint).
 
@@ -559,7 +578,7 @@ Everything happens outside the t3code repo, as the working rules require.
 
 Shared remote: a bare repo at `~/code/team-demo6-remote.git`. Both clones have it as `origin`, so they also get the same `canonicalKey` (D2 sanity check).
 
-Steps (M2.0's script does steps 1 and 2; until then, by hand):
+Steps (M2.0's script, `node apps/server/scripts/team-two-person-setup.ts`, does steps 1 and 2):
 
 1. `git init --bare ~/code/team-demo6-remote.git`, then clone it to `~/code/team-demo6-host` and put a small demo app in it (like the Pinboard app of the cold start test). Commit and push.
 2. On the host clone: `node apps/server/src/bin.ts team init ~/code/team-demo6-host --name "Demo team 6" --base-dir ~/.t3-dev` (from M2.1 this also registers the team on the host). Commit `.team/` and `t3.json`, push. Clone the remote to `~/code/team-demo6-member`.
@@ -570,8 +589,8 @@ Steps (M2.0's script does steps 1 and 2; until then, by hand):
 Notes:
 
 - The invite URL uses the host's web dev port (5733), like `t3 pair` does in dev (`pair.ts:137`, checked); the dev proxy forwards `/api/` and `/oauth/` to the server.
-- The ports in the table are the expected ones. The dev runner moves to the next free offset when a port is taken (`findFirstAvailableOffset`, `scripts/dev-runner.ts:575`, checked), so read the ports it prints. [verify in M2.0]
-- Each new round uses a new demo (`team-demo7`, then 8...), as the working rules say. Re-running the setup script resets a demo it made.
+- The ports in the table are the expected ones, and M2.0 got exactly those with the host running [checked 2026-10-03]. The dev runner moves to the next free offset when a port is taken (`findFirstAvailableOffset`, `scripts/dev-runner.ts:575`, checked), so read the ports it prints.
+- Each new round uses a new demo (`--demo ~/code/team-demo7`, then 8...), as the working rules say. Re-running the setup script resets a demo it made, including the old team's rows in the host's database.
 - The cold start demo (`team-demo5`) stays in `~/.t3-dev` and keeps working; it is hosted there.
 
 **Later: a friend over Tailscale (M2.10).** The friend runs the fork with their own home folder (any path outside the repo). The host runs `t3 team invite --tailscale`; the friend runs `t3 team join`. The demo repo moves to a private GitHub repo. Only after M2.1 to M2.9 pass locally.
@@ -581,20 +600,23 @@ Notes:
 - `packages/contracts/src/auth.ts`: two scope literals, and the administrative preset (M2.2). Already in section 4.
 - `apps/server/src/server.ts`: mount the team API, and start the member poller in `ReactorLayerLive` (M2.2, M2.7). One `team-layer:` line each.
 - Maybe `apps/web/src/components/settings/ConnectionsSettings.tsx`: its list of scope titles does not know team scopes, so a member's session in the host's Connections list may show no scope summary. [verify in M2.3; a label is a small `team-layer:` edit, or we leave it]
-- Maybe `apps/server/src/auth/http.ts`: only if S2 (c) fails (open question 8).
+- Maybe `apps/server/src/auth/http.ts`: only if S2 (c) fails (decision 8).
 
 Not edited: `EnvironmentHttpApi`, `WsRpcGroup`, `RpcAuthorization.ts`, `persistence/Migrations.ts`.
 
-### 7.5 Open questions for M2
+### 7.5 Decisions for M2
 
-Each with a recommendation. None blocks M2.0.
+The nine open questions of the plan, answered by the developer on 2026-10-03, plus one more. Where a slice above depends on one, it says "decision N".
 
-1. **How does a server take over hosting a team that already has `.team/team.json`** (the host lost its database, or the team moves to a new machine)? Recommend: `t3 team host --adopt` on that machine, which registers the team with this server as owner and prints a warning that every member must be invited again. No automatic takeover ever.
-2. **Invite lifetime.** D1 says 5 minutes, which is short when you send the link to a friend in a chat. Recommend: 30 minutes by default, `--ttl` up to 24 hours, still one-time and revocable.
-3. **Who names the member?** Recommend: the host, in `t3 team invite --name Sara`. The member cannot pick a name, so nobody can join as "Mouhssine". Renaming is a host command, later.
-4. **Live reads or cache?** Recommend: tools read the host live with a 3 second limit and use the cached board only when that fails, with "as of". Agents then see the newest claims before editing, which is what claims are for.
-5. **Poll interval.** Recommend: 20 seconds, 2 minutes while offline. About 4,300 small requests a day per member; fine for a laptop host.
-6. **Offline claims and the outbox cap.** Recommend: save and send later, tell the agent the overlap check is waiting, and show overlaps from the last board. Cap at 1,000 ops or 7 days. The other choice, refusing claims while offline, stops work whenever the host's laptop sleeps.
-7. **Who may change a task?** M1 lets any member update any task, and records who did it. Recommend: keep that for M2; only the host's owner can remove members. Tighter rules can wait for the board (M4).
-8. **WebSocket tickets for team-only sessions.** Recommend: allow them (no upstream edit) as long as S2's tests pass, since every RPC checks its scope. If the socket sends anything before the first RPC, block tickets for sessions that hold only team scopes, with one `team-layer:` line in `auth/http.ts`.
-9. **Where the member's token lives.** Recommend: the server secret store (a file in the 0700 secrets folder), not `state.sqlite`, so a database copy shared for debugging (as we did in M1) never carries it.
+1. **Taking over hosting a team that already has `.team/team.json`** (the host lost its database, or the team moves): only with an explicit `t3 team host --adopt` on that machine, which registers the team with this server as owner and warns that every member must be invited again. Never automatic. Not built yet; `t3 team init` refuses such a repo (M2.1).
+2. **Invite lifetime:** 30 minutes by default, `--ttl` up to 24 hours, one-time, revocable (M2.3). D1 said 5 minutes.
+3. **Who names the member:** the host, with `t3 team invite --name Sara`. The member cannot pick a name. Renaming is a host command, later.
+4. **Live reads or cache:** tools read the host live with a 3 second limit and fall back to the cached board; a result from the cache says "cached, as of <time>" (M2.5, M2.7).
+5. **Poll interval:** 20 seconds, 2 minutes while the host is offline (M2.7).
+6. **Offline claims:** saved in the outbox and sent later, not refused. The result tells the agent plainly that the host is offline, the claim is not confirmed, and overlaps are unknown (M2.8). Cap: 1,000 ops or 7 days per team.
+7. **Who may change a task (changed from the recommendation):** a member changes only its own tasks, or takes an unowned one; only the host's owner can change any task. Every change records who made it in the activity feed (M2.6, S8). Only the host's owner removes members (M2.9).
+8. **WebSocket tickets for team-only sessions:** allowed, unless S2's test shows the socket sends anything before the first RPC; then tickets are blocked for sessions with only team scopes (one `team-layer:` line in `auth/http.ts`).
+9. **Where the member's token lives:** the server secret store, not `state.sqlite`, so a database copy shared for debugging never carries it. The token file is mode 0600, readable only by its owner, with a test (M2.4).
+10. **`--base-dir` for `t3 team` commands:** required for now, so a test never registers a team in the real install. [checked: built in M2.1]
+
+Security additions decided the same day: S13 (no team token over plain HTTP, except to localhost or a Tailscale address) and S14 (teammate-written text labelled as data, not instructions), in 7.2.

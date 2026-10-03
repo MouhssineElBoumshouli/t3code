@@ -18,6 +18,7 @@ import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { Tool } from "effect/unstable/ai";
 
 import * as ServerConfig from "../../../config.ts";
@@ -106,6 +107,8 @@ interface HarnessOptions {
   readonly worktrees?: Partial<Record<ThreadId, string | null>>;
   /** Run real Git instead of the mock (`gitCalls` stays empty). */
   readonly realGit?: boolean;
+  /** Register the team with this server as owner, as `t3 team init` does. Default true. */
+  readonly hostsTeam?: boolean;
 }
 
 const RealGitLayer = GitVcsDriver.layer.pipe(
@@ -181,7 +184,15 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
       Effect.provide(context),
     );
   const teams = yield* TeamService.TeamService.pipe(Effect.provide(context));
-  return { call, teams, gitCalls };
+  if (options.hostsTeam !== false) {
+    yield* teams.ensureTeam({
+      teamFile: TeamFile.make({ teamId: TEAM_ID, name: "Core" }),
+      canonicalKey: null,
+      owner: { environmentId: ENVIRONMENT_ID, displayName: "Mouhssine's laptop" },
+    });
+  }
+  const sql = yield* SqlClient.SqlClient.pipe(Effect.provide(context));
+  return { call, teams, gitCalls, sql };
 });
 
 /** A temp project folder; with `team: true` it holds `.team/team.json`. */
@@ -212,7 +223,7 @@ describe("team toolkit", () => {
   it.effect("answers every tool with a plain result in a project that is not in a team", () =>
     Effect.gen(function* () {
       const root = yield* makeProjectFolder(false);
-      const { call, teams } = yield* makeHarness({ workspaceRoot: root });
+      const { call, teams } = yield* makeHarness({ workspaceRoot: root, hostsTeam: false });
       const results = [
         yield* call("team_status", {}),
         yield* call("team_claim", { paths: ["src/a.ts"] }),
@@ -231,28 +242,57 @@ describe("team toolkit", () => {
     }),
   );
 
-  it.effect("registers the team with this server as owner on first use", () =>
-    Effect.gen(function* () {
-      const root = yield* makeProjectFolder(true);
-      const { call, teams } = yield* makeHarness({ workspaceRoot: root });
-      const status = inTeam(yield* call("team_status", {}));
-      assert.equal(status.team, "Core");
-      assert.equal(status.you, "Mouhssine's laptop");
-      assert.isNull(status.yourTask);
-      const members = yield* teams.listMembers(TEAM_ID);
-      assert.lengthOf(members, 1);
-      assert.equal(members[0]?.role, "owner");
-      assert.equal(members[0]?.environmentId, ENVIRONMENT_ID);
-
-      yield* call("team_status", {});
-      assert.lengthOf(yield* teams.listMembers(TEAM_ID), 1);
-    }),
+  // Security (team/DESIGN.md 7.2 S7, M2.1): a member's server must never make
+  // itself owner of a team it only found in a cloned repo.
+  it.effect(
+    "never registers a team from a cloned repo: every tool says it is hosted elsewhere",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* makeProjectFolder(true);
+        const { call, sql } = yield* makeHarness({ workspaceRoot: root, hostsTeam: false });
+        const results = [
+          yield* call("team_status", {}),
+          yield* call("team_claim", { paths: ["src/a.ts"] }),
+          yield* call("team_task", { title: "Anything", status: "in_progress" }),
+          yield* call("team_handoff", { changed: "Something.", files: ["src/a.ts"] }),
+          yield* call("team_memory_search", { query: "login" }),
+          yield* call("team_status", {}, THREAD_B),
+        ];
+        for (const result of results) {
+          assert.deepEqual(result, {
+            inTeam: false,
+            message:
+              "This project is in team Core, which is hosted on another T3 server. This server has not joined it, so team tools do nothing here. To join, ask the team's host for an invite.",
+          });
+        }
+        const tables = yield* sql<{ readonly name: string }>`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND substr(name, 1, 5) = 'team_' AND name != 'team_sql_migrations'
+      `;
+        assert.includeMembers(
+          tables.map((table) => table.name),
+          [
+            "team_teams",
+            "team_members",
+            "team_claims",
+            "team_tasks",
+            "team_handoffs",
+            "team_activity",
+          ],
+        );
+        for (const { name } of tables) {
+          const rows = yield* sql.unsafe<{ readonly count: number }>(
+            `SELECT COUNT(*) AS count FROM ${name}`,
+          );
+          assert.equal(rows[0]?.count, 0, name);
+        }
+      }),
   );
 
   it.effect("says so when this server is not a member of a team it already knows", () =>
     Effect.gen(function* () {
       const root = yield* makeProjectFolder(true);
-      const { call, teams } = yield* makeHarness({ workspaceRoot: root });
+      const { call, teams } = yield* makeHarness({ workspaceRoot: root, hostsTeam: false });
       yield* teams.ensureTeam({
         teamFile: TeamFile.make({ teamId: TEAM_ID, name: "Core" }),
         canonicalKey: null,

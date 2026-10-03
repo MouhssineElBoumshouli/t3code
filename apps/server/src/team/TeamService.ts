@@ -153,6 +153,8 @@ export class TeamService extends Context.Service<
       TeamServiceError
     >;
     readonly getTeam: (teamId: TeamId) => Effect.Effect<Option.Option<Team>, TeamServiceError>;
+    /** Every team this server hosts (has the row of), oldest first. */
+    readonly listTeams: () => Effect.Effect<ReadonlyArray<Team>, TeamServiceError>;
     readonly listMembers: (
       teamId: TeamId,
     ) => Effect.Effect<ReadonlyArray<TeamMember>, TeamServiceError>;
@@ -455,6 +457,12 @@ export const make = Effect.gen(function* () {
       Effect.flatMap(decodeRows(decodeTeamRows, "getTeam")),
       Effect.map((rows) => Option.fromNullishOr(rows[0])),
     );
+
+  const selectTeams = () =>
+    sql`
+      SELECT team_id AS "teamId", name, canonical_key AS "canonicalKey", created_at AS "createdAt"
+      FROM team_teams ORDER BY created_at, team_id
+    `.pipe(storage("listTeams"), Effect.flatMap(decodeRows(decodeTeamRows, "listTeams")));
 
   const selectMembers = (teamId: TeamId) =>
     sql`
@@ -979,6 +987,7 @@ export const make = Effect.gen(function* () {
   return TeamService.of({
     ensureTeam,
     getTeam: selectTeam,
+    listTeams: selectTeams,
     listMembers: selectMembers,
     findMemberByEnvironment: (teamId, environmentId) =>
       selectMembers(teamId).pipe(

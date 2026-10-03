@@ -4,6 +4,7 @@ import {
   EventId,
   ProjectId,
   ProviderInstanceId,
+  TeamFile,
   TeamId,
   ThreadId,
   type OrchestrationEvent,
@@ -140,6 +141,12 @@ const makeHarness = Effect.fn("makeTeamAutoNotesHarness")(function* (options: {
     ).pipe(Layer.provideMerge(SqlitePersistenceMemory), Layer.provide(NodeServices.layer)),
   );
   const teams = yield* TeamService.TeamService.pipe(Effect.provide(teamContext));
+  // This server hosts the team, as after `t3 team init` (team/DESIGN.md M2.1).
+  yield* teams.ensureTeam({
+    teamFile: TeamFile.make({ teamId: TEAM_ID, name: "Core" }),
+    canonicalKey: null,
+    owner: { environmentId: ENVIRONMENT_ID, displayName: "Mouhssine's laptop" },
+  });
 
   yield* Layer.build(
     TeamAutoNotesLive.pipe(

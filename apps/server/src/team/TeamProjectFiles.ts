@@ -4,7 +4,9 @@
  *
  * `initTeamProject` creates what is missing and never overwrites what is
  * there, so running it again is safe and keeps the same team. It never
- * commits; the user reviews and commits the files.
+ * commits; the user reviews and commits the files. Its optional `register`
+ * step (the host's database, team/DESIGN.md M2.1) runs after every check and
+ * before any write, so a refused or failed registration writes nothing.
  *
  * @module TeamProjectFiles
  */
@@ -44,6 +46,16 @@ export class TeamProjectFileInvalidError extends Schema.TaggedError<TeamProjectF
 ) {
   override get message(): string {
     return `${this.filePath}: ${this.detail} Nothing was written.`;
+  }
+}
+
+/** `initTeamProject`'s `register` step refused or failed; nothing was written. */
+export class TeamProjectRegisterError extends Schema.TaggedError<TeamProjectRegisterError>()(
+  "TeamProjectRegisterError",
+  { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {
+  override get message(): string {
+    return this.detail;
   }
 }
 
@@ -254,6 +266,15 @@ export const initTeamProject = Effect.fn("TeamProjectFiles.initTeamProject")(fun
   readonly startDirectory: string;
   /** Used only when the team is created. Default: the repo folder name. */
   readonly name?: string | undefined;
+  /**
+   * Runs after every check and before any write. `created` is true when this
+   * run makes `.team/team.json`, false when the repo already had one.
+   */
+  readonly register?: (input: {
+    readonly repoRoot: string;
+    readonly teamFile: TeamFile;
+    readonly created: boolean;
+  }) => Effect.Effect<void, TeamProjectRegisterError>;
 }) {
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
@@ -289,6 +310,10 @@ export const initTeamProject = Effect.fn("TeamProjectFiles.initTeamProject")(fun
         teamId: TeamId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
         name: requestedName && requestedName.length > 0 ? requestedName : path.basename(repoRoot),
       });
+
+  if (input.register) {
+    yield* input.register({ repoRoot, teamFile, created: Option.isNone(existingTeam) });
+  }
 
   const write = (filePath: string, contents: string) =>
     writeFileStringAtomically({ filePath, contents }).pipe(

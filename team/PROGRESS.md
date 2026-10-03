@@ -2,6 +2,45 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-03 — M2.0 test bench and M2.1 only the host registers a team
+
+**What changed**
+
+- Decisions recorded first (DESIGN.md 7.5, from your review): the nine open questions answered, with 4 ("cached, as of <time>"), 6 (the offline claim result says host offline, not confirmed, overlaps unknown), 7 (a member changes only its own tasks or takes unowned ones; the host's owner changes any; every change in the activity feed) and 9 (token file mode 0600, with a test) as you changed them, plus 10 (`--base-dir` required). New security items in 7.2: S13 (no team token over plain HTTP except to localhost or a Tailscale address, refused with a message, tested) and S14 (teammate-written text labelled as data, not instructions). D1's invite lifetime and poll interval updated to match.
+- M2.0: `apps/server/scripts/team-two-person-setup.ts` builds `~/code/team-demo6-remote.git` (bare), `-host` (Pinboard app, then the real `t3 team init --base-dir ~/.t3-dev`, committed and pushed) and `-member` (a clone). Marker files make it safe to re-run: a re-run deletes only folders it made and the old team's rows in the host database. It refuses foreign folders, anything in the t3code repo, `~/.t3`, and one home for both. The Pinboard app and Git helpers moved from the cold start seed into `apps/server/scripts/teamDemoRepo.ts`.
+- M2.1: `t3 team init` needs `--base-dir` and registers the team in that home with its server as owner (and the repo's `canonicalKey`), after every file check and before any write. On a repo that already has `.team/team.json` and no row in that home (a clone), it writes and registers nothing and says the team is hosted elsewhere: ask the host for an invite. New `t3 team status --base-dir` lists the hosted teams with members. The tool, briefing and automatic-note lookup (`resolve.ts`) no longer registers on first use: a team file with no row gives "This project is in team <name>, which is hosted on another T3 server. … To join, ask the team's host for an invite."
+- Manual tests for both slices: new `team/M2_MANUAL_TESTS.md`.
+
+**Files touched**
+
+- New: `apps/server/scripts/team-two-person-setup.ts`, `apps/server/scripts/teamDemoRepo.ts`, `team/M2_MANUAL_TESTS.md`.
+- Our files: `apps/server/src/cli/team.ts`, `cli/team.test.ts`, `apps/server/src/mcp/toolkits/team/{resolve,handlers.test,briefing.test}.ts`, `apps/server/src/team/{TeamProjectFiles,TeamService,TeamAutoNotes.test}.ts`, `apps/server/scripts/team-cold-start-seed.ts`.
+- No upstream files.
+- `team/DESIGN.md` (D1, D4, D5, milestones, 7.1 M2.0/M2.1 and the slices the decisions touch, 7.2, 7.3, 7.5), `team/PROGRESS.md`.
+
+**How it was checked**
+
+- Two dev servers from one checkout ([verify] in the plan): with your host `vp run dev --home-dir ~/.t3-dev` running, `T3CODE_PORT_OFFSET=20 vp run dev --home-dir ~/.t3-dev-member` started on exactly 13793/5753; each answered `/.well-known/t3/environment` with its own environment id, directly and through its web port; your host kept running. I then stopped the member server (by its process group, after checking its `T3CODE_HOME`). Not checked in a browser: that the two UIs do not log each other out (M2.0 manual test step 6).
+- A CLI writing `state.sqlite` while the server runs ([verify]): the setup script's `t3 team init --base-dir ~/.t3-dev` registered Demo team 6 while your host server ran on that home; it kept serving with the same process. Not checked: that the running server's chat tools see the new team (M2.1 manual test step 6).
+- The setup script, against scratch folders: a first run, a re-run (old team's rows gone, new team registered), `t3 team init` on the scratch member clone (refused, exit 1, clone clean, member home hosts no teams), and five refusals (foreign folder, demo in the repo, `~/.t3/userdata` as home, same home twice, unknown flag), each exit 1. Then the real run for `~/code/team-demo6-*`: `t3 team status` lists Demo team 6 (owner MouhssineVic) in `~/.t3-dev` next to Demo team 4 and 5, and `~/.t3-dev-member` hosts no teams.
+- The cold start seed after the move, against a scratch home and project: it built the repo (3 commits) and seeded Demo team 5. Not run against `~/.t3-dev` or `team-demo5`.
+- Tests: `vp test run src/cli/team.test.ts src/mcp/toolkits/team src/team` in `apps/server` → 12 files, 103 tests passed. New: every tool from a cloned repo on a fresh server returns the hosted-elsewhere result and leaves every `team_*` table empty (S7); no briefing and no row for a team hosted elsewhere; `--base-dir` required (init and status); init registers one team and one owner, and twice keeps one; init on a clone with a fresh home refuses, writes no file, leaves every team table empty; status on a home with no database.
+- Typecheck: `npx tsc --noEmit` in `apps/server` (includes `scripts/`) → 0 errors. The first try was killed for memory with two dev servers running; it passed after I stopped the member server. `vp lint --report-unused-disable-directives` on the 11 changed `.ts` files → exit 0. `vp fmt --check` on them → clean.
+- Not run: `server.test.ts` (it mocks `TeamService`; the typecheck covers the new `listTeams` there).
+
+**What's left**
+
+- Your manual tests for M2.0 and M2.1 (`team/M2_MANUAL_TESTS.md`). I already ran the setup script once for `team-demo6`; re-running it resets the demo.
+- Then M2.2: scopes and the team API skeleton, with the S1 to S5 security tests.
+
+**Unsure about / notes**
+
+- A repo set up with M1's `t3 team init` that no chat ever used has no team row, so `t3 team init` now refuses it like a clone. The way out is `t3 team host --adopt` (decision 1), not built. Teams registered on first use in M1 (Demo team 4, 5) keep their rows and work as before.
+- The hosted-elsewhere message does not name `t3 team join` yet, since that command arrives in M2.4.
+- `t3 team status` creates the home's folders (`userdata`, `caches`, `worktrees`), as every CLI command that resolves the server config does, but no database when there is none.
+- S13 treats `100.64.0.0/10` as Tailscale. That range is the shared carrier-grade NAT range, so another network can use it too; refining it would mean asking Tailscale for its peers. Fine for M2, noted in case you want it stricter.
+- Memory: this laptop cannot run two dev servers and a full `tsc` at once.
+
 ## 2026-10-03 — M2 plan: a second person (docs only)
 
 **What changed**
