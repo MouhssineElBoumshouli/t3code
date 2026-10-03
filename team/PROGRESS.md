@@ -2,6 +2,39 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-03 — M2 plan: a second person (docs only)
+
+**What changed**
+
+- New section 7 in DESIGN.md: the M2 plan. No code.
+  - 7.1: eleven slices, each with its own manual test. M2.0 test bench; M2.1 only the host registers a team (`t3 team init` registers, no more registration on first use); M2.2 `team:read` / `team:write` and the team API skeleton; M2.3 `t3 team invite` and `/join`; M2.4 `t3 team join`; M2.5 local or remote per team, remote reads; M2.6 remote writes with member-made ids; M2.7 polling and board cache; M2.8 offline queue; M2.9 remove, re-invite, leave; M2.10 a friend over Tailscale.
+  - 7.2: security, S1 to S12. Each says how it is blocked and which test proves it: non-team HTTP routes (a test that walks every `EnvironmentHttpApi` endpoint, so new upstream ones are covered), WebSocket RPCs, files, threads and `/mcp`, getting `orchestration:read`, used/expired/revoked invites, a member making itself owner, acting as another member, another team, removed members, flooding, token leaks. Plus manual checks and what is not protected on purpose.
+  - 7.3: two dev servers on one laptop (`~/.t3-dev` host, `~/.t3-dev-member` with `T3CODE_PORT_OFFSET=20`), a local bare remote and two clones of `team-demo6`; then the Tailscale step.
+  - 7.4: upstream files M2 edits. 7.5: nine open questions with recommendations.
+- One design rule the plan adds: a team's rows exist only on its host. A member's server keeps a link, a cached board and an outbox in its own tables, so "has the team row" means "hosts it", and local or remote is chosen per team.
+- Small pointers: D5 (registration fix is M2.1), section 5 (M2 planned), section 6 question 1 (answered by M2.2).
+
+**Files touched**
+
+- `team/DESIGN.md`, `team/PROGRESS.md`.
+
+**How it was checked**
+
+- Read the auth code the security section relies on, and cited file and line where I did: scope check (`auth/http.ts` `requireEnvironmentScope`), the token endpoint's fixed scope list, exchange only narrows (`EnvironmentAuth.ts:809`), the session keeps the grant's subject (`:816`), pairing links are one-time with expiry (`PairingGrantStore.ts`), every RPC has a non-team scope (`RpcAuthorization.ts`), any session can get a WebSocket ticket, assets need signed expiring URLs (`AssetAccess.ts:723`), OTLP and device hub proxies check scopes, `t3 pair` mints links in-process with `--ttl` (`cli/pair.ts:436`), 30-day sessions (`SessionStore.ts:423`), secrets folder at 0700, cookie names per instance, dev port offset and auto-shift (`scripts/dev-runner.ts`), `/api` proxied in dev, CLI `--base-dir` → `<dir>/userdata`.
+- The resolver (`resolve.ts`) calls `ensureTeam` on first use today, and `TeamClaimAutoRelease` only releases this server's own threads: both read in the code.
+- No typecheck or tests: only Markdown changed. DESIGN.md is on the formatter's ignore list; the pre-commit formatter ran on PROGRESS.md.
+
+**What's left**
+
+- Your answers to the nine open questions in section 7.5 (none blocks M2.0).
+- Then M2.0 (test bench) and M2.1.
+
+**Unsure about / notes**
+
+- Not checked, marked [verify] in the plan: two `vp run dev` from one checkout side by side; a CLI writing `state.sqlite` while the server runs (`t3 pair` does it, not tested with our tables); a second `HttpApiBuilder.layer` sharing the auth middleware (section 6 question 1); whether the WebSocket sends anything before the first RPC; whether the cloud `health` and `mintCredential` handlers give a team token anything; how the host's Connections settings show a session with only team scopes.
+- I read the scope checks of the orchestration, pull request, relay and pairing routes, not every auth admin route. The S1 test is what proves them all.
+- In M2.1, `t3 team init` without `--base-dir` registers in the real install's home, like `t3 pair` uses it. Our commands always pass `--base-dir`; say if you want init to refuse to run without it.
+
 ## 2026-10-03 — M1 done: cold start test passed; handoff wording and "Do not touch" in `team_status`
 
 **What changed**
