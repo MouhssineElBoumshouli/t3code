@@ -78,3 +78,28 @@ Both servers running, M2.0 done.
 8. **Old teams still work:** a new chat in `team-demo5` (the cold start demo): "Call team_status." It still answers for Demo team 5.
 
 **Pass:** steps 1 to 4 show the member's server never registers or owns the team; steps 5 to 8 show the host registers it once through `t3 team init`, and teams from M1 keep working.
+
+## M2.2 Scopes and the team API skeleton
+
+The security tests (`apps/server/src/team/http/security.test.ts`) already prove the refusals against a real server. This checks only what they cannot: the dev proxy, your browser, and the "server" project.
+
+1. **No "server" project.** Check `cat .env.local` shows `T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD=0`. Stop and restart both dev servers (the setting is read when `vp run dev` starts). Then, for each home:
+
+   ```bash
+   node apps/server/src/bin.ts project remove ~/code/t3code/apps/server --base-dir ~/.t3-dev
+   ```
+
+   It refuses because the project has a chat ("New thread", made with it). If you never used that chat, run it again with `--force`: it removes the project and that chat from T3 only and touches no files. Repeat with `--base-dir ~/.t3-dev-member`. Restart both servers once more: neither UI shows "server".
+
+2. **Through the dev proxy, no token:**
+
+   ```bash
+   curl -i http://127.0.0.1:5733/api/team/v1/me
+   curl -i http://127.0.0.1:5753/api/team/v1/me
+   ```
+
+   Both print `401` and `"reason":"missing_credential"`.
+
+3. **Host UI still works.** In the host UI: open a chat in `team-demo6-host` and send "Call team_status." (it answers for Demo team 6); open Settings → Connections (your sessions are listed). Then the same quick look in the member UI.
+
+**Pass:** no "server" project after a restart, 401 from both proxies, and both UIs work as before.

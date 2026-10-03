@@ -99,6 +99,7 @@ import * as TeamService from "./team/TeamService.ts";
 import { TeamBriefingLive } from "./mcp/toolkits/team/briefing.ts";
 import { TeamAutoNotesLive } from "./team/TeamAutoNotes.ts";
 import { TeamClaimAutoReleaseLive } from "./team/TeamClaimAutoRelease.ts";
+import { teamHttpRoutesLayer } from "./team/http/routes.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -621,6 +622,8 @@ export const makeRoutesLayer = Layer.mergeAll(
     assetRouteLayer,
     attachmentUploadRouteLayer,
     deviceHubProxyRouteLayer,
+    // team-layer: the team HTTP API, /api/team/v1 (team/DESIGN.md 7.1 M2.2).
+    teamHttpRoutesLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),

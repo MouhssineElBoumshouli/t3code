@@ -86,6 +86,9 @@ export const AuthAccessReadScope = "access:read" as const;
 export const AuthAccessWriteScope = "access:write" as const;
 export const AuthRelayReadScope = "relay:read" as const;
 export const AuthRelayWriteScope = "relay:write" as const;
+// team-layer: team API scopes (team/DESIGN.md 7.1 M2.2). Administrative preset only.
+export const AuthTeamReadScope = "team:read" as const;
+export const AuthTeamWriteScope = "team:write" as const;
 export const AuthEnvironmentScope = Schema.Literals([
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
@@ -95,6 +98,8 @@ export const AuthEnvironmentScope = Schema.Literals([
   AuthAccessWriteScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  AuthTeamReadScope, // team-layer
+  AuthTeamWriteScope, // team-layer
 ]);
 export type AuthEnvironmentScope = typeof AuthEnvironmentScope.Type;
 export const AuthEnvironmentScopes = Schema.Array(AuthEnvironmentScope);
@@ -112,6 +117,8 @@ export const AuthAdministrativeScopes = [
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthRelayWriteScope,
+  AuthTeamReadScope, // team-layer
+  AuthTeamWriteScope, // team-layer
 ] as const;
 
 export const AuthTokenExchangeGrantType =

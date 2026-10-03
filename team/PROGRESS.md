@@ -2,6 +2,45 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-03 — M2.2 scopes and the team API skeleton; no "server" project in dev runs
+
+**What changed**
+
+- Dev runs no longer add this repo as a project. Cause: upstream's web mode turns on `autoBootstrapProjectFromCwd` by default (`apps/server/src/cli/config.ts:352`), and `vp run dev` starts the server in `apps/server`, so every start added `apps/server` as a project called "server" (with a "New thread"). Fix without code: a gitignored repo-root `.env.local` with `T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD=0`, which the dev runner loads. Not committed (the rules forbid committing `.env` files); WORKING_RULES.md and DESIGN.md 7.3 now say every checkout needs it.
+- `team:read` and `team:write` in `packages/contracts/src/auth.ts`, in the administrative preset only.
+- `TeamHttpApi` (`packages/contracts/src/teamHttp.ts`) mounted next to the environment API with the same session middleware (`apps/server/src/team/http/routes.ts`, one `team-layer:` line in `server.ts`). Endpoints: `GET /api/team/v1/me` and a placeholder `GET /api/team/v1/teams/:teamId/board`. Every handler starts with `requireTeamMember` (`guard.ts`): scope, then the member bound to the session, not removed, then the path's team. No session is bound to a member until `/join` (M2.3), so both endpoints answer 403 `not_a_member` to everyone with a team scope, and return no team data yet.
+- Security tests (`apps/server/src/team/http/security.test.ts`) against a real server on a temp home. The team-only session comes from a real pairing link with exactly the two team scopes, exchanged at `/oauth/token`. S1 walks every `EnvironmentHttpApi` endpoint and S2 every `WsRpcGroup` RPC (148) as listed at test time, each with a valid payload generated from its schema, so the refusal is the scope check and new upstream routes are covered without edits. Plus raw routes, S3 import rule and forged asset/upload URLs, S4 `/mcp`, S5, S7, the guard on every team endpoint, and no token in the logs.
+- **Security fix in upstream code.** The S2 walk found three RPCs whose handlers skipped the scope check that `RPC_REQUIRED_SCOPES` declares: `chatGptReconnectProfile` (returns the host's saved ChatGPT registration and ID token hint), `chatGptImportProfile` (replaces the host's ChatGPT credentials) and `chatGptHandoffSubscribe` (starts a sign-in flow). Any session could call them, a team-only one included. `ws.ts` now wraps them in `authorizeEffect` / `authorizeStream` (marked `team-layer:`).
+- Manual test: `team/M2_MANUAL_TESTS.md`, M2.2.
+
+**Files touched**
+
+- New: `packages/contracts/src/teamHttp.ts`, `apps/server/src/team/http/{routes,guard,TeamSessionMembers}.ts`, `apps/server/src/team/http/{security,guard}.test.ts`.
+- Upstream, marked `team-layer:`: `packages/contracts/src/auth.ts` (2 literals, preset), `packages/contracts/src/index.ts` (1 export), `apps/server/src/server.ts` (import + 1 line), `apps/server/src/ws.ts` (3 handlers), `apps/server/src/auth/EnvironmentAuth.test.ts` (2 lines: the admin session's scope list).
+- `team/DESIGN.md` (sections 4, 5, 6, 7.1 M2.2, 7.2 S1 to S5, S7, S12, 7.3, 7.4), `team/M2_MANUAL_TESTS.md`, `team/WORKING_RULES.md`, `team/PROGRESS.md`.
+- Local only, not committed: `.env.local`.
+
+**How it was checked**
+
+- "server" project cause: a server-only dev run (`node scripts/dev-runner.ts dev:server`, offset 40) on a scratch home with `.env.local` in place made no project; the same run with `T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD=1` made "server" at `apps/server`. On that scratch home, `t3 project remove ~/code/t3code/apps/server` refused (the project has a chat); with `--force` the project and its "New thread" were marked deleted and `git status` stayed clean. Not run against `~/.t3-dev` or `~/.t3-dev-member`: that is yours (manual test step 1).
+- Security tests: 20 passed. Before the `ws.ts` fix the RPC walk failed on exactly the three ChatGPT RPCs; after it, all 148 are refused with `EnvironmentAuthorizationError`. Mutation checks: with the guard removed from the board handler, 2 tests failed; with `ws.ts` back at HEAD, the final version of the test failed on exactly the three RPCs again. Both restored.
+- `vp test run` in `apps/server`: `src/team/http src/auth/RpcAuthorization.test.ts src/auth/EnvironmentAuth.test.ts src/auth/http.test.ts src/cli/team.test.ts src/team src/mcp/toolkits/team` → 17 files, 154 tests passed (one upstream test pinned the admin scope list; updated). `vp test run packages/contracts` → 462 passed.
+- Both of your dev servers restarted on the new code (`node --watch`) and answer `/api/team/v1/me` with 401 `missing_credential`, directly and through the web proxies (5733, 5753).
+- Lint (`vp lint --report-unused-disable-directives`) on the 11 changed `.ts` files: exit 0; one warning is upstream's unused `ProviderDriverKind` import in `server.ts`. `vp fmt --check`: clean. Typecheck: `tsc --noEmit` in `packages/contracts` → 0 errors. `tsc --noEmit` in `apps/server` (after you stopped both dev servers; it peaked at about 6 GB) → 0 errors, and no diagnostics in the changed files. The first run caught a real problem the tests did not: the handlers asked for `TeamSessionMembers` per request, which leaked it as a requirement of the whole routes layer (550 type errors in upstream files); the group now takes it once when it is built. It also made me rewrite the security test in the repo's Effect test style (`it.layer`, `HttpClient`, schema-decoded JSON).
+- Not run: `server.test.ts` (13,000 lines; the routes layer it builds gains the team routes, whose only new need, `TeamSessionMembers`, is provided inside `routes.ts`; the typecheck covers it).
+
+**What's left**
+
+- Your manual test for M2.2 (remove the "server" project from both homes first).
+- Then M2.3: `team_invites`, `t3 team invite`, `/join`, and binding a session to a member, which makes `/me` answer for real.
+
+**Unsure about / notes**
+
+- The ChatGPT RPC hole is in upstream too (pingdotgg/t3code), for any session without `orchestration:operate`. Worth reporting upstream; I did not, since that is outward-facing.
+- `.env.local` is per checkout and not in Git, so a fresh clone (the friend in M2.10) adds "server" again until they create it. The alternative is a one-line `team-layer:` default in `scripts/dev-runner.ts`; say if you want that.
+- `apps/server/{userdata,caches,worktrees}` exist in the repo: empty folders, no files, dated 2026-09-30 21:46 (Git does not track empty folders, so `git status` never showed them). Some command once ran with a home inside the repo. Nothing uses them now; safe to delete.
+- The security test starts a full server; the whole file takes about 10 seconds.
+
 ## 2026-10-03 — M2.0 test bench and M2.1 only the host registers a team
 
 **What changed**

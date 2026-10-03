@@ -2510,10 +2510,23 @@ const makeWsRpcLayer = (
             providerAuth.complete(input, currentSessionId),
             { "rpc.aggregate": "provider" },
           ),
-        [WS_METHODS.chatGptReconnectProfile]: (input) => providerAuth.reconnectProfile(input),
-        [WS_METHODS.chatGptImportProfile]: (input) => providerAuth.importProfile(input),
+        // team-layer: these three skipped the scope check RPC_REQUIRED_SCOPES declares, so any
+        // session could call them (found by team/http/security.test.ts, team/DESIGN.md 7.2 S2).
+        [WS_METHODS.chatGptReconnectProfile]: (input) =>
+          authorizeEffect(
+            requiredScopeForRpcMethod(WS_METHODS.chatGptReconnectProfile),
+            providerAuth.reconnectProfile(input),
+          ),
+        [WS_METHODS.chatGptImportProfile]: (input) =>
+          authorizeEffect(
+            requiredScopeForRpcMethod(WS_METHODS.chatGptImportProfile),
+            providerAuth.importProfile(input),
+          ),
         [WS_METHODS.chatGptHandoffSubscribe]: (input) =>
-          subscribeChatGptHandoff(input, currentSessionId),
+          authorizeStream(
+            requiredScopeForRpcMethod(WS_METHODS.chatGptHandoffSubscribe),
+            subscribeChatGptHandoff(input, currentSessionId),
+          ),
         [WS_METHODS.codexAuthCallbackSubscribe]: (input) =>
           observeRpcStream(
             WS_METHODS.codexAuthCallbackSubscribe,

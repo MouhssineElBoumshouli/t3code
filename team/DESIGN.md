@@ -325,8 +325,10 @@ Smart features on top of the board, after v1:
 | `apps/server/src/mcp/McpHttpServer.ts`                                                                                                          | Add the team toolkit to `layer` (D5). [checked: done in M1.2]                                                                                                                                                                                                                                                                                                |
 | `apps/server/src/server.test.ts`                                                                                                                | Test only: provide a mocked `TeamService` to the routes layer, which now needs it for the team tools. [checked: done in M1.2]                                                                                                                                                                                                                                |
 | Adapter tests: `ClaudeAdapter.test.ts`, `CursorAdapter.test.ts`, `GrokAdapter.test.ts`, `AntigravityAdapter.test.ts`, `OpenCodeAdapter.test.ts` | Test only: one appended team-briefing test each, marked `team-layer:` (D4). [checked: done in M1.3]                                                                                                                                                                                                                                                          |
-| `packages/contracts/src/index.ts`                                                                                                               | One `export * from "./team.ts"` line for the team schemas. [checked: done in M1.1]                                                                                                                                                                                                                                                                           |
-| `packages/contracts/src/auth.ts`                                                                                                                | Add `team:read`, `team:write`, and add them to `AuthAdministrativeScopes` (D1). [checked]                                                                                                                                                                                                                                                                    |
+| `packages/contracts/src/index.ts`                                                                                                               | `export * from "./team.ts"` and `"./teamHttp.ts"` lines for the team schemas and API. [checked: done in M1.1 and M2.2]                                                                                                                                                                                                                                       |
+| `packages/contracts/src/auth.ts`                                                                                                                | Add `team:read`, `team:write`, and add them to `AuthAdministrativeScopes` (D1). [checked: done in M2.2]                                                                                                                                                                                                                                                      |
+| `apps/server/src/ws.ts`                                                                                                                         | Scope check on three ChatGPT RPCs that skipped it, found by the S2 test (section 7.1 M2.2). [checked: done in M2.2]                                                                                                                                                                                                                                          |
+| `apps/server/src/auth/EnvironmentAuth.test.ts`                                                                                                  | Test only: the administrative scope list gains `team:read`, `team:write`. [checked: done in M2.2]                                                                                                                                                                                                                                                            |
 | `apps/server/src/server.ts`                                                                                                                     | Start the team layer: `TeamService.layer` in `RuntimeCoreDependenciesLive`, just above `PersistenceLayerLive` (D3), and `TeamBriefingLive`, `TeamClaimAutoReleaseLive` and `TeamAutoNotesLive` in `ReactorLayerLive` (D4, D5, D7). Later, merge the team HTTP API into the routes layer (D1). [checked: done in M1.1, M1.3, the claim lifetime fix and M1.5] |
 | `apps/server/src/bin.ts`                                                                                                                        | Register `t3 team` in `makeCli`'s subcommand list (`init` now, `invite` in M2). [checked: done in M1.1]                                                                                                                                                                                                                                                      |
 | Web UI entry points                                                                                                                             | Team screens (M3 and later). [verify]                                                                                                                                                                                                                                                                                                                        |
@@ -345,6 +347,7 @@ Smart features on top of the board, after v1:
   - **M1 wrap-up (done 2026-10-03):** from the cold start test: handoffs only after edits or stopped work (briefing, tool description, a warning on notes from chats that changed nothing), and the rulebook's "Do not touch" list in `team_status` (D4, D5, D8).
 - **M2, two people (planned 2026-10-03, in progress):** team HTTP API, `team:read` / `team:write` scopes, `t3 team invite`, member join with `bootstrapRemoteBearerSession`, member push (AgentAwarenessRelay pattern) and 20 second polling, offline queue. Test with one friend over Tailscale. Slices M2.0 to M2.10, security checks, the two-server test setup and decisions: section 7.
   - **M2.0, test bench, and M2.1, only the host registers a team (done 2026-10-03):** `apps/server/scripts/team-two-person-setup.ts`; `t3 team init --base-dir` registers, `t3 team status`, no registration on first use. Manual tests: [team/M2_MANUAL_TESTS.md](M2_MANUAL_TESTS.md).
+  - **M2.2, scopes and the team API skeleton (done 2026-10-03):** `team:read` / `team:write`, `TeamHttpApi` mounted next to the environment API, the member guard, and the security tests against a real server; they found and fixed three upstream RPCs that skipped their scope check.
 - **M3, conflicts:** overlap detection from turn diffs, overlap warnings, team board in the UI.
 - **M4, team features:** the self-moving task board (D9), catch me up, handoff UI, then guide mode.
 - **Later:** mid-turn file-change warnings (research first), plan to cards, waiting on, auto standup, decisions from merges, GitHub Issues sync, phone approvals, shared skills, usage per person, online host, own name, open source launch.
@@ -353,7 +356,7 @@ Smart features on top of the board, after v1:
 
 The 9 questions from v1 are answered in [team/CODE_FINDINGS.md](CODE_FINDINGS.md). Still open, each marked [verify] above:
 
-1. Can a separate `HttpApiBuilder.layer` for the team API reuse `environmentAuthenticatedAuthLayer` and be merged into `makeRoutesLayer` in `server.ts`? (D1; answered by building M2.2, section 7)
+1. Can a separate `HttpApiBuilder.layer` for the team API reuse `environmentAuthenticatedAuthLayer` and be merged into `makeRoutesLayer` in `server.ts`? (D1) **Answered in M2.2: yes**, with no change to the middleware (section 7.1 M2.2). [checked]
 2. Do Cursor, Grok and Antigravity keep earlier user-message text in context, so the team block could be sent only on the first turn? (D4)
 3. Which providers emit mid-turn file-change events, and what do they contain? (D6 research item)
 4. Which web UI files are the entry points for team screens? (Section 4)
@@ -375,7 +378,7 @@ The 9 questions from v1 are answered in [team/CODE_FINDINGS.md](CODE_FINDINGS.md
 
 ## 7. M2 plan: a second person
 
-Status: plan, 2026-10-03. M2.0 and M2.1 are built (2026-10-03); the rest is not. Based on D1 and CODE_FINDINGS.md, plus a new read of the auth code (marked [checked] with the file). Decisions on the open questions are in 7.5. Manual tests per slice: [team/M2_MANUAL_TESTS.md](M2_MANUAL_TESTS.md).
+Status: plan, 2026-10-03. M2.0, M2.1 and M2.2 are built (2026-10-03); the rest is not. Based on D1 and CODE_FINDINGS.md, plus a new read of the auth code (marked [checked] with the file). Decisions on the open questions are in 7.5. Manual tests per slice: [team/M2_MANUAL_TESTS.md](M2_MANUAL_TESTS.md).
 
 **Goal.** Two people, each with their own T3 server, work on one repo as one team. One server is the host (D1). The other joins with an invite, reads and writes team state on the host over the team HTTP API, and keeps working when the host is off. A member can reach team data and nothing else on the host.
 
@@ -405,15 +408,17 @@ Each slice ends with a commit, a push, a PROGRESS.md entry, and a manual test yo
 - Tests: every tool, called from a project whose team file has no row on a fresh in-memory database, returns the hosted-elsewhere result, and every `team_*` table (listed from `sqlite_master`, so later tables are covered) stays empty; the briefing gives no block and registers nothing; init on a fresh repo registers one team and one owner; init twice keeps one of each; init on a clone with a fresh home refuses, writes no file, and leaves every team table empty; status on an empty home. The tool, briefing and automatic-note tests now register the team first, as `t3 team init` does.
 - Manual test: [team/M2_MANUAL_TESTS.md](M2_MANUAL_TESTS.md), M2.1.
 
-**M2.2 Scopes and the team API skeleton (host).**
+**M2.2 Scopes and the team API skeleton (host) (done 2026-10-03).**
 
-- `packages/contracts/src/auth.ts`: add `team:read` and `team:write`, and add them to `AuthAdministrativeScopes` only, never to `AuthStandardClientScopes`. (`team:write` alone does not imply `team:read`; every invite carries both.)
-- A separate API in our files: `packages/contracts/src/teamHttp.ts` (`TeamHttpApi`, paths under `/api/team/v1/`) and handlers in `apps/server/src/team/http/`. Mounted in `makeRoutesLayer` with `environmentAuthenticatedAuthLayer`, one `team-layer:` line in `server.ts`. This answers section 6 question 1; if a second `HttpApiBuilder.layer` cannot share the auth middleware, stop and ask before changing the plan.
+- `packages/contracts/src/auth.ts`: `team:read` and `team:write`, in `AuthEnvironmentScope` and in `AuthAdministrativeScopes` only, never in `AuthStandardClientScopes`. `team:write` alone does not imply `team:read`. The token endpoint keeps its own fixed list of the 8 upstream names, so no client can ask for a team scope there; a team session only comes from a pairing link that holds them. The owner's own new sessions (startup pairing URL, desktop) now carry both. [checked: built, `EnvironmentAuth.test.ts` updated, `security.test.ts`]
+- A separate API in our files: `packages/contracts/src/teamHttp.ts` (`TeamHttpApi`, paths under `/api/team/v1/`) and `apps/server/src/team/http/` (`routes.ts`, `guard.ts`, `TeamSessionMembers.ts`). Mounted in `makeRoutesLayer` with `environmentAuthenticatedAuthLayer`, one `team-layer:` line in `server.ts` plus its import. A second `HttpApiBuilder.layer` shares the session middleware with no change (section 6 question 1). [checked: both dev servers answer `/api/team/v1/me` with 401 and no token]
 - `/api/` paths are already proxied by the web dev server (`packages/shared/src/devProxy.ts:11`, checked), so team calls work against the dev port.
-- Every handler starts with the same guard: `requireEnvironmentScope("team:read" | "team:write")`, then "which member is this session": the session id must be bound to a member row (M2.3) that is not removed, and the team id in the path must be that member's team. The guard is one function, and a test fails if a handler skips it (each endpoint is called with a team-scoped session that has no member row and must get 403).
-- First endpoint: `GET /api/team/v1/me` (your member row and team).
-- The security route tests (section 7.2, S1 to S5) land in this slice, before any endpoint returns team data.
-- Manual test: `curl -i http://127.0.0.1:5733/api/team/v1/me` with no token gives 401. The host's own web UI still works (settings, chats). The security test file passes.
+- The guard, `requireTeamMember(scope, teamId?)` in `guard.ts`, is the first call of every handler: the scope (`EnvironmentScopeRequiredError`, 403), then the member bound to the session (`TeamMembershipRequiredError` with `not_a_member` or `member_removed`, 403), then, when the path names a team, that it is the member's team (`other_team`, 403). A failed lookup is a 500, never access. The lookup is `TeamSessionMembers.findBySession`; until `/join` binds sessions (M2.3) it finds no one, so every team endpoint answers 403 `not_a_member`, the admin's own session included.
+- Endpoints: `GET /api/team/v1/me` (your member row and team) and `GET /api/team/v1/teams/:teamId/board`, a placeholder (`placeholder: true`) that exercises the path team check until the board read lands in M2.5. Neither returns team data to anyone yet.
+- Security tests (section 7.2) in `apps/server/src/team/http/security.test.ts`, against a real server process on a temp home (real routes, real `EnvironmentAuth`, real handlers). The team-only session comes from a pairing link with exactly `[team:read, team:write]`, exchanged at `/oauth/token` without asking for scopes: the way M2.3 and M2.4 will make one. Built: S1, S2 (all three parts), S3 (import rule, forged asset and upload URLs), S4 (`/mcp`), S5 (all but the invite's pairing row, M2.3), S7 (route listing), the guard on every team endpoint (no token 401, standard session 403 scope, team and admin sessions 403 `not_a_member`), and S12 groundwork (the server output and log files never hold the credential or the token). Guard paths no session can reach yet (member found, removed, other team, failed lookup) are unit tests in `guard.test.ts`.
+- **Upstream hole found by S2 and fixed:** `chatGptReconnectProfile`, `chatGptImportProfile` and `chatGptHandoffSubscribe` were the only RPCs whose handlers skipped the scope check `RPC_REQUIRED_SCOPES` declares (`orchestration:operate`), so any session could call them: read the host's saved ChatGPT registration and its ID token hint, replace the host's ChatGPT credentials with another valid profile, or start a sign-in flow on the host. `ws.ts` now wraps the three in `authorizeEffect` / `authorizeStream`, marked `team-layer:` (no extra tracing). Before the fix the RPC walk failed on exactly these three; after it, all 148 RPCs are refused with a scope error. This affects upstream too, for any session without `orchestration:operate`.
+- Dev runs: upstream's web mode adds the server's working folder as a project on every start, so `vp run dev` added `apps/server` as a project called "server". A gitignored repo-root `.env.local` with `T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD=0` turns it off; the dev runner loads that file (`scripts/lib/public-config.ts`). [checked: a server-only dev run on a scratch home with the file made no project; the same run with the setting forced on made "server" at `apps/server`]
+- Manual test: [team/M2_MANUAL_TESTS.md](M2_MANUAL_TESTS.md), M2.2.
 
 **M2.3 `t3 team invite` and the join endpoint (host).**
 
@@ -489,27 +494,32 @@ A member holds a bearer session with `team:read` and `team:write` on the host. I
 
 - Blocked by: `EnvironmentHttpApi` handlers check an upstream scope by hand (checked for `orchestration/http.ts`, `pullRequest/http.ts`, the relay handlers in `cloud/http.ts`, and `pairingCredential` in `auth/http.ts`; the other auth admin routes are what the test below proves). Raw routes check too: the OTLP proxy needs `orchestration:operate`, the device hub proxy `orchestration:read` or `operate` (`http.ts`, `device/DeviceHubProxy.ts`, checked).
 - Test: for **every endpoint of `EnvironmentHttpApi`**, listed from the API definition at test time (so a new upstream endpoint is covered without editing the test), call it with a team-only token and expect 401 or 403. Allow-list, checked by name: `/api/auth/session` (says what the token can do), `/oauth/token`, the descriptor, the browser-session exchange. Plus the raw routes: OTLP, device hub, asset, attachment upload, `/mcp`.
-- Also: the cloud `health` and `mintCredential` handlers have no session check; they verify cloud-signed payloads instead. [verify in M2.2: that a team token gets nothing from them]
+- Also: the cloud `health` and `mintCredential` handlers have no session check; they verify cloud-signed payloads instead. [checked in M2.2: with a team token and a made-up payload, `health`, `mintCredential` and `t3MintCredential` answer 500 on a server with no cloud link; the test requires 4xx or 5xx]
+- Built in M2.2 (`security.test.ts`): the walk sends each endpoint a valid payload generated from its schema (`effect/unstable/arbitrary`), so a refusal is the scope check, not a decode error. Also `webSocketTicket` (200, decision 8), the raw routes (OTLP and device hub 401/403; forged asset and upload URLs 404). `/mcp`: S4. A control shows an admin token gets 200 from routes the team token is refused.
 
 **S2. A member token on WebSocket RPCs.**
 
 - Blocked by: any session can get a WebSocket ticket (`auth/http.ts`, `webSocketTicket`, checked), but every RPC needs a scope from `RPC_REQUIRED_SCOPES`, and a missing entry is a type error (`auth/RpcAuthorization.ts`, checked). None of them is a team scope.
-- Tests: (a) no value in `RPC_REQUIRED_SCOPES` is `team:*`; (b) open `/ws` with a team-only ticket and call `subscribeServerConfig`, `subscribeShell`, `dispatchCommand`, `getTurnDiff`: each fails with a scope error; (c) the socket sends nothing before the first RPC. If (c) fails, block tickets for team-only sessions (decision 8).
+- Tests: (a) no value in `RPC_REQUIRED_SCOPES` is `team:*`; (b) open `/ws` with a team-only ticket and call every RPC of `WsRpcGroup`, listed at test time, with a payload generated from its schema: each fails with `EnvironmentAuthorizationError` naming an upstream scope; (c) the socket sends nothing in the 2 seconds before the first RPC. If (c) fails, block tickets for team-only sessions (decision 8).
+- [checked in M2.2: (a), (b) and (c) pass. (c) passing keeps decision 8: tickets stay allowed. (b) first failed on three RPCs whose handlers skipped the check, `chatGptReconnectProfile`, `chatGptImportProfile` and `chatGptHandoffSubscribe`; fixed in `ws.ts`, see 7.1 M2.2.]
 
 **S3. Reading files on the host.**
 
 - Blocked by: file access goes through `orchestration:read` (RPCs and `getTurnDiff`), or through asset URLs that are signed and expire (`assets/AssetAccess.ts:723`, checked) and are only made by orchestration calls. The team API never reads the host's disk: paths in requests are stored as text and never opened.
 - Tests: an import test fails if any file under `apps/server/src/team/http/` imports `FileSystem`, Git or VCS services, `ProjectionSnapshotQuery`, orchestration, terminal or provider modules. Claims with `/etc/passwd`, `../x`, `C:\x` or a NUL byte are rejected with 400 (same rules as D5 paths). An asset URL with a forged or expired signature gives 404.
+- [checked in M2.2: the import test (also `node:fs`, workspace and checkpoint modules) and the forged asset and upload URLs. The claim path rejections land with the claim endpoint, M2.6.]
 
 **S4. Starting or seeing threads, agents or terminals.**
 
 - Blocked by: `dispatchCommand` needs `orchestration:operate`, the snapshot and shell need `orchestration:read`, terminals `terminal:operate`. `/mcp` takes only per-thread MCP tokens, not environment sessions (`mcp/McpHttpServer.ts:85`, checked). The team board shows thread ids, task titles and paths only; an id without `orchestration:read` opens nothing.
 - Tests: in S1 and S2. Plus a team token sent as `Authorization: Bearer` to `/mcp` gets 401, and a board response has no thread title, message, path to a worktree, or branch.
+- [checked in M2.2: `/mcp` 401. The board check lands with the board, M2.5.]
 
 **S5. Getting `orchestration:read` or any other upstream scope.**
 
 - Blocked by: making a pairing link needs `access:write` plus every scope handed out (`auth/http.ts`, `pairingCredential`, checked). An exchange can only narrow (`EnvironmentAuth.ts:809`, checked). `t3 team invite` always passes exactly the two team scopes and has no scope flag. Team scopes are only in the administrative preset.
 - Tests: a team token calling `/api/auth/pairing-token` for any scopes, including only team ones, gets 403. Exchanging a team invite while asking for `orchestration:read` fails. The pairing link row behind every invite holds exactly `[team:read, team:write]`. `AuthStandardClientScopes` has no team scope.
+- [checked in M2.2: all but the invite's pairing row, which needs `t3 team invite` (M2.3). Also: asking the token endpoint for `team:read` gets 400 (it accepts only the 8 upstream names, which is why join asks for none), and a used team credential gets 401.]
 
 **S6. Reusing an invite: used, expired, or revoked.**
 
@@ -519,7 +529,7 @@ A member holds a bearer session with `team:read` and `team:write` on the host. I
 **S7. A member making itself owner, or an admin.**
 
 - Blocked by: no API sets a role. `/join` has no role field and always makes `member`. `ensureTeam` and member management are not reachable over HTTP; `t3 team remove` and `t3 team invite` run on the host only. M2.1 removes registration on first use, so a member's server never creates the team locally either. A member editing its own database changes only its own server: the host is the source of truth.
-- Tests: `/join` with `role: "owner"` in the body is rejected (unknown fields fail decoding) or ignored, and the row is `member` either way; there is no route for roles, members or invites in `TeamHttpApi` (checked by listing the API); a cloned repo on a fresh server never gets a `team_teams` row, from the tools, the briefing or `t3 team init` [checked: built in M2.1, `handlers.test.ts`, `briefing.test.ts`, `cli/team.test.ts`].
+- Tests: `/join` with `role: "owner"` in the body is rejected (unknown fields fail decoding) or ignored, and the row is `member` either way; there is no route for roles, members or invites in `TeamHttpApi` (checked by listing the API) [checked: built in M2.2]; a cloned repo on a fresh server never gets a `team_teams` row, from the tools, the briefing or `t3 team init` [checked: built in M2.1, `handlers.test.ts`, `briefing.test.ts`, `cli/team.test.ts`].
 
 **S8. Acting as another member.**
 
@@ -546,6 +556,7 @@ A member holds a bearer session with `team:read` and `team:write` on the host. I
 
 - Blocked by: the invite URL is printed once and not logged; the member's token lives in its secret store; `team_links` holds the host origin on the member's server only; `.team/team.json` never gets the host address (D2).
 - Tests: capture logs during invite and join and search them for the credential and the token; after join, `.team/team.json` and `git status` are unchanged.
+- [M2.2 groundwork: the host's output and log files never hold the team credential or the token from the exchange.]
 
 **S13. Sending a team token over plain HTTP.** (Decided 2026-10-03.)
 
@@ -570,6 +581,8 @@ A member holds a bearer session with `team:read` and `team:write` on the host. I
 ### 7.3 Local test setup: two servers on one laptop
 
 Everything happens outside the t3code repo, as the working rules require.
+
+The repo-root `.env.local` (gitignored, local to each checkout) must hold `T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD=0`. Without it, upstream's web mode adds the server's working folder, `apps/server`, as a project called "server" on every start, so a chat there would edit this repo. A friend running the fork (M2.10) needs the same line.
 
 | Role   | Home folder        | Start command                                                  | Server port | Web port | Project clone              |
 | ------ | ------------------ | -------------------------------------------------------------- | ----------- | -------- | -------------------------- |
@@ -598,7 +611,9 @@ Notes:
 ### 7.4 Upstream files M2 edits
 
 - `packages/contracts/src/auth.ts`: two scope literals, and the administrative preset (M2.2). Already in section 4.
-- `apps/server/src/server.ts`: mount the team API, and start the member poller in `ReactorLayerLive` (M2.2, M2.7). One `team-layer:` line each.
+- `apps/server/src/server.ts`: mount the team API, and start the member poller in `ReactorLayerLive` (M2.2, M2.7). One `team-layer:` line each. [checked: mount done in M2.2, plus its import]
+- `apps/server/src/ws.ts`: the scope check on three ChatGPT RPCs that skipped it (M2.2, a security fix found by S2). [checked: done]
+- `apps/server/src/auth/EnvironmentAuth.test.ts`: test only, the administrative session's scope list gains the two team scopes (M2.2). [checked: done]
 - Maybe `apps/web/src/components/settings/ConnectionsSettings.tsx`: its list of scope titles does not know team scopes, so a member's session in the host's Connections list may show no scope summary. [verify in M2.3; a label is a small `team-layer:` edit, or we leave it]
 - Maybe `apps/server/src/auth/http.ts`: only if S2 (c) fails (decision 8).
 

@@ -19,6 +19,7 @@ This repo is a fork of T3 Code. We are adding a team layer: a shared Brain, shar
 
 - Start the dev server with `--home-dir ~/.t3-dev`: `vp run dev --home-dir ~/.t3-dev`. Never use a home folder inside this repo (such as `~/code/t3code/.t3`): chat worktrees live under the home folder, and agents in demo projects walk up the folders, find this repo's CLAUDE.md and these rules, and follow them.
 - Never use `~/.t3/userdata` (the real T3 install) for tests.
+- Keep `T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD=0` in the repo-root `.env.local` (gitignored, never committed). Without it, every dev run adds `apps/server` as a project called "server", and a chat there would edit this repo.
 - Each round uses a fresh project (`~/code/team-demo4`, then `team-demo5`...). Control tests use a separate plain folder, never this repo.
 
 ## Honesty
