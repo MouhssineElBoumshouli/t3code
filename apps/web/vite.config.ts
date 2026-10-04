@@ -155,6 +155,8 @@ const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
 export default defineConfig(() => {
   return {
+    // team-layer: per-port deps cache from scripts/dev-runner.ts; unset keeps Vite's default.
+    ...(process.env.T3CODE_VITE_CACHE_DIR ? { cacheDir: process.env.T3CODE_VITE_CACHE_DIR } : {}),
     assetsInclude: ["**/*.wasm"],
     plugins: [
       devCompressionPlugin(),

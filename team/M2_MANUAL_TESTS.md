@@ -103,3 +103,208 @@ The security tests (`apps/server/src/team/http/security.test.ts`) already prove 
 3. **Host UI still works.** In the host UI: open a chat in `team-demo6-host` and send "Call team_status." (it answers for Demo team 6); open Settings → Connections (your sessions are listed). Then the same quick look in the member UI.
 
 **Pass:** no "server" project after a restart, 401 from both proxies, and both UIs work as before.
+
+## M2.3 `t3 team invite` and the join endpoint (host), plus the Vite cache fix
+
+Three Ubuntu windows. **Window 1** runs the host server, **window 2** the member server, **window 3** is for commands. Start every window with `cd ~/code/t3code`. Both servers stopped before you begin.
+
+`t3 team join` (the member side) is M2.4, so here window 3 does by hand what the member's server will do: exchange the invite URL for a session, then call `/join`. The joiner is a made-up member called "Probe", so that M2.4 can still invite Sara.
+
+The invite prints times in Ubuntu's clock, which is UTC on this machine (`date` in window 3 shows it), not Windows' clock.
+
+### Part A: two dev servers, two Vite caches
+
+1. **Window 3.** Remove the old shared cache, which no dev server uses any more:
+
+   ```bash
+   rm -rf apps/web/node_modules/.vite
+   ```
+
+   Prints nothing.
+
+2. **Window 1.** Start the host:
+
+   ```bash
+   vp run dev --home-dir ~/.t3-dev
+   ```
+
+   You see `[dev-runner] mode=dev source=… serverPort=13773 webPort=5733 baseDir=/home/mouhssine/.t3-dev`.
+
+3. **Browser.** Open http://localhost:5733 and wait until the host UI has loaded.
+
+4. **Window 2.** Start the member:
+
+   ```bash
+   T3CODE_PORT_OFFSET=20 vp run dev --home-dir ~/.t3-dev-member
+   ```
+
+   You see `[dev-runner] mode=dev source=T3CODE_PORT_OFFSET=20 serverPort=13793 webPort=5753 …`.
+
+5. **Browser.** Open http://localhost:5753 (member UI). Then go back to the host tab and reload it three times, opening a chat and Settings in between.
+
+   You see: the host page keeps working. No "error loading dynamically imported module" (the bug from the M2.2 test).
+
+6. **Window 3.**
+
+   ```bash
+   ls -d apps/web/node_modules/.vite*
+   ```
+
+   You see `apps/web/node_modules/.vite-dev-5733`, `apps/web/node_modules/.vite-dev-5753` and `apps/web/node_modules/.vite-temp`, and no plain `.vite`: one cache per web port.
+
+7. **Both UIs:** no project called "server". (Since this commit `vp run dev` turns that off by itself; `.env.local` can stay.)
+
+### Part B: invite, exchange, join (host side)
+
+8. **Window 3.** Make an invite for Demo team 6:
+
+   ```bash
+   node apps/server/src/bin.ts team invite ~/code/team-demo6-host --name Probe --base-dir ~/.t3-dev
+   ```
+
+   You see:
+
+   ```
+   Invite for Probe to team "Demo team 6" (invite <id>).
+
+     http://localhost:5733/team-invite#invite=<long code>
+
+   Expires at HH:MM (<date>T<time>Z, 30m from now). It works once.
+   It gives team access only (team:read, team:write): no projects, chats, files or terminals on this server.
+   The URL points at localhost, so it only works from this machine.
+   ...
+   Do not open it in a browser. Probe's server joins with `t3 team join` (M2.4, not built yet).
+   ```
+
+   Do not click the URL. Copy it.
+
+9. **Window 3.** It is listed as pending:
+
+   ```bash
+   node apps/server/src/bin.ts team invites --base-dir ~/.t3-dev
+   ```
+
+   You see `Demo team 6 (teamId 3c5c6962-…)` and under it `pending  Probe  invite <id>  made …, expires …`.
+
+10. **Window 3.** Exchange the URL the way the member's server will. Paste your URL between the quotes:
+
+    ```bash
+    INVITE='<paste the URL from step 8>'
+    CRED="${INVITE#*#invite=}"
+    exchange() { curl -s -w '\nHTTP %{http_code}\n' -X POST http://localhost:5733/oauth/token --data-urlencode grant_type=urn:ietf:params:oauth:grant-type:token-exchange --data-urlencode "subject_token=$1" --data-urlencode subject_token_type=urn:t3:params:oauth:token-type:environment-bootstrap --data-urlencode requested_token_type=urn:ietf:params:oauth:token-type:access_token; }
+    OUT=$(exchange "$CRED"); TOKEN=$(echo "$OUT" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+    echo "$OUT" | tail -1; echo "token length ${#TOKEN}"; echo "$OUT" | grep -o '"scope":"[^"]*"'
+    ```
+
+    You see `HTTP 200`, `token length` with a number above 20, and `"scope":"team:read team:write"`.
+
+11. **Window 3.** The same URL again:
+
+    ```bash
+    exchange "$CRED" | tail -1
+    ```
+
+    You see `HTTP 401`: an invite works once.
+
+12. **Window 3.** Before joining, the session is no member:
+
+    ```bash
+    curl -s -w '\n' -H "authorization: Bearer $TOKEN" http://localhost:5733/api/team/v1/me
+    ```
+
+    You see `{"_tag":"TeamMembershipRequiredError",…,"reason":"not_a_member"}`.
+
+13. **Window 3.** Join. The body also tries to make itself owner under another name; the host ignores that:
+
+    ```bash
+    curl -s -w '\n' -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+      -d '{"environmentId":"env-manual-probe","role":"owner","displayName":"Boss"}' \
+      http://localhost:5733/api/team/v1/join
+    ```
+
+    You see JSON with `"name":"Demo team 6"` and a member with `"displayName":"Probe"`, `"role":"member"`, `"environmentId":"env-manual-probe"`. Note its `memberId`.
+
+14. **Window 3.** Join again and ask who you are:
+
+    ```bash
+    curl -s -w '\n' -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"environmentId":"env-manual-probe"}' http://localhost:5733/api/team/v1/join
+    curl -s -w '\n' -H "authorization: Bearer $TOKEN" http://localhost:5733/api/team/v1/me
+    ```
+
+    Both show the same `memberId` as step 13: no second member.
+
+15. **Window 3.** The host sees one new member and a used invite:
+
+    ```bash
+    node apps/server/src/bin.ts team status --base-dir ~/.t3-dev
+    node apps/server/src/bin.ts team invites --base-dir ~/.t3-dev
+    ```
+
+    Under Demo team 6: `members: <your name> (owner), Probe (member)`, and `used  Probe  invite <id>  made …, joined …`.
+
+16. **Window 3.** The team session reaches nothing else on the host:
+
+    ```bash
+    curl -s -o /dev/null -w '%{http_code}\n' -H "authorization: Bearer $TOKEN" http://localhost:5733/api/orchestration/snapshot
+    curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"scopes":["orchestration:read"]}' http://localhost:5733/api/auth/pairing-token
+    curl -s -w '\n' -H "authorization: Bearer $TOKEN" http://localhost:5733/api/team/v1/teams/some-other-team/board
+    ```
+
+    You see `403`, `403`, and `{"_tag":"TeamMembershipRequiredError",…,"reason":"other_team"}`.
+
+17. **Browser, host UI.** Settings → Connections. A client labelled "Team Demo team 6: Probe" is listed with 2 scopes; opening them shows `team:read` and `team:write`. (Checks the plan's open question in DESIGN.md 7.4.)
+
+### Part C: refused invites
+
+18. **Window 3.** Revoke an unused invite:
+
+    ```bash
+    node apps/server/src/bin.ts team invite ~/code/team-demo6-host --name Lina --base-dir ~/.t3-dev
+    ```
+
+    Copy its invite id (in the first line) and its URL, then:
+
+    ```bash
+    node apps/server/src/bin.ts team invites --revoke <Lina's invite id> --base-dir ~/.t3-dev
+    INVITE='<paste Lina's URL>'; exchange "${INVITE#*#invite=}" | tail -1
+    ```
+
+    You see `Revoked invite <id> for Lina. Its URL no longer works, and the host refuses to join with it.`, then `HTTP 401`.
+
+19. **Window 3.** Expiry: a 2 minute invite.
+
+    ```bash
+    node apps/server/src/bin.ts team invite ~/code/team-demo6-host --name Omar --ttl 2m --base-dir ~/.t3-dev
+    ```
+
+    You see `Expires at HH:MM (…, 2m from now)`. Wait until `date` is past that time, then:
+
+    ```bash
+    node apps/server/src/bin.ts team invites --base-dir ~/.t3-dev
+    ```
+
+    You see `expired  Omar …` and `revoked  Lina …` next to `used  Probe …`.
+
+20. **Window 3.** The host's checks on names and lifetime:
+
+    ```bash
+    node apps/server/src/bin.ts team invite ~/code/team-demo6-host --name probe --base-dir ~/.t3-dev
+    node apps/server/src/bin.ts team invite ~/code/team-demo6-host --name Nadia --ttl 25h --base-dir ~/.t3-dev
+    node apps/server/src/bin.ts team invite ~/code/team-demo6-member --name Nadia --base-dir ~/.t3-dev-member
+    ```
+
+    Each fails, with (first line of the error): `Team "Demo team 6" already has a member named Probe. Pick another name.`; `An invite lasts more than 0 and at most 24 hours (--ttl). Got 1d 1h.`; `This T3 home does not host team 3c5c6962-…, so it cannot invite anyone to it.` (the member's server cannot invite).
+
+21. **Window 3.** Nothing leaked:
+
+    ```bash
+    grep -rlF "$TOKEN" ~/.t3-dev/userdata/logs ~/code/team-demo6-host; grep -rlF "$CRED" ~/.t3-dev/userdata/logs ~/code/team-demo6-host; echo checked
+    git -C ~/code/team-demo6-host status --short
+    unset TOKEN CRED INVITE OUT
+    ```
+
+    You see only `checked`, and `git status` prints nothing.
+
+**Pass:** Part A: the host page survives the member server starting, and there is one `.vite-dev-<port>` per server. Part B: the invite works once, joins once as a `member` named by the host whatever the body says, and the session reaches only its own team. Part C: revoked, expired and used invites are refused, the name and lifetime rules hold, and neither credential nor token is in a log or the repo.
+
+Leave both servers running if you go on; stop them (Ctrl+C in windows 1 and 2) before a typecheck. Probe stays a member of Demo team 6 until members can be removed (M2.9); M2.4's test starts from a fresh demo (`--demo ~/code/team-demo7`).

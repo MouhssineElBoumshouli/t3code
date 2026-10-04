@@ -239,7 +239,8 @@ interface DiscoveredPairTarget {
   readonly descriptor: ExecutionEnvironmentDescriptor;
 }
 
-const discoverPairTarget = Effect.fn("pair.discoverPairTarget")(function* (
+// team-layer: exported for `t3 team invite`, which builds its URL from the same running server.
+export const discoverPairTarget = Effect.fn("pair.discoverPairTarget")(function* (
   explicitBaseDir: string | undefined,
 ) {
   const bases: Array<string> = [];

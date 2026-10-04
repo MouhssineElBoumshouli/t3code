@@ -47,6 +47,7 @@ describe("team migrations", () => {
           "team_activity",
           "team_claims",
           "team_handoffs",
+          "team_invites",
           "team_members",
           "team_sql_migrations",
           "team_tasks",

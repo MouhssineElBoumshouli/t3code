@@ -318,6 +318,8 @@ export function createDevRunnerEnv({
     const output: NodeJS.ProcessEnv = {
       ...baseEnv,
       PORT: String(webPort),
+      // team-layer: a Vite deps cache per web port (read by apps/web/vite.config.ts), so two dev servers from one checkout never rebuild each other's deps.
+      T3CODE_VITE_CACHE_DIR: `node_modules/.vite-dev-${webPort}`,
       VITE_DEV_SERVER_URL:
         devUrl?.toString() ??
         `http://${isDesktopMode ? DESKTOP_DEV_LOOPBACK_HOST : "localhost"}:${webPort}`,
@@ -391,7 +393,8 @@ export function createDevRunnerEnv({
     if (autoBootstrapProjectFromCwd !== undefined) {
       output.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD = autoBootstrapProjectFromCwd ? "1" : "0";
     } else {
-      delete output.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD;
+      // team-layer: off unless asked for, so dev runs never add this repo's apps/server as a project.
+      output.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD = "0";
     }
 
     if (logWebSocketEvents !== undefined) {

@@ -7,6 +7,7 @@ import * as NodeSqlite from "node:sqlite";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import * as NetService from "@t3tools/shared/Net";
+import { getPairingTokenFromUrl } from "@t3tools/shared/remote";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -14,6 +15,7 @@ import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/unstable/cli";
 
 import { cli } from "../bin.ts";
+import { buildTeamInviteUrl } from "./team.ts";
 
 const runCli = (args: ReadonlyArray<string>) =>
   Command.runWith(cli, { version: "0.0.0" })(args).pipe(
@@ -274,4 +276,86 @@ describe("t3 team init", () => {
       assert.isFalse(NodeFS.existsSync(NodePath.join(home, "userdata", "state.sqlite")));
     }),
   );
+});
+
+// M2.3: the paths that need no running server. Making an invite against a
+// running server, and joining with it, is in `team/http/security.test.ts`.
+describe("t3 team invite and t3 team invites", () => {
+  it.effect("refuse without --base-dir", () =>
+    Effect.gen(function* () {
+      const invite = yield* runCli(["team", "invite", makeRepo(), "--name", "Sara"]).pipe(
+        Effect.flip,
+      );
+      assert.include(String(invite), "t3 team invite needs --base-dir");
+      const invites = yield* runCli(["team", "invites"]).pipe(Effect.flip);
+      assert.include(String(invites), "t3 team invites needs --base-dir");
+    }),
+  );
+
+  it.effect(
+    "invite refuses a folder that is not a team repo, and one whose server is not running",
+    () =>
+      Effect.gen(function* () {
+        const home = makeHome();
+        const plain = yield* runCli([
+          "team",
+          "invite",
+          makeRepo(),
+          "--name",
+          "Sara",
+          "--base-dir",
+          home,
+        ]).pipe(Effect.flip);
+        assert.include(String(plain), "No .team/team.json in the Git repo");
+
+        const repo = makeRepo();
+        yield* runCli(["team", "init", repo, "--name", "Core", "--base-dir", home]);
+        const stopped = yield* runCli([
+          "team",
+          "invite",
+          repo,
+          "--name",
+          "Sara",
+          "--base-dir",
+          home,
+        ]).pipe(Effect.flip);
+        assert.include(String(stopped), `No running T3 server uses the home ${home}`);
+        assert.include(String(stopped), "Nothing was created.");
+        assert.deepInclude(teamRowCounts(home), { team_invites: 0 });
+      }),
+  );
+
+  it.effect("invites lists none on a new home and refuses an unknown id", () =>
+    Effect.gen(function* () {
+      const empty = makeHome();
+      yield* runCli(["team", "invites", "--base-dir", empty]);
+      assert.include(yield* lastOutput, `No T3 data at ${empty} yet, so it has no invites.`);
+      assert.isFalse(NodeFS.existsSync(NodePath.join(empty, "userdata", "state.sqlite")));
+
+      const home = makeHome();
+      yield* runCli(["team", "init", makeRepo(), "--base-dir", home]);
+      yield* runCli(["team", "invites", "--base-dir", home]);
+      assert.include(yield* lastOutput, `No invites in the T3 home at ${home}.`);
+      const unknown = yield* runCli([
+        "team",
+        "invites",
+        "--revoke",
+        "no-such-invite",
+        "--base-dir",
+        home,
+      ]).pipe(Effect.flip);
+      assert.include(String(unknown), "No invite no-such-invite");
+    }),
+  );
+});
+
+describe("buildTeamInviteUrl", () => {
+  it("puts the credential in the fragment as `invite`, never as the `token` the web app exchanges", () => {
+    const url = new URL(buildTeamInviteUrl("http://localhost:5733/?token=old#token=old", "abc123"));
+    assert.equal(url.origin, "http://localhost:5733");
+    assert.equal(url.pathname, "/team-invite");
+    assert.equal(url.search, "");
+    assert.equal(url.hash, "#invite=abc123");
+    assert.isNull(getPairingTokenFromUrl(url));
+  });
 });

@@ -2,6 +2,55 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-04 — M2.3 `t3 team invite` and `/join` on the host; a Vite cache per dev server
+
+**What changed**
+
+- **Vite cache per dev server** (your M2.2 manual test: "error loading dynamically imported module: …/node_modules/.vite/deps/useOpenChangeComplete-….js"). Cause: both dev servers of one checkout used `apps/web/node_modules/.vite`, and the member's dependency rebuild replaced files the host page was loading. The dev runner now sets `T3CODE_VITE_CACHE_DIR=node_modules/.vite-dev-<web port>` and `apps/web/vite.config.ts` uses it as `cacheDir` (one `team-layer:` line each). Keyed by web port, not home folder: two running servers can never share a port.
+- **Auto-bootstrap off by default** in `scripts/dev-runner.ts` (one `team-layer:` line): with no flag and no setting, the server gets `T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD=0`. `.env.local` still works (`=0` or `=1` arrive as an explicit value).
+- Deleted the empty `apps/server/userdata` (with its empty `attachments`, `logs` subfolders), `apps/server/caches` and `apps/server/worktrees`. They held no files; Git never tracked them.
+- **M2.3** (DESIGN.md 7.1, decisions 2, 3, 9; S5, S6, S8, S12):
+  - `team_invites` (own migration 4) and `TeamInvites` (`apps/server/src/team/TeamInvites.ts`): invites, `/join`, and which member a session is. The row keeps the pairing link's id, never the credential.
+  - `t3 team invite [path] --name Sara [--ttl 30m] --base-dir <home>`: checks the team is hosted here and this server owns it, the name (1 to 60 characters, one line, no `< > "` or backtick, not taken by a member or a pending invite), and the lifetime (more than 0, at most 24 hours; default 30 minutes). Then a one-time pairing link with exactly `[team:read, team:write]`, subject `team-invite:<id>`, label "Team <team>: Sara", and the invite row. Prints the URL once with "Expires at HH:MM". Needs the host server running (the URL points at it).
+  - `t3 team invites [--revoke <id>] --base-dir <home>`: pending, used, expired, revoked; revoke marks the invite and revokes its link.
+  - `POST /api/team/v1/join`, body `{ environmentId }`: the invite comes from the session's subject; adds a `member` with the invite's name and an activity line "Sara joined team …" (new kind `member.joined`); the same session again gets the same member. Refusals (403 `TeamJoinRefusedError`): `not_an_invite`, `invite_not_found`, `invite_used`, `invite_revoked`, `invite_expired`, `team_not_found`, `already_member`.
+  - `TeamSessionMembers` now reads the invite table, so `/me` answers for a joined session and the board path checks its team.
+  - **A change from the plan, say if you disagree:** the invite URL is `http://localhost:5733/team-invite#invite=<code>`, not `t3 pair`'s `/pair#token=<code>`. The web app takes a `#token=` from any page it opens and exchanges it for a browser session (`resolveInitialServerAuthGateState`), so clicking the invite URL would have used it up. M2.4's `t3 team join` reads `invite`.
+  - Not in this slice: `--tailscale` (M2.10, where it can be tried with two machines) and `--member` re-invites (M2.9).
+- Manual test: `team/M2_MANUAL_TESTS.md`, M2.3 (Part A is the cache fix).
+
+**Files touched**
+
+- New: `apps/server/src/team/TeamInvites.ts`, `TeamInvites.test.ts`, `Migrations/004_TeamInvites.ts`, `scripts/team-dev-runner.test.ts`.
+- Our files: `apps/server/src/cli/team.ts`, `cli/team.test.ts`, `apps/server/src/team/{TeamMigrations,TeamMigrations.test,TeamService}.ts`, `apps/server/src/team/http/{routes,TeamSessionMembers,security.test}.ts`, `packages/contracts/src/{team,teamHttp}.ts`.
+- Upstream, marked `team-layer:`: `scripts/dev-runner.ts` (2 lines), `apps/web/vite.config.ts` (1 line), `apps/server/src/cli/pair.ts` (`export` on `discoverPairTarget`).
+- `team/DESIGN.md` (sections 4, 5, 7 status, 7.1 M2.2/M2.3/M2.4, 7.2 S5 to S8 and S12, 7.3, 7.4), `team/M2_MANUAL_TESTS.md`, `team/WORKING_RULES.md` (the `.env.local` rule, the cache folders), `team/PROGRESS.md`.
+
+**How it was checked**
+
+- Cache: unit tests (offsets 0 and 20 give `.vite-dev-5733` and `.vite-dev-5753`, every mode, an inherited value is replaced, and a check that the `vite.config.ts` line is still there). Live: two `dev:web` runs from this checkout (offsets 40 and 60, scratch homes) served their deps from `/node_modules/.vite-dev-5773/deps/` and `/node_modules/.vite-dev-5793/deps/` (4,711 files each, both 200), and the old `.vite` was not touched; again with the final `vite.config.ts` line for one server. Not checked: the original failure (a page breaking while the other server rebuilds) is not reproduced on purpose; with separate folders the two cannot touch each other's files. Part A of the manual test checks it in your browser.
+- Auto-bootstrap: unit test (unset gives `0`, `true` gives `1`, `false` gives `0`). Live: a full `vp run dev` on a scratch home with `.env.local` moved aside (restored after, `cmp` identical): the server process had `T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD=0` and `projection_projects` stayed empty.
+- M2.3 live on that scratch dev server (port 5773): `t3 team init` on a scratch repo, `t3 team invite --ttl 2m` printed `http://localhost:5773/team-invite#invite=…`; through the web proxy the exchange gave `scope: team:read team:write`, a second exchange 401, `/me` 403 `not_a_member`, `/join` 200 as Sara `member`, `/me` 200, the snapshot 403. `t3 team status` listed Sara (member), `t3 team invites` showed her invite used. A second invite, revoked with the CLI, then gave 401 on exchange. Neither token nor credential in the logs, the dev output or the repo. Inviting "sara" again was refused. All scratch servers stopped by their process groups (checked their `T3CODE_HOME` first); the scratch cache folders deleted.
+- Tests: `vp test run` in `apps/server` on `src/team src/mcp/toolkits/team src/cli/team.test.ts src/auth/RpcAuthorization.test.ts src/auth/EnvironmentAuth.test.ts src/auth/http.test.ts src/cli/pair.test.ts` → 19 files, 182 tests passed, including `security.test.ts` (23, against a real server, running the real `t3 team invite` and `invites`) and `TeamInvites.test.ts` (11, test clock). `vp test run packages/contracts` → 462 passed. `vp test run` in `scripts` on `team-dev-runner.test.ts dev-runner.test.ts` → 79 passed (upstream's runner tests unchanged and passing).
+- Mutation checks: removing the expired, the used or the revoked check from `join` made 1, 2 and 2 unit tests fail; restored, all pass.
+- One flaky assertion found and fixed in my own test: under the test clock the owner and the new member have the same `joined_at`, so member order was random; the test now sorts. Six runs in a row passed after.
+- One migration test pinned the list of team tables; `team_invites` added to it.
+- Typecheck (`tsc --noEmit`, both dev servers stopped): `apps/server` 0 errors (the first run caught `HttpClient` leaking from `t3 pair`'s discovery into the whole CLI, and a too narrow test helper type), `packages/contracts` 0, `scripts` 0, `apps/web` 0 (it caught `cacheDir: undefined` under `exactOptionalPropertyTypes`; now a conditional spread).
+- Lint (`vp lint --report-unused-disable-directives`) on the 17 changed `.ts` files: exit 0. `vp fmt --check`: clean (the formatter rewrote a few lines before the final test run).
+
+**What's left**
+
+- Your manual test for M2.3 (Parts A to C). It leaves a member "Probe" in Demo team 6, so M2.4's test should start from a fresh demo (`--demo ~/code/team-demo7`).
+- Then M2.4: `t3 team join` on the member (reads `#invite=`), `team_links`, the token in the secret store at mode 0600 (decision 9), and the S13 origin check.
+
+**Unsure about / notes**
+
+- The invite URL change above is a small departure from the plan's wording, for the reason given; DESIGN.md 7.1 M2.3 records it.
+- `/join` refuses once the invite has expired even if the link was exchanged in time. A member whose exchange lands in the last second could see `invite_expired`; M2.4's join exchanges and joins back to back, so this should not happen in practice.
+- Unknown fields in the `/join` body are ignored, not rejected (Effect's default); the row is right either way and a test checks it.
+- `t3 team invite` refusals print like `t3 team init`'s: the message on the first line, then a stack trace. Same as before; not changed here.
+- The upstream pairing link table (`auth_pairing_links`) stores the credential itself, as for every `t3 pair` link; the team layer adds no copy of it.
+
 ## 2026-10-03 — M2.2 scopes and the team API skeleton; no "server" project in dev runs
 
 **What changed**

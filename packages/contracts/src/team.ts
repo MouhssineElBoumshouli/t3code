@@ -155,6 +155,7 @@ export const TeamActivityKind = Schema.Literals([
   "task.created",
   "task.updated",
   "handoff.written",
+  "member.joined",
 ]);
 export type TeamActivityKind = typeof TeamActivityKind.Type;
 

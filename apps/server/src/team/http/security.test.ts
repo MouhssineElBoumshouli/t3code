@@ -7,9 +7,10 @@
  * ones a host runs. Nothing about auth is mocked.
  *
  * The team-only session is made the way a member gets one: a one-time pairing
- * link with exactly `[team:read, team:write]` (what `t3 team invite` will make,
- * M2.3), exchanged at `/oauth/token` without asking for scopes (what
- * `t3 team join` will do, M2.4).
+ * link with exactly `[team:read, team:write]` (what `t3 team invite` makes),
+ * exchanged at `/oauth/token` without asking for scopes (what `t3 team join`
+ * will do, M2.4). The invite tests (M2.3) run the real `t3 team invite` and
+ * `t3 team invites` commands against the same home while the server runs.
  *
  * S1 and S2 walk every endpoint of `EnvironmentHttpApi` and every RPC of
  * `WsRpcGroup` as listed at test time, with a valid payload generated from
@@ -31,13 +32,16 @@ import {
   AuthTeamReadScope,
   AuthTeamWriteScope,
   EnvironmentHttpApi,
+  TeamFile,
   TeamHttpApi,
+  TeamId,
   WsRpcGroup,
 } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -56,7 +60,11 @@ import * as Socket from "effect/unstable/socket/Socket";
 import * as EnvironmentAuth from "../../auth/EnvironmentAuth.ts";
 import { RPC_REQUIRED_SCOPES } from "../../auth/RpcAuthorization.ts";
 import { resolveCliAuthConfig } from "../../cli/config.ts";
+import { teamInviteLayer } from "../../cli/team.ts";
 import * as ServerConfig from "../../config.ts";
+import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import * as TeamInvites from "../TeamInvites.ts";
+import * as TeamService from "../TeamService.ts";
 
 const SERVER_DIR = NodeURL.fileURLToPath(new URL("../../../", import.meta.url));
 const BIN_PATH = NodePath.join(SERVER_DIR, "src", "bin.ts");
@@ -479,6 +487,145 @@ const decodeSessionState = Schema.decodeUnknownEffect(
   ),
 );
 
+// ---------------------------------------------------------------------------
+// Invites (M2.3): the real CLI, and the host's team state in this process
+
+/** Every credential and token the invite tests make; S12 searches the logs for all of them. */
+const inviteSecrets: Array<string> = [];
+
+interface CliResult {
+  readonly code: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/** `t3 team …` as a separate process on the host's home, as the host owner runs it. */
+const runTeamCli = (args: ReadonlyArray<string>) =>
+  Effect.promise(
+    () =>
+      new Promise<CliResult>((resolve, reject) => {
+        const child = NodeChildProcess.spawn(process.execPath, [BIN_PATH, "team", ...args], {
+          cwd: SERVER_DIR,
+          env: childEnv(),
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (data: Buffer) => (stdout += data.toString()));
+        child.stderr.on("data", (data: Buffer) => (stderr += data.toString()));
+        child.once("error", reject);
+        child.once("exit", (code) => resolve({ code, stdout, stderr }));
+      }),
+  ).pipe(Effect.timeout("60 seconds"), Effect.orDie);
+
+/** The host's team state and auth store, in this process, as `t3 team invite` opens them. */
+const withHostTeams = <A, E, R>(baseDir: string, effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const config = yield* resolveCliAuthConfig(
+      { baseDir: Option.some(baseDir) },
+      Option.some("Error"),
+    );
+    return yield* effect.pipe(Effect.provide(teamInviteLayer(config)));
+  });
+
+let teamCounter = 0;
+
+/**
+ * Two teams hosted by the test server, owned by its own environment, and a
+ * repo folder whose `.team/team.json` names the first, for `t3 team invite`.
+ */
+const setUpTeams = (host: Host) =>
+  Effect.gen(function* () {
+    teamCounter += 1;
+    const teamX = TeamFile.make({
+      teamId: TeamId.make(`team-x-${teamCounter}`),
+      name: `X ${teamCounter}`,
+    });
+    const teamY = TeamFile.make({
+      teamId: TeamId.make(`team-y-${teamCounter}`),
+      name: `Y ${teamCounter}`,
+    });
+    const hostEnvironmentId = yield* withHostTeams(
+      host.baseDir,
+      Effect.gen(function* () {
+        const teams = yield* TeamService.TeamService;
+        const environmentId = yield* (yield* ServerEnvironment.ServerEnvironmentIdentity)
+          .getEnvironmentId;
+        for (const teamFile of [teamX, teamY]) {
+          yield* teams.ensureTeam({
+            teamFile,
+            canonicalKey: null,
+            owner: { environmentId, displayName: "Host owner" },
+          });
+        }
+        return environmentId;
+      }),
+    );
+    const repo = NodePath.join(host.baseDir, `repo-${teamCounter}`);
+    NodeFS.mkdirSync(NodePath.join(repo, ".git"), { recursive: true });
+    NodeFS.mkdirSync(NodePath.join(repo, ".team"));
+    NodeFS.writeFileSync(
+      NodePath.join(repo, ".team", "team.json"),
+      `{ "teamId": "${teamX.teamId}", "name": "${teamX.name}" }\n`,
+    );
+    return { teamX, teamY, repo, hostEnvironmentId };
+  });
+
+/** An invite made in this process, for the paths the CLI cannot reach (a 1 ms lifetime). */
+const issueInvite = (host: Host, teamId: TeamId, memberName: string, ttl?: Duration.Duration) =>
+  withHostTeams(
+    host.baseDir,
+    Effect.gen(function* () {
+      const identity = yield* ServerEnvironment.ServerEnvironmentIdentity;
+      return yield* TeamInvites.issueTeamInvite({
+        teamId,
+        memberName,
+        ttl,
+        hostEnvironmentId: yield* identity.getEnvironmentId,
+      });
+    }),
+  ).pipe(Effect.tap((issued) => Effect.sync(() => inviteSecrets.push(issued.credential))));
+
+/** Exchange as `t3 team join` will (no scopes asked), and remember the token for S12. */
+const exchangeInvite = (host: Host, credential: string) =>
+  exchangeCredential(host.baseUrl, credential).pipe(
+    Effect.tap((result) =>
+      Effect.sync(() => {
+        if (result.accessToken !== undefined) inviteSecrets.push(result.accessToken);
+      }),
+    ),
+  );
+
+const joinCall = (host: Host, token: string, body: unknown) =>
+  httpCall(`${host.baseUrl}/api/team/v1/join`, {
+    method: "POST",
+    headers: bearer(token),
+    body: HttpBody.jsonUnsafe(body),
+  });
+
+const decodeMe = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      team: Schema.Struct({ teamId: Schema.String, name: Schema.String }),
+      member: Schema.Struct({
+        memberId: Schema.String,
+        displayName: Schema.String,
+        role: Schema.String,
+        environmentId: Schema.String,
+      }),
+    }),
+  ),
+);
+
+const decodeJoinRefusal = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ _tag: Schema.String, reason: Schema.String })),
+);
+
+const joinRefusal = (result: HttpResult) => {
+  const body = Option.getOrUndefined(decodeJoinRefusal(result.text));
+  return `${result.status} ${body?._tag ?? "?"} ${body?.reason ?? "?"}`;
+};
+
 // Checks that need no server
 
 describe("scopes and the API definitions", () => {
@@ -498,6 +645,7 @@ describe("scopes and the API definitions", () => {
     const endpoints = listEndpoints(TeamHttpApi);
     assert.deepStrictEqual(endpoints.map((endpoint) => endpoint.name).toSorted(), [
       "team.board",
+      "team.join",
       "team.me",
     ]);
     for (const endpoint of endpoints) {
@@ -801,18 +949,257 @@ it.layer(SecurityHostLive, {
       }),
     );
 
-    it.effect("a team session with no member row: 403 not_a_member on every team endpoint", () =>
+    it.effect(
+      "a team session with no member row: 403 not_a_member on every endpoint but /join",
+      () =>
+        Effect.gen(function* () {
+          const host = yield* SecurityHost;
+          for (const token of [host.teamToken, host.adminToken]) {
+            let seed = 1;
+            for (const endpoint of teamEndpoints.filter(
+              (candidate) => candidate.name !== "team.join",
+            )) {
+              const result = yield* callEndpoint(host, endpoint, bearer(token), seed++);
+              assert.strictEqual(result.status, 403, endpoint.name);
+              assert.strictEqual(result.tag, "TeamMembershipRequiredError", endpoint.name);
+              assert.include(result.text, "not_a_member", endpoint.name);
+            }
+          }
+        }),
+    );
+  });
+
+  describe("M2.3: t3 team invite and /join (S5, S6, S7, S8, S12)", () => {
+    it.effect("/join refuses sessions that did not come from a real invite", () =>
       Effect.gen(function* () {
         const host = yield* SecurityHost;
-        for (const token of [host.teamToken, host.adminToken]) {
-          let seed = 1;
-          for (const endpoint of teamEndpoints) {
-            const result = yield* callEndpoint(host, endpoint, bearer(token), seed++);
-            assert.strictEqual(result.status, 403, endpoint.name);
-            assert.strictEqual(result.tag, "TeamMembershipRequiredError", endpoint.name);
-            assert.include(result.text, "not_a_member", endpoint.name);
-          }
-        }
+        const body = { environmentId: "env-anyone" };
+        // The admin's own session: team scopes, but not an invite.
+        assert.equal(
+          joinRefusal(yield* joinCall(host, host.adminToken, body)),
+          "403 TeamJoinRefusedError not_an_invite",
+        );
+        // A team link whose subject names no invite row.
+        assert.equal(
+          joinRefusal(yield* joinCall(host, host.teamToken, body)),
+          "403 TeamJoinRefusedError invite_not_found",
+        );
+        // No team scope.
+        const standard = yield* joinCall(host, host.standardToken, body);
+        assert.equal(standard.status, 403);
+        assert.equal(standard.tag, "EnvironmentScopeRequiredError");
+      }),
+    );
+
+    it.effect(
+      "invite with the CLI, exchange once, join once as a member named by the host, see only that team",
+      () =>
+        Effect.gen(function* () {
+          const host = yield* SecurityHost;
+          const { teamX, teamY, repo } = yield* setUpTeams(host);
+          const teamFileBefore = NodeFS.readFileSync(
+            NodePath.join(repo, ".team", "team.json"),
+            "utf8",
+          );
+          const repoBefore = NodeFS.readdirSync(repo, { recursive: true }).toSorted();
+
+          const cli = yield* runTeamCli([
+            "invite",
+            repo,
+            "--name",
+            "Sara",
+            "--base-dir",
+            host.baseDir,
+          ]);
+          assert.equal(cli.code, 0, cli.stderr);
+          assert.include(cli.stdout, `Invite for Sara to team "${teamX.name}"`);
+          assert.match(cli.stdout, /Expires at \d\d:\d\d \(/);
+          const urlText = /^\s+(http\S+)$/m.exec(cli.stdout)?.[1];
+          assert.isDefined(urlText);
+          const url = new URL(urlText!);
+          assert.equal(url.origin, host.baseUrl);
+          assert.equal(url.pathname, "/team-invite");
+          // Not `token`: the web app would exchange that on any page it opens.
+          assert.isNull(new URLSearchParams(url.hash.slice(1)).get("token"));
+          assert.equal(url.search, "");
+          const credential = new URLSearchParams(url.hash.slice(1)).get("invite") ?? "";
+          assert.isAbove(credential.length, 10);
+          inviteSecrets.push(credential);
+          // S12: printed once, on stdout only.
+          assert.equal(cli.stdout.split(credential).length - 1, 1);
+          assert.notInclude(cli.stderr, credential);
+
+          // S5: the pairing link behind it holds exactly the two team scopes.
+          const inviteId = /invite ([0-9a-f-]{36})\)/.exec(cli.stdout)?.[1] ?? "";
+          const link = (yield* withHostAuth(host.baseDir, (auth) => auth.listPairingLinks())).find(
+            (candidate) => candidate.subject === `team-invite:${inviteId}`,
+          );
+          assert.isDefined(link);
+          assert.deepStrictEqual([...link!.scopes].toSorted(), [...TEAM_SCOPES].toSorted());
+
+          const exchanged = yield* exchangeInvite(host, credential);
+          assert.equal(exchanged.status, 200);
+          const token = exchanged.accessToken!;
+          // S6: one time only.
+          assert.equal((yield* exchangeInvite(host, credential)).status, 401);
+
+          const before = yield* httpCall(`${host.baseUrl}/api/team/v1/me`, {
+            headers: bearer(token),
+          });
+          assert.equal(before.status, 403);
+          assert.include(before.text, "not_a_member");
+
+          // S7, S8: the body cannot pick a role, a name or a member id.
+          const joined = yield* joinCall(host, token, {
+            environmentId: "env-sara",
+            role: "owner",
+            displayName: "Boss",
+            memberId: "member-owner",
+          });
+          assert.equal(joined.status, 200, joined.text);
+          const me = yield* decodeMe(joined.text).pipe(Effect.orDie);
+          assert.equal(me.team.teamId, teamX.teamId);
+          assert.equal(me.member.displayName, "Sara");
+          assert.equal(me.member.role, "member");
+          assert.equal(me.member.environmentId, "env-sara");
+          assert.notEqual(me.member.memberId, "member-owner");
+
+          // The same session again: the same member, no second row.
+          const again = yield* decodeMe(
+            (yield* joinCall(host, token, { environmentId: "env-sara" })).text,
+          ).pipe(Effect.orDie);
+          assert.equal(again.member.memberId, me.member.memberId);
+          const members = yield* withHostTeams(
+            host.baseDir,
+            Effect.gen(function* () {
+              return yield* (yield* TeamService.TeamService).listMembers(teamX.teamId);
+            }),
+          );
+          assert.deepStrictEqual(
+            members.map((member) => `${member.displayName}:${member.role}`),
+            ["Host owner:owner", "Sara:member"],
+          );
+
+          const meNow = yield* httpCall(`${host.baseUrl}/api/team/v1/me`, {
+            headers: bearer(token),
+          });
+          assert.equal(meNow.status, 200);
+          assert.equal(
+            (yield* decodeMe(meNow.text).pipe(Effect.orDie)).member.memberId,
+            me.member.memberId,
+          );
+
+          // Wrong team: only its own team's paths.
+          const own = yield* httpCall(`${host.baseUrl}/api/team/v1/teams/${teamX.teamId}/board`, {
+            headers: bearer(token),
+          });
+          assert.equal(own.status, 200);
+          const other = yield* httpCall(`${host.baseUrl}/api/team/v1/teams/${teamY.teamId}/board`, {
+            headers: bearer(token),
+          });
+          assert.equal(other.status, 403);
+          assert.include(other.text, "other_team");
+          // Still nothing upstream.
+          const snapshot = yield* httpCall(`${host.baseUrl}/api/orchestration/snapshot`, {
+            headers: bearer(token),
+          });
+          assert.oneOf(snapshot.status, [401, 403]);
+
+          const listed = yield* runTeamCli(["invites", "--base-dir", host.baseDir]);
+          assert.equal(listed.code, 0, listed.stderr);
+          assert.match(listed.stdout, new RegExp(`used +Sara +invite ${inviteId}`));
+          assert.notInclude(listed.stdout, credential);
+
+          // S12: the repo is untouched; the URL never went into it.
+          assert.equal(
+            NodeFS.readFileSync(NodePath.join(repo, ".team", "team.json"), "utf8"),
+            teamFileBefore,
+          );
+          assert.deepStrictEqual(
+            NodeFS.readdirSync(repo, { recursive: true }).toSorted(),
+            repoBefore,
+          );
+        }),
+    );
+
+    it.effect("S6: revoked, expired and already used invites are refused", () =>
+      Effect.gen(function* () {
+        const host = yield* SecurityHost;
+        const { teamX, hostEnvironmentId } = yield* setUpTeams(host);
+
+        // Revoked before use: the link is dead.
+        const omar = yield* issueInvite(host, teamX.teamId, "Omar");
+        const revoke = yield* runTeamCli([
+          "invites",
+          "--revoke",
+          omar.invite.inviteId,
+          "--base-dir",
+          host.baseDir,
+        ]);
+        assert.equal(revoke.code, 0, revoke.stderr);
+        assert.include(revoke.stdout, `Revoked invite ${omar.invite.inviteId} for Omar`);
+        const deadLink = yield* exchangeInvite(host, omar.credential);
+        assert.isAtLeast(deadLink.status, 400);
+        assert.isUndefined(deadLink.accessToken);
+
+        // Exchanged, then revoked before joining: /join refuses.
+        const lina = yield* issueInvite(host, teamX.teamId, "Lina");
+        const linaToken = (yield* exchangeInvite(host, lina.credential)).accessToken!;
+        yield* runTeamCli([
+          "invites",
+          "--revoke",
+          lina.invite.inviteId,
+          "--base-dir",
+          host.baseDir,
+        ]);
+        assert.equal(
+          joinRefusal(yield* joinCall(host, linaToken, { environmentId: "env-lina" })),
+          "403 TeamJoinRefusedError invite_revoked",
+        );
+
+        // Expired: a 1 ms invite is dead by the time it is used.
+        const nora = yield* issueInvite(host, teamX.teamId, "Nora", Duration.millis(1));
+        const expired = yield* exchangeInvite(host, nora.credential);
+        assert.isAtLeast(expired.status, 400);
+        assert.isUndefined(expired.accessToken);
+
+        // Used: a second session naming the same invite cannot join again.
+        const kai = yield* issueInvite(host, teamX.teamId, "Kai");
+        const kaiToken = (yield* exchangeInvite(host, kai.credential)).accessToken!;
+        assert.equal((yield* joinCall(host, kaiToken, { environmentId: "env-kai" })).status, 200);
+        const forged = yield* withHostAuth(host.baseDir, (auth) =>
+          auth.issueSession({ subject: `team-invite:${kai.invite.inviteId}`, scopes: TEAM_SCOPES }),
+        );
+        inviteSecrets.push(forged.token);
+        assert.equal(
+          joinRefusal(yield* joinCall(host, forged.token, { environmentId: "env-kai-2" })),
+          "403 TeamJoinRefusedError invite_used",
+        );
+
+        // S8: a joiner cannot take the host owner's environment id.
+        const zed = yield* issueInvite(host, teamX.teamId, "Zed");
+        const zedToken = (yield* exchangeInvite(host, zed.credential)).accessToken!;
+        assert.equal(
+          joinRefusal(yield* joinCall(host, zedToken, { environmentId: hostEnvironmentId })),
+          "403 TeamJoinRefusedError already_member",
+        );
+
+        const members = yield* withHostTeams(
+          host.baseDir,
+          Effect.gen(function* () {
+            return yield* (yield* TeamService.TeamService).listMembers(teamX.teamId);
+          }),
+        );
+        assert.deepStrictEqual(
+          members.map((member) => member.displayName),
+          ["Host owner", "Kai"],
+        );
+        const listed = yield* runTeamCli(["invites", "--base-dir", host.baseDir]);
+        assert.match(listed.stdout, /revoked +Omar/);
+        assert.match(listed.stdout, /revoked +Lina/);
+        assert.match(listed.stdout, /expired +Nora/);
+        assert.match(listed.stdout, /used +Kai/);
+        assert.match(listed.stdout, /pending +Zed/);
       }),
     );
   });
@@ -832,9 +1219,12 @@ it.layer(SecurityHostLive, {
           }
         };
         walk(NodePath.join(host.baseDir, "userdata", "logs"));
+        // The invite tests ran first, so their links, tokens and CLI runs are covered too.
+        assert.isAbove(inviteSecrets.length, 5);
         for (const text of logs) {
-          assert.isFalse(text.includes(host.teamToken));
-          assert.isFalse(text.includes(host.teamCredential));
+          for (const secret of [host.teamToken, host.teamCredential, ...inviteSecrets]) {
+            assert.isFalse(text.includes(secret));
+          }
         }
       }),
   );
