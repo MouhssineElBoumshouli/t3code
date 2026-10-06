@@ -11,7 +11,7 @@ Short version:
 - Check for changes with an authenticated GitHub API call that costs nothing when nothing changed. Run `git fetch` only when the ref really moved.
 - Park host mode (M2.2, M2.3) outside the compiled code, with a Git tag on the last commit where it worked. Keep the `ws.ts` security fix and give it its own small test.
 - Eight slices, each testable on its own (section 3.7).
-- Five decisions are yours before slice 1 (section 5). The biggest: a real branch `team-state`, or a hidden ref `refs/t3-team/state`.
+- Five decisions, all made on 2026-10-07 (section 5): hidden ref `refs/t3-team/state`, public repos refused unless `--public-ok`, writer files per (login, T3 server), team scopes reverted, host mode parked with a tag.
 
 ## 1. What I read
 
@@ -118,7 +118,7 @@ Rulebook, decisions and "Do not touch" stay in `.team/` on the normal branch, re
 
 ### 3.2 The state on GitHub
 
-One ref in the project's own repo (name: decision 1 in section 5). Its tree:
+One ref in the project's own repo, `refs/t3-team/state` (decision 1 in section 5). Its tree:
 
 ```
 team.json                                   { "format": 1, "teamId", "name", "createdBy": "<login>", "createdAt" }
@@ -196,7 +196,7 @@ Left alone: the SQLite team tables and migrations 1 to 4. Existing dev homes hav
 1. Tag the last commit where host mode worked: `git tag team-host-mode-m2.3 fc0dc2691` and push the tag. That is the runnable copy.
 2. `git mv` the host-mode files to `team/parked/host-mode/` at the repo root, keeping their folder layout: `apps/server/src/team/http/*`, `TeamInvites.ts`, `TeamInvites.test.ts`, the invite and invites parts of `cli/team.ts`, `packages/contracts/src/teamHttp.ts`, and the SQLite `TeamService` once the swap is done. `team/` is in no `tsconfig` `include` [code: `apps/server/tsconfig.json`], so parked files are neither compiled nor tested and cannot rot the build. Add a short `team/parked/README.md`: what is there, the tag, and that it does not build against the current service.
 3. Unmount: remove the `teamHttpRoutesLayer` line in `server.ts`, the `teamHttp.ts` export in `contracts/index.ts`, and the `invite`/`invites` subcommands.
-4. Scopes `team:read`/`team:write` in `contracts/auth.ts` (and the two lines in `EnvironmentAuth.test.ts`): my recommendation is to revert them, which leaves two fewer upstream edits. Decision 4 in section 5.
+4. Scopes `team:read`/`team:write` in `contracts/auth.ts` (and the two lines in `EnvironmentAuth.test.ts`): reverted, which leaves two fewer upstream edits (decision 4 in section 5).
 5. **Keep the `ws.ts` fix** (`authorizeEffect`/`authorizeStream` on `chatGptReconnectProfile`, `chatGptImportProfile`, `chatGptHandoffSubscribe`) [code: `ws.ts:2513`]. Its only test today is the S2 walk inside `security.test.ts`, which mints team-scoped sessions, so parking would drop it. Replace it with `apps/server/src/auth/ChatGptRpcScopes.test.ts` (ours): a session from a pairing link with only `orchestration:read` calls the three RPCs and each is refused (they require `orchestration:operate` [code: `RpcAuthorization.ts:40-42`]). Mutation check: revert `ws.ts` and the test must fail.
 
 ### 3.7 Slices
@@ -231,7 +231,7 @@ Instead (option B): a hidden ref, `refs/t3-team/state`. Checked on our fork with
 
 Cost of option B: you cannot browse the state on github.com (debug with `git fetch origin refs/t3-team/state` or `t3 team status`). It is still public on a public repo (Q1). Rulesets that target branches do not apply to it, which is good for us, though an org that wants to block it cannot. Other hosts need checking (Q3).
 
-Recommendation: option B. The ref name is one constant, so slices 1 to 5 are the same either way. Decision 1.
+Decided: option B (decision 1). The ref name is one constant.
 
 ### 4.2 "Each person only writes their own files", keyed by person
 
@@ -265,10 +265,12 @@ A `git fetch` every 15 s is anonymous on a public repo (Q2) and pointless when n
 
 `TeamAutoNotes` saves a note after every turn [code], so the ref gets a commit per turn per person: thousands over a semester. Each one is tiny, and `--depth=1` fetches mean nobody downloads the history. But history can only be trimmed by force-pushing, which races with teammates. Instead: wait 2 seconds after a change and push everything changed in that time together, keep the per-file caps (3.2), and accept the history. If it ever matters, a new format can start a fresh ref. Not needed for v1.
 
-## 5. Decisions I need from you
+## 5. Decisions (made 2026-10-07)
 
-1. **Ref name**: hidden ref `refs/t3-team/state` (recommended, 4.1) or branch `team-state` (VISION.md as written).
-2. **Public repos**: refuse unless `--public-ok` (recommended, Q1), or refuse outright, or warn only.
-3. **Writer files per (login, T3 server)** instead of per login (4.2). I think this is required, not optional, but it changes VISION.md's wording.
-4. **Scopes**: revert `team:read`/`team:write` from `contracts/auth.ts` while host mode is parked (recommended, fewer upstream edits), or keep them.
-5. **Parking**: `git mv` to `team/parked/host-mode/` plus a tag (recommended), or only a tag and delete from `main`, or keep host mode compiling on `main`. Keeping it compiling means keeping the SQLite service alive next to the new one.
+All five went with the recommendation.
+
+1. **Ref name**: the hidden ref `refs/t3-team/state` (4.1), not a `team-state` branch.
+2. **Public repos**: `t3 team init` refuses on a public repo unless run with `--public-ok` (Q1). Slice 6 builds it.
+3. **Writer files** per (GitHub login, T3 server), not per login (3.2, 4.2). VISION.md's wording now says the same.
+4. **Scopes**: `team:read` and `team:write` are reverted from `contracts/auth.ts` while host mode is parked (slice 0).
+5. **Parking**: `git mv` to `team/parked/host-mode/` plus the tag `team-host-mode-m2.3` on fc0dc2691 (3.6, slice 0). The `ws.ts` security fix stays, with its own regression test.
