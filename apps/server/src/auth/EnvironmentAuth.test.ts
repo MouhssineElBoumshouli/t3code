@@ -495,8 +495,6 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         "access:read",
         "access:write",
         "relay:write",
-        "team:read", // team-layer: the administrative preset holds the team scopes (M2.2).
-        "team:write", // team-layer
       ]);
       expect(verified.subject).toBe("administrative-bootstrap");
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),

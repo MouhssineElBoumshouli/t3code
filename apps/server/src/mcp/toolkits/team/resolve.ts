@@ -30,7 +30,7 @@ const NOT_IN_TEAM: NotInTeamResult = {
 /** The result for a team file whose team this server does not host (M2.1). */
 export const hostedElsewhere = (teamFile: TeamFile): NotInTeamResult => ({
   inTeam: false,
-  message: `This project is in team ${teamFile.name}, which is hosted on another T3 server. This server has not joined it, so team tools do nothing here. To join, ask the team's host for an invite.`,
+  message: `This project is in team ${teamFile.name}, which is hosted on another T3 server. This server has not joined it, so team tools do nothing here. Joining from another server is not supported yet.`,
 });
 
 export interface TeamContext {

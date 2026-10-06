@@ -1,6 +1,6 @@
 # M2 manual tests
 
-One section per slice of the M2 plan (team/DESIGN.md section 7). Run commands from the t3code repo. `t3` means `node apps/server/src/bin.ts`. The first CLI command against a new home also prints migration log lines; they are expected.
+One section per slice of the M2 plan (team/DESIGN.md section 7). Host mode is parked (team/parked/README.md), so the M2.2 and M2.3 sections run only at the tag `team-host-mode-m2.3`. Run commands from the t3code repo. `t3` means `node apps/server/src/bin.ts`. The first CLI command against a new home also prints migration log lines; they are expected.
 
 Setup for every slice is in DESIGN.md 7.3: host home `~/.t3-dev` (ports 13773/5733), member home `~/.t3-dev-member` (`T3CODE_PORT_OFFSET=20`, ports 13793/5753), demo folders `~/code/team-demo6-*`.
 

@@ -262,7 +262,7 @@ describe("team toolkit", () => {
           assert.deepEqual(result, {
             inTeam: false,
             message:
-              "This project is in team Core, which is hosted on another T3 server. This server has not joined it, so team tools do nothing here. To join, ask the team's host for an invite.",
+              "This project is in team Core, which is hosted on another T3 server. This server has not joined it, so team tools do nothing here. Joining from another server is not supported yet.",
           });
         }
         const tables = yield* sql<{ readonly name: string }>`

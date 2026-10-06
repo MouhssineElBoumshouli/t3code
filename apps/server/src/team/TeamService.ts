@@ -152,15 +152,6 @@ export class TeamService extends Context.Service<
       { readonly team: Team; readonly owner: TeamMember; readonly created: boolean },
       TeamServiceError
     >;
-    /**
-     * Adds a `member` (never an owner) for another server, with an activity
-     * line. Only `/join` calls it, with the name the host gave the invite (M2.3).
-     */
-    readonly addMember: (input: {
-      readonly teamId: TeamId;
-      readonly displayName: string;
-      readonly environmentId: EnvironmentId;
-    }) => Effect.Effect<TeamMember, TeamServiceError>;
     readonly getTeam: (teamId: TeamId) => Effect.Effect<Option.Option<Team>, TeamServiceError>;
     /** Every team this server hosts (has the row of), oldest first. */
     readonly listTeams: () => Effect.Effect<ReadonlyArray<Team>, TeamServiceError>;
@@ -609,40 +600,6 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const addMember: TeamService["Service"]["addMember"] = Effect.fn("TeamService.addMember")(
-    function* (input) {
-      return yield* Effect.gen(function* () {
-        const team = yield* requireTeam(input.teamId);
-        const memberId = TeamMemberId.make(yield* newId);
-        const joinedAt = yield* nowIso;
-        const displayName = TrimmedNonEmptyString.make(input.displayName.trim());
-        yield* sql`
-          INSERT INTO team_members (
-            member_id, team_id, display_name, role, environment_id, joined_at
-          ) VALUES (
-            ${memberId}, ${team.teamId}, ${displayName}, 'member', ${input.environmentId}, ${joinedAt}
-          )
-        `.pipe(storage("addMember"));
-        yield* recordActivity({
-          teamId: team.teamId,
-          memberId,
-          kind: "member.joined",
-          summary: `${displayName} joined team ${team.name}.`,
-          thread: null,
-          createdAt: joinedAt,
-        });
-        return {
-          memberId,
-          teamId: team.teamId,
-          displayName,
-          role: "member",
-          environmentId: input.environmentId,
-          joinedAt,
-        } satisfies TeamMember;
-      }).pipe(sql.withTransaction, Effect.catchTag("SqlError", storageFailure("addMember")));
-    },
-  );
-
   const claimPaths: TeamService["Service"]["claimPaths"] = Effect.fn("TeamService.claimPaths")(
     function* (input) {
       const paths = yield* normalizeClaimPaths(input.paths);
@@ -1022,7 +979,6 @@ export const make = Effect.gen(function* () {
 
   return TeamService.of({
     ensureTeam,
-    addMember,
     getTeam: selectTeam,
     listTeams: selectTeams,
     listMembers: selectMembers,

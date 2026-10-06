@@ -2511,7 +2511,7 @@ const makeWsRpcLayer = (
             { "rpc.aggregate": "provider" },
           ),
         // team-layer: these three skipped the scope check RPC_REQUIRED_SCOPES declares, so any
-        // session could call them (found by team/http/security.test.ts, team/DESIGN.md 7.2 S2).
+        // session could call them (team/DESIGN.md 7.2 S2). Test: auth/ChatGptRpcScopes.test.ts.
         [WS_METHODS.chatGptReconnectProfile]: (input) =>
           authorizeEffect(
             requiredScopeForRpcMethod(WS_METHODS.chatGptReconnectProfile),
