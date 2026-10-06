@@ -6,7 +6,7 @@ Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
 **What changed**
 
-- `team/VISION.md`: copied from `C:\Users\Mouhssine\Downloads\VISION.md` unchanged (`cmp` identical). It replaces DESIGN.md section 7 (host mode); DESIGN.md 7 now says so at the top. M1 stays.
+- `team/VISION.md`: copied from `C:\Users\Mouhssine\Downloads\VISION.md` with the text unchanged. One difference in bytes: the repo's pre-commit formatter added an empty `>` line inside the blockquote in section 3.1 (line 49). The words are the same and it renders the same; restoring the exact bytes would fail the formatter check. It replaces DESIGN.md section 7 (host mode); DESIGN.md 7 now says so at the top. M1 stays.
 - `team/STORAGE_PLAN.md`: answers to VISION.md's four open questions (facts measured against GitHub or read in the code and docs, each marked with how it was checked), the plan for step 1 (the storage swap) in 8 slices plus slice 0 (park host mode), what in VISION.md the code shows is a bad idea, and 5 decisions for you (section 5). Research and planning only: no feature code.
 - Self-testing (part 0), **not finished**:
   - `.mcp.json` (new): the Playwright MCP server for this project, `@playwright/mcp@0.0.83`, headless Chromium, fresh profile, output in `.playwright-mcp/`.
@@ -35,7 +35,7 @@ Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
 **Unsure about / notes**
 
-- The end-to-end claim delay in Q4 is an estimate (the push time was not measured); slice 2 measures it.
+- The end-to-end claim delay in Q4 is an estimate built from parts measured one at a time (fetch 0.7 s, this commit's push 2.11 s, a 15 s check interval); slice 7 measures a full sync.
 - GitHub publishes no limits for authenticated Git operations, so the plan avoids polling with Git; Q2 says why.
 - "GitHub shows a 'recent pushes' banner for a busy branch" in STORAGE_PLAN.md 4.1 is from memory, not checked; the other reasons there were checked.
 - Our fork is public, so anything put on a team ref in it is public. Use a private scratch repo for slice 8.

@@ -80,12 +80,12 @@ How sure: high that the Git part is portable. Medium on the GitLab details (docs
 
 How long a claim takes to reach a teammate (estimates from the measured times above):
 
-- Writing the claim: the local write is instant. The push takes about a fetch (0.7 s measured) plus a push (not measured yet; expect about 1 to 2 s; slice 2 measures it).
-- A teammate sees it at their next check: up to 15 s later, plus 0.7 s to fetch. Worst case about 17 s, about 9 s on average.
+- Writing the claim: the local write is instant. The push takes about a fetch (0.7 s measured) plus a push: `git push origin main` of one small commit took 2.11 s [measured]. So about 3 s.
+- A teammate sees it at their next check: up to 15 s later, plus 0.7 s to fetch. Worst case about 18 s, about 10 s on average.
 
 Race: Sara and Yassine both claim `login.ts` within the same couple of seconds. Each push succeeds, because each writes only their own file (no conflict, see 3.2). Each answer was computed before the other's claim arrived, so each agent heard "no overlaps". Today overlaps are computed only inside `claimPaths` [code: `TeamService.ts:683`], so nobody would ever be told. The fix:
 
-- **Fetch first.** `claimPaths` fetches (with a 3 s budget) before computing overlaps. That shrinks the race window from about 15 s to the other person's fetch-to-push time, about 1 to 2 s.
+- **Fetch first.** `claimPaths` fetches (with a 3 s budget) before computing overlaps. That shrinks the race window from about 15 s to the other person's fetch-to-push time, about 3 s.
 - **Late overlaps.** After every sync, compare this server's active claims with everyone else's. A pair that overlaps and was not reported before is saved as "late overlap", and the next `team_status` or `team_claim` result for that thread says so once: "Since you claimed, Yassine also claimed src/auth/login.ts." Both sides see it, as VISION.md asks.
 - **Not confirmed.** If the push did not land (offline, or the 3 s budget ran out), the result says "Claimed on this computer, not shared yet. Overlaps unknown." VISION.md asks for this too.
 
@@ -93,7 +93,7 @@ Limit: the agent hears about a late overlap only at its next team tool call. Not
 
 Clock differences between laptops only change the order claims are listed in, not whether they overlap. The overlap check does not use times.
 
-How sure: medium. The parts are measured; the end-to-end time is an estimate until slice 2 measures a push and slice 7 measures the sync.
+How sure: medium. The parts (fetch, push, check) are measured one at a time; the end-to-end time is an estimate until slice 7 measures a full sync.
 
 ## 3. Plan for step 1: the storage swap
 
@@ -207,7 +207,7 @@ Each slice: its own commit, focused tests, a PROGRESS.md entry, and a self-test 
 
 **Slice 1: the state format and model, no I/O.** `teamState.ts`, `TeamStateModel.ts`. Tests: two writers' files merge into one view; the same person on two servers counts as one member with two writers; concurrent task edits resolve the same way on every reader; caps; a broken or newer-format writer file is skipped or tolerated; late overlaps are found once, from both sides; a 7-day-old released claim drops out.
 
-**Slice 2: the Git repo for state.** `TeamStateRepo.ts`. Tests use a local bare repo as `origin` (a `file://` remote: real Git, no network) and two state repos as two writers. Both push at once and both land, with no force; a push refused for being behind is redone; with `origin` unreachable, the write is kept and the result says "not confirmed", then a later sync lands it; `git log` of the ref shows only fast-forwards. Also measure a real push to GitHub once, on a scratch private repo, to replace the Q4 estimate.
+**Slice 2: the Git repo for state.** `TeamStateRepo.ts`. Tests use a local bare repo as `origin` (a `file://` remote: real Git, no network) and two state repos as two writers. Both push at once and both land, with no force; a push refused for being behind is redone; with `origin` unreachable, the write is kept and the result says "not confirmed", then a later sync lands it; `git log` of the ref shows only fast-forwards. Also time a real sync to GitHub once, on a scratch private repo, to check the Q4 numbers.
 
 **Slice 3: identity and host calls.** `TeamHost.ts`. Tests with a fake process runner: login from `gh auth status --json` (several accounts, the active one wins, signed out), `canPush`/`isPublic` from `gh api`, ETag `304` handling, the dev override refused outside dev mode.
 
