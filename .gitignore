@@ -44,3 +44,5 @@ node_modules/
 
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/
+# team-layer: Playwright MCP screenshots and snapshots (see team/WORKING_RULES.md)
+.playwright-mcp/

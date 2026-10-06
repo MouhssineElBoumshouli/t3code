@@ -23,6 +23,19 @@ This repo is a fork of T3 Code. We are adding a team layer: a shared Brain, shar
 - Two dev servers from this checkout (host and member) each get their own Vite cache, `apps/web/node_modules/.vite-dev-<web port>`. If a page ever fails with "error loading dynamically imported module", stop that server and delete its cache folder.
 - Each round uses a fresh project (`~/code/team-demo4`, then `team-demo5`...). Control tests use a separate plain folder, never this repo.
 
+## Self-testing
+
+The agent runs the manual tests itself in a headless browser, so a slice reaches you already tried. This overrides AGENTS.md's "ask before spinning up browsers" for the Playwright setup below. Every other rule here still applies.
+
+- **Tool.** The Playwright MCP server, set up for this project in `.mcp.json` (`@playwright/mcp`, pinned version, headless Chromium, a fresh browser profile each session). It saves its files in `.playwright-mcp/` (gitignored). A new Claude Code session loads it; one already running does not see it until restarted.
+- **Browser.** Playwright's own Chromium in `~/.cache/ms-playwright` (no sudo). WSL also needs three system libraries, installed once with sudo: `sudo apt-get install -y libnss3 libnspr4 libasound2t64`.
+- **Dev server.** Same as manual tests: `vp run dev --home-dir ~/.t3-dev`, in the background. Note the PID at start and stop it by that PID (AGENTS.md rule 1). Read the web port from the `[dev-runner]` line.
+- **Pairing.** Open the `pairingUrl:` the dev server prints, in the Playwright browser only. It is one-time and used up by that visit. Never write it into a file, a commit, PROGRESS.md or a chat summary, and never paste it anywhere else.
+- **Screenshots.** Take them only after pairing has finished and the app has loaded. Never photograph a page that shows a pairing link, token, invite code or secret (pairing pages, Settings → Connections with a link open, terminal output with a URL). Look at every picture before keeping it.
+- **Where pictures go.** The orphan branch `test-screenshots`, which shares no history with `main`. It is checked out as a separate worktree at `../t3code-screenshots`. One folder per test round, `YYYY-MM-DD-<round>/`, holding the PNGs and a `NOTES.md` (what was tested, the `main` commit, what each picture shows). Commit and push that branch after each test. Never commit screenshots to `main`.
+- **Memory.** This laptop runs out of memory. Never run two dev servers and a full typecheck at the same time. Stop the browser (`browser_close`) when done.
+- **Honesty.** A self-test is a real check, so report it like one: what you clicked, what you saw, which screenshot shows it. It does not replace your own manual test when a slice asks for one.
+
 ## Honesty
 
 - Never say something works unless you ran it and saw it work.

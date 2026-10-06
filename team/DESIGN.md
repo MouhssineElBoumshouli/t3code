@@ -382,6 +382,8 @@ The 9 questions from v1 are answered in [team/CODE_FINDINGS.md](CODE_FINDINGS.md
 
 ## 7. M2 plan: a second person
 
+**Replaced 2026-10-07** by [VISION.md](VISION.md) (team state on GitHub, no host) and [STORAGE_PLAN.md](STORAGE_PLAN.md). Kept below as the record of what M2.0 to M2.3 built; host mode is being parked (STORAGE_PLAN.md 3.6). M1 above still holds.
+
 Status: plan, 2026-10-03. M2.0, M2.1 and M2.2 are built (2026-10-03), M2.3 on 2026-10-04; the rest is not. Based on D1 and CODE_FINDINGS.md, plus a new read of the auth code (marked [checked] with the file). Decisions on the open questions are in 7.5. Manual tests per slice: [team/M2_MANUAL_TESTS.md](M2_MANUAL_TESTS.md).
 
 **Goal.** Two people, each with their own T3 server, work on one repo as one team. One server is the host (D1). The other joins with an invite, reads and writes team state on the host over the team HTTP API, and keeps working when the host is off. A member can reach team data and nothing else on the host.

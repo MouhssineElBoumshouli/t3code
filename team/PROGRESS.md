@@ -2,6 +2,44 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — New direction (VISION.md), storage swap plan, self-testing setup (part done)
+
+**What changed**
+
+- `team/VISION.md`: copied from `C:\Users\Mouhssine\Downloads\VISION.md` unchanged (`cmp` identical). It replaces DESIGN.md section 7 (host mode); DESIGN.md 7 now says so at the top. M1 stays.
+- `team/STORAGE_PLAN.md`: answers to VISION.md's four open questions (facts measured against GitHub or read in the code and docs, each marked with how it was checked), the plan for step 1 (the storage swap) in 8 slices plus slice 0 (park host mode), what in VISION.md the code shows is a bad idea, and 5 decisions for you (section 5). Research and planning only: no feature code.
+- Self-testing (part 0), **not finished**:
+  - `.mcp.json` (new): the Playwright MCP server for this project, `@playwright/mcp@0.0.83`, headless Chromium, fresh profile, output in `.playwright-mcp/`.
+  - `.gitignore`: `.playwright-mcp/` (marked `team-layer:`).
+  - Chromium 1247 downloaded to `~/.cache/ms-playwright` without sudo.
+  - Orphan branch `test-screenshots` created and pushed (commit 51e5dbc37, a README only), checked out as a worktree at `../t3code-screenshots`.
+  - WORKING_RULES.md: a "Self-testing" section.
+- `vp i` run on the fresh clone (done, 10.8 s); `git push --dry-run origin main` worked.
+
+**Files touched**
+
+- New: `team/VISION.md`, `team/STORAGE_PLAN.md`, `.mcp.json`.
+- Changed: `team/DESIGN.md` (one note at section 7), `team/WORKING_RULES.md`, `team/PROGRESS.md`, `.gitignore` (one marked line).
+- Branch `test-screenshots`: `README.md`.
+
+**How it was checked**
+
+- Playwright MCP: started from `.mcp.json` by a small stdio client (the same handshake Claude Code does). It answered `initialize` as "Playwright 1.64.0-alpha", listed 25 tools, and `browser_navigate` picked the downloaded Chromium. The browser then **failed to start**: `libnspr4.so`, `libnss3.so`, `libnssutil3.so`, `libsmime3.so`, `libasound.so.2` not found (`ldd`). Installing them needs sudo, which I don't have, so I stopped there as you asked. Not done yet: the dev server run, pairing, the screenshot and its push.
+- The plan's facts: see STORAGE_PLAN.md; each is marked [code], [measured] or [docs]. Measured: `git ls-remote` of one ref 0.50 to 0.52 s, a shallow fetch of one ref 0.71 to 0.74 s, a conditional `gh api` request got `304` without using rate limit, and a push to a non-branch ref (`refs/t3-team/probe`) works on GitHub and is served by the REST API. The probe ref was pushed twice and deleted twice; `git ls-remote origin 'refs/t3-team/*'` now returns nothing.
+- No tests or typecheck: no code changed.
+
+**What's left**
+
+- You: run `sudo apt-get install -y libnss3 libnspr4 libasound2t64`, then restart Claude Code in this folder so it loads the Playwright MCP server (approve it when asked). Then I finish part 0: dev server on `~/.t3-dev`, pair, screenshot, push it to `test-screenshots`, stop the server by its PID.
+- You: the 5 decisions in STORAGE_PLAN.md section 5. Slice 0 (parking host mode) can start once decisions 4 and 5 are made; slice 1 needs 1 to 3.
+
+**Unsure about / notes**
+
+- The end-to-end claim delay in Q4 is an estimate (the push time was not measured); slice 2 measures it.
+- GitHub publishes no limits for authenticated Git operations, so the plan avoids polling with Git; Q2 says why.
+- "GitHub shows a 'recent pushes' banner for a busy branch" in STORAGE_PLAN.md 4.1 is from memory, not checked; the other reasons there were checked.
+- Our fork is public, so anything put on a team ref in it is public. Use a private scratch repo for slice 8.
+
 ## 2026-10-04 — M2.3 `t3 team invite` and `/join` on the host; a Vite cache per dev server
 
 **What changed**
