@@ -2,6 +2,48 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — Part 0 finished, the five storage decisions, slice 0 (host mode parked)
+
+**What changed**
+
+- **Part 0 (self-testing):** finished. Dev server on `~/.t3-dev`, paired in the Playwright browser, screenshots checked and pushed (`test-screenshots` 8536f7735, folder `2026-10-07-part0/`).
+- **Decisions:** your five answers to STORAGE_PLAN.md section 5 (all as recommended) are recorded in section 5 and in the short version, 3.2, 3.6 and 4.1 (commit 5d5974925). VISION.md: a "Decided (2026-10-07)" list in section 2; `team-state` becomes `refs/t3-team/state` everywhere; "each person writes their own files" becomes one writer file per (GitHub login, T3 server).
+- **Slice 0** (commit 55b070421):
+  - Tag `team-host-mode-m2.3` on fc0dc2691, pushed.
+  - `git mv` to `team/parked/host-mode/` (same layout): `team/http/*` (routes, guard, TeamSessionMembers, guard and security tests), `TeamInvites.ts` and its test, `contracts/src/teamHttp.ts`. Full copies of `cli/team.ts` and `team.test.ts` as at the tag, since only parts of them moved. `team/parked/README.md` says what is there.
+  - Unmounted: the `/api/team/v1` routes in `server.ts`, the `teamHttp` export, `t3 team invite` and `invites`.
+  - Reverted: `team:read`/`team:write` (`contracts/auth.ts`, `EnvironmentAuth.test.ts`) and the `discoverPairTarget` export in `cli/pair.ts`. Those five upstream files now match the commit before M2.2 exactly (`git diff 98a07b653~1` is empty).
+  - Kept: the `ws.ts` fix (comment now points at its test). New test `apps/server/src/auth/ChatGptRpcScopes.test.ts`: a real server on a temp home, a session from a pairing link with only `orchestration:read`; the three ChatGPT RPCs must be refused with `EnvironmentAuthorizationError` / `orchestration:operate`, and a control call (`serverGetConfig`) must succeed.
+  - Also, not in the plan's list (say if you disagree): removed `TeamService.addMember` (only `/join` used it); the "not joined" texts in `cli/team.ts` and `resolve.ts` no longer say "ask the host for an invite" (now "joining from a clone / from another server is not supported yet"); one line in M2_MANUAL_TESTS.md saying M2.2/M2.3 run only at the tag. Migration 4 (`team_invites`) and the `member.joined` activity kind stay, as the plan says.
+
+**Files touched**
+
+- Docs: `team/STORAGE_PLAN.md`, `team/VISION.md`, `team/M2_MANUAL_TESTS.md`, `team/PROGRESS.md`, new `team/parked/README.md`.
+- Moved to `team/parked/host-mode/`: the 8 files above, plus the 2 copies.
+- Ours: `apps/server/src/cli/team.ts`, `cli/team.test.ts`, `team/TeamService.ts`, `mcp/toolkits/team/resolve.ts`, `handlers.test.ts`, new `auth/ChatGptRpcScopes.test.ts`.
+- Upstream (back to upstream's text): `server.ts`, `cli/pair.ts`, `auth/EnvironmentAuth.test.ts`, `contracts/src/auth.ts`, `contracts/src/index.ts`. Upstream, `team-layer:` comment changed: `ws.ts`.
+- Branch `test-screenshots`: `2026-10-07-part0/`, `2026-10-07-slice0/`.
+
+**How it was checked**
+
+- `vp test run` in `apps/server` on `src/team src/mcp/toolkits/team src/cli/team.test.ts src/cli/pair.test.ts src/auth/RpcAuthorization.test.ts src/auth/EnvironmentAuth.test.ts src/auth/http.test.ts src/auth/ChatGptRpcScopes.test.ts`: 17 files, 143 tests passed. `src/server.test.ts` (because `server.ts` changed): 204 passed. `packages/contracts`: 26 files, 462 passed.
+- Mutation check: with the `ws.ts` fix put back to its pre-M2.2 text, `ChatGptRpcScopes.test.ts` had 3 failed (got `ProviderSetupError`, `ProviderSetupError` and no error for the stream), 1 passed (the control). Restored, 4 passed; `git diff` on `ws.ts` empty before the commit.
+- Typecheck (`tsc --noEmit`, no dev server running): `packages/contracts`, `apps/server`, `apps/web` all 0 errors.
+- Lint on the 12 changed `.ts` files: 0 errors, 1 warning that was already there (`ProviderDriverKind` unused in `server.ts`). Lint on `team/parked`: exit 0. The formatter ran on the commit.
+- Self-test on a dev server (`~/.t3-dev`), details in `test-screenshots` `2026-10-07-slice0/NOTES.md`: `GET /api/team/v1/me` 404 without a session and with a real bearer session (control `/api/orchestration/snapshot` 200 with the same token); `t3 team --help` lists only `init` and `status`; the app pairs and loads (`01-welcome-after-pairing.png`, `02-app-after-dev-home-fix.png`).
+- Both dev servers stopped by their process groups (checked that the port owners were in the group first); ports free after. Browser closed.
+
+**What's left**
+
+- Slice 1: the state format and model (`teamState.ts`, `TeamStateModel.ts`), no I/O.
+
+**Unsure about / notes**
+
+- **Found in the self-test:** dev homes used since M2.2 have sessions that stored `team:read`/`team:write`. After the revert, those rows do not decode, so `GET /api/auth/clients` (Settings → Connections) gives 500 on such a home. Seen on `~/.t3-dev`: part 0's session was made before slice 0. Fixed there by marking the rows with a `team:` scope revoked (1 session, 1 used pairing link); after a restart `/api/auth/clients` was 200. Any other dev home from M2.2 to now needs the same, or a fresh home. Upstream and real installs never stored these scopes. I did not add code to skip bad rows (that would be an upstream change).
+- I did not look at the Connections page itself: the app sends a new browser to `/welcome` until setup is done, and I did not go through setup. The 500 and the fix were checked through the API from the paired page.
+- `t3 team invite` now prints the team help instead of an "unknown command" error; I did not check its exit code.
+- `knip:check` not run (repo-wide). No exports were added; the removed ones had no other users.
+
 ## 2026-10-07 — New direction (VISION.md), storage swap plan, self-testing setup (part done)
 
 **What changed**
