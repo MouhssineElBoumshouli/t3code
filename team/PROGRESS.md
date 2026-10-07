@@ -2,6 +2,31 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — Steps 1 and 2 marked done; "Local folder" fix; handoffs in `team_status`; design mockups started (unfinished)
+
+**What changed**
+
+- VISION.md: steps 1 and 2 marked done; two requirements in section 6 (great solo; native Windows). STORAGE_PLAN.md status: done. (fa6bc5480)
+- "Add project → Local folder" now waits for the project before opening the first draft, so `t3.json` is read (one `team-layer:` edit in `CommandPalette.tsx`). Write-up for upstream in `team/UPSTREAM_REPORTS.md`. No test: the flow lives inside the palette callback. (3ebfef4a4)
+- `team_status` lists other chats' 3 newest written handoff notes, one line each ("who, when: first line", 20 words max). `team_memory_search` matches written notes for "handoff"/"handoffs". (d48976515)
+- Started step 3 (design): reference screenshots in `team/mockups/reference/`, `shared.css`, `shared.js`, `option-a.html`, `option-b.html`.
+
+**How it was checked**
+
+- Server: `vp test run src/mcp/toolkits/team/ src/team/ src/cli/team.test.ts src/auth/ChatGptRpcScopes.test.ts` → 16 files, **158 passed** (156 + 2 new). New tests ran 3 times, all green. Mutation checks: dropping the handoff words fails the search test; listing automatic notes fails the status test. `tsc --noEmit` in `apps/server`: 0 errors. Lint on `mcp/toolkits/team/`: exit 0.
+- Web: `tsc --noEmit` in `apps/web`: 0 errors; lint on `CommandPalette.tsx`: exit 0, the same 4 upstream warnings before and after.
+- Mockups: only Option A was looked at once in Playwright (light, team); it renders, the only console error is a missing favicon. B is written but not opened yet.
+
+**What's left**
+
+- Step 3: Option C, an index page, `team/DESIGN_DIRECTION.md`, the screenshots (light/dark × team/solo per option, plus each warning card) pushed to `test-screenshots`, and the pick.
+- Step 4: `team/WINDOWS_AND_SOLO.md` not started.
+
+**Unsure about / notes**
+
+- Found while writing the status test: `TeamStateRepo.read` treats a failed `rev-parse` (a Git call that times out) as "no tip", so a reload then shows only this server's files and teammates disappear until the next good reload. In the test it came from `TestClock.adjust` firing the timeout of a background sync; in real use a slow disk or antivirus on Windows could do it. Not fixed; the test avoids clock jumps after the teammate syncs. Worth a fix (keep the last view when the read fails) and a line in the Windows audit.
+- The reference screenshots show the layout and palette, but no wallpaper shows through them.
+
 ## 2026-10-07 — The poller pushes writes that did not land; why the first chat used the local checkout; slice 8 (two people for real)
 
 **What changed**

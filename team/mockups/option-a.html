@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-mode="team">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Option A · Team tab</title>
+    <link rel="stylesheet" href="shared.css" />
+  </head>
+  <body>
+    <script src="shared.js"></script>
+    <script>
+      // Option A: the team lives in the right panel as one more tab, next to
+      // Terminal, Files and Browser. Solo, the same tab is "Memory".
+      // The warning card sits above the composer, where T3 already asks the
+      // user to choose (pending approval and user input panels).
+      const M = Mock;
+      Mock.mount("A", (s) => {
+        const pane = s.pane ?? "team";
+        const rightTab = (id, label, ic, only = "") =>
+          `<a class="tab ${pane === id ? "on" : ""} ${only}" data-pane="${id}">${M.icon(ic, "sm")}<span class="t">${label}</span>${
+            id === "team" && s.mode === "team"
+              ? '<span class="mark" style="--c:var(--warning)"></span>'
+              : ""
+          }</a>`;
+
+        const teamPane = `
+          <div class="pane ${pane === "team" ? "on" : ""}" style="display:${pane === "team" ? "flex" : "none"};flex-direction:column">
+            <div style="flex:1;overflow:hidden">
+              <div class="team-only">
+                <div class="section"><h4>Who is on what<span class="grow"></span><a>Catch me up</a></h4>${M.peopleNow()}</div>
+                <div class="section"><h4>Tasks<span class="grow"></span><span class="faint">3 open</span></h4>${M.tasksList()}</div>
+                <div class="section"><h4>Recent handoffs<span class="grow"></span><a>All notes</a></h4>${M.handoffsTeam()}</div>
+              </div>
+              <div class="solo-only">
+                <div class="section"><h4>Catch me up</h4>${M.catchUp()}</div>
+                <div class="section"><h4>Your chats now</h4>${M.myChatsNow()}</div>
+                <div class="section"><h4>Notes<span class="grow"></span></h4>${M.memorySearch()}<div style="height:6px"></div>${M.notesSolo()}</div>
+                <div class="section"><div class="callout" style="background:var(--sunken);box-shadow:inset 0 0 0 1px var(--border)">Working with others? <a style="color:var(--primary)">Make this a team project</a> to share claims, tasks and notes through GitHub.</div></div>
+              </div>
+            </div>
+            <div class="team-only">${M.syncRow()}</div>
+          </div>`;
+
+        const card = s.card ? M.warningCard(s.mode, "") + '<div style="height:10px"></div>' : "";
+
+        return `
+          <div class="window">
+            ${M.rail([
+              { icon: "home", title: "Home" },
+              { icon: "chats", title: "Chats", on: true },
+              { icon: "search", title: "Search" },
+            ])}
+            ${M.sidebar()}
+            ${M.tabStrip(`<button class="icon-btn">${M.icon("sidebar", "sm")}</button><button class="icon-btn">${M.icon("panel", "sm")}</button>`)}
+            <main class="chat">
+              <div class="timeline"><div class="col">
+                <div class="team-only">${M.planTeam}</div>
+                <div class="solo-only">${M.planSolo}</div>
+              </div></div>
+              <div class="composer-wrap"><div class="col">
+                ${card}
+                ${M.composer(
+                  s.mode === "team"
+                    ? '<span class="pill warn team-only"><span class="d"></span>2 files held by Yassine</span>'
+                    : '<span class="pill warn solo-only"><span class="d"></span>overlaps “Search page”</span>',
+                )}
+              </div></div>
+            </main>
+            <section class="right">
+              <div class="right-tabs">
+                ${rightTab("terminal", "Terminal", "terminal")}
+                ${rightTab("files", "Files", "files")}
+                ${rightTab("browser", "Browser", "globe")}
+                ${s.mode === "team" ? rightTab("team", "Team", "team") : rightTab("team", "Memory", "memory")}
+                <span class="grow"></span>
+              </div>
+              <div class="right-body">
+                <div class="pane ${pane === "terminal" ? "on" : ""}">${M.terminal()}</div>
+                <div class="pane ${pane === "files" ? "on" : ""}">${M.fileTree()}</div>
+                <div class="pane ${pane === "browser" ? "on" : ""}"><div class="section muted">localhost:5173 · preview</div></div>
+                ${teamPane}
+              </div>
+            </section>
+          </div>`;
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-mode="team">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Option B · Presence bar</title>
+    <link rel="stylesheet" href="shared.css" />
+    <style>
+      .presence {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 30px;
+        padding: 0 6px 0 4px;
+        border-radius: 15px;
+      }
+      .presence:hover,
+      .presence.on {
+        background: var(--selected);
+        box-shadow: 0 0 0 1px var(--border);
+      }
+      .stack {
+        display: flex;
+      }
+      .stack .who {
+        box-shadow: 0 0 0 2px var(--surface);
+      }
+      .stack .who + .who {
+        margin-left: -5px;
+      }
+      .stack .who.away {
+        opacity: 0.55;
+      }
+      .popover {
+        position: absolute;
+        top: 50px;
+        right: calc(var(--right-width, 400px) - 6px);
+        width: 400px;
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--raised) 86%, transparent);
+        backdrop-filter: blur(24px) saturate(1.4);
+        -webkit-backdrop-filter: blur(24px) saturate(1.4);
+        box-shadow:
+          var(--card-shadow),
+          0 0 0 1px var(--border-strong);
+        z-index: 20;
+        overflow: hidden;
+      }
+      .popover .tabs2 {
+        display: flex;
+        gap: 2px;
+        padding: 8px 10px 0;
+      }
+      .scrim {
+        position: absolute;
+        inset: 0;
+        background: rgb(0 0 0 / 0.18);
+        display: grid;
+        place-items: center;
+        z-index: 30;
+      }
+      :root[data-theme="dark"] .scrim {
+        background: rgb(0 0 0 / 0.45);
+      }
+      .scrim .warn-card {
+        width: 520px;
+      }
+      .chat {
+        position: relative;
+      }
+      .edge {
+        width: 3px;
+        align-self: stretch;
+        border-radius: 2px;
+        background: var(--c);
+        margin: 5px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <script src="shared.js"></script>
+    <script>
+      // Option B: no team panel. Presence lives in the tab bar: teammates'
+      // faces and the sync state, always visible. Clicking opens a glass
+      // popover with the details. Solo, the faces become your running chats.
+      // The warning card is a centered sheet over the chat.
+      const M = Mock;
+      const params = new URLSearchParams(location.search);
+      let popOpen = params.get("pop") !== "0";
+      document.addEventListener("click", (event) => {
+        if (event.target.closest("[data-pop]")) {
+          popOpen = !popOpen;
+          M.state.picked = M.state.picked;
+          document.querySelector("[data-pop]").classList.toggle("on", popOpen);
+          document.querySelector(".popover")?.toggleAttribute("hidden", !popOpen);
+        }
+      });
+      Mock.mount("B", (s) => {
+        const pane = s.pane ?? "files";
+        const showPop = popOpen && !s.card;
+        const rightTab = (id, label, ic) =>
+          `<a class="tab ${pane === id ? "on" : ""}" data-pane="${id}">${M.icon(ic, "sm")}<span class="t">${label}</span></a>`;
+        const presence =
+          s.mode === "team"
+            ? `<button class="presence ${showPop ? "on" : ""}" data-pop>
+                 <span class="stack">${M.who(M.people.yassine)}<span class="who away" style="--c:var(--sara)">SA</span></span>
+                 <span class="pill ok" style="box-shadow:none;padding:0"><span class="d"></span></span>
+                 <span class="muted" style="font-size:12px">synced 8 s</span>
+               </button>`
+            : `<button class="presence ${showPop ? "on" : ""}" data-pop>
+                 <span class="stack"><span class="who" style="--c:var(--chat-1)">1</span><span class="who" style="--c:var(--chat-2)">2</span></span>
+                 <span class="muted" style="font-size:12px">2 chats running</span>
+                 <span class="mark" style="--c:var(--warning)"></span>
+               </button>`;
+        const popover = `
+          <div class="popover appear" ${showPop ? "" : "hidden"}>
+            <div class="team-only">
+              <div class="section"><h4>Who is on what<span class="grow"></span><a>Catch me up</a></h4>${M.peopleNow()}</div>
+              <div class="section" style="padding-top:4px"><h4>Recent handoffs</h4>${M.handoffsTeam()}</div>
+              ${M.syncRow()}
+            </div>
+            <div class="solo-only">
+              <div class="section"><h4>Catch me up</h4>${M.catchUp()}</div>
+              <div class="section"><h4>Your chats now</h4>${M.myChatsNow()}</div>
+              <div class="section"><h4>Notes</h4>${M.notesSolo()}</div>
+            </div>
+          </div>`;
+        const tree = M.fileTree();
+        const sheet = s.card ? `<div class="scrim">${M.warningCard(s.mode)}</div>` : "";
+        return `
+          <div class="window">
+            ${M.rail([
+              { icon: "home", title: "Home" },
+              { icon: "chats", title: "Chats", on: true },
+              { icon: "search", title: "Search" },
+            ])}
+            ${M.sidebar()}
+            ${M.tabStrip(presence)}
+            <main class="chat">
+              <div class="timeline"><div class="col">
+                <div class="team-only">${M.planTeam}</div>
+                <div class="solo-only">${M.planSolo}</div>
+              </div></div>
+              <div class="composer-wrap"><div class="col">${M.composer()}</div></div>
+              ${sheet}
+            </main>
+            <section class="right">
+              <div class="right-tabs">
+                ${rightTab("terminal", "Terminal", "terminal")}
+                ${rightTab("files", "Files", "files")}
+                ${rightTab("browser", "Browser", "globe")}
+                <span class="grow"></span>
+              </div>
+              <div class="right-body">
+                <div class="pane ${pane === "terminal" ? "on" : ""}">${M.terminal()}</div>
+                <div class="pane ${pane === "files" ? "on" : ""}">${tree}</div>
+                <div class="pane ${pane === "browser" ? "on" : ""}"><div class="section muted">localhost:5173 · preview</div></div>
+              </div>
+            </section>
+            ${popover}
+          </div>`;
+      });
+    </script>
+  </body>
+</html>
