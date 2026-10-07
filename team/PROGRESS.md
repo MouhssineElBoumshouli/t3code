@@ -2,6 +2,32 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — Step 4: WINDOWS_AND_SOLO.md (research); design screenshots pushed
+
+**What changed**
+
+- `team/WINDOWS_AND_SOLO.md` (new, research only): 18 Windows findings (Git and gh, paths and files, scripts and dev setup, the desktop app), each with how sure (seen / likely / guess) and the fix; a section on the step 1 bug and slow disks; what works solo today and what is missing (5 items); a 9-step test plan for the installed app on your laptop.
+- Screenshots for step 3: `test-screenshots` **1fd6aed62**, folder `2026-10-07-design/` (34 pictures and NOTES.md).
+
+**Files touched**
+
+- `team/WINDOWS_AND_SOLO.md`, `team/PROGRESS.md`.
+
+**How it was checked**
+
+- Read the code each finding names: `TeamStateRepo.ts` (Git env, process count per read, `saveMine` rename), `TeamHost.ts` (how gh is run), upstream `resolveSpawnCommand` (`.exe`/`.cmd` through `PATHEXT`), `contracts/team.ts` (path compare), `handlers.ts` (folder compare), `paths.ts`, `TeamProjectFiles.ts`, `rulebook.ts`, `memory.ts`, `ServerSecretStore.ts`, `scripts/setup-worktree.ts`, package scripts, `.gitattributes`, `DesktopWindow.ts`, `DesktopWslBackend.ts`, `windows-tests.yml`.
+- Nothing was run on Windows. "Likely" items come from how Windows and Git for Windows behave as I know them; the plan says how to confirm each.
+
+**What's left**
+
+- Your pick for step 3.
+- The Windows fixes are not made. Top of the list: `GCM_INTERACTIVE=never` (W2), case-insensitive overlaps (W5), fewer Git processes per read (W3), rename retry (W10), `pathToFileURL` in tests (W15), then local-only solo mode (S1).
+
+**Unsure about / notes**
+
+- W2 (Git Credential Manager popping a window from a background push) is the one I would check first; I could not test it here.
+- Upstream's own Windows test lane says nothing in the suite passes on Windows yet, so expect upstream failures in plan step 2 that are not ours.
+
 ## 2026-10-07 — Step 3: design proposal (options A, B, C, index, DESIGN_DIRECTION.md)
 
 **What changed**
