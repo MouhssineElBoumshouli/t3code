@@ -190,14 +190,21 @@ export const runTeamInit = Effect.fn("runTeamInit")(function* (input: TeamInitIn
         isPublic = access.isPublic;
       }
 
-      const state = yield* git.execute({
-        operation: "teamInit.lsRemote",
-        cwd: repoRoot,
-        args: ["ls-remote", "origin", TEAM_STATE_REF],
-        env: GIT_ENV,
-        allowNonZeroExit: true,
-        timeoutMs: 20_000,
-      });
+      const state = yield* git
+        .execute({
+          operation: "teamInit.lsRemote",
+          cwd: repoRoot,
+          args: ["ls-remote", "origin", TEAM_STATE_REF],
+          env: GIT_ENV,
+          allowNonZeroExit: true,
+          timeoutMs: 20_000,
+        })
+        .pipe(
+          // Timed out, or Git did not run: as unreachable as a failed command.
+          Effect.catchTag("GitCommandError", (error) =>
+            Effect.succeed({ exitCode: -1, stdout: "", stderr: error.detail }),
+          ),
+        );
       if (state.exitCode !== 0) {
         return localOnly(
           `could not reach origin (${state.stderr.trim().split("\n").at(-1) || "no answer"})`,

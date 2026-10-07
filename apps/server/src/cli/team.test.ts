@@ -4,7 +4,14 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, TEAM_STATE_REF, TeamFile, TeamId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  GitCommandError,
+  TEAM_STATE_REF,
+  TeamFile,
+  TeamId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import * as NetService from "@t3tools/shared/Net";
 import { assert, describe, it } from "@effect/vitest";
@@ -301,6 +308,27 @@ const originStateCommits = (origin: string) =>
 const originStateFiles = (origin: string) =>
   git(origin, "ls-tree", "-r", "--name-only", TEAM_STATE_REF).split("\n").toSorted();
 
+/** Init's `git ls-remote` of the state ref times out, like a stalled network. */
+const lsRemoteTimesOut = Layer.effect(
+  GitVcsDriver.GitVcsDriver,
+  GitVcsDriver.GitVcsDriver.pipe(
+    Effect.map((real) => ({
+      ...real,
+      execute: (input: Parameters<typeof real.execute>[0]) =>
+        input.operation === "teamInit.lsRemote"
+          ? Effect.fail(
+              new GitCommandError({
+                operation: input.operation,
+                command: "git ls-remote",
+                cwd: input.cwd,
+                detail: "Git command timed out.",
+              }),
+            )
+          : real.execute(input),
+    })),
+  ),
+).pipe(Layer.provide(TestTeamGitLayer));
+
 /**
  * Init's own lookup of `origin` says GitHub, so it asks the host whether the
  * repo is public and who may push; the team state itself still goes to the
@@ -332,6 +360,7 @@ const initRemote = (
   options: {
     readonly host?: TeamHost.TeamHost["Service"];
     readonly gitHubOrigin?: boolean;
+    readonly lsRemoteTimesOut?: boolean;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -351,7 +380,9 @@ const initRemote = (
       Layer.mergeAll(
         options.gitHubOrigin === true
           ? Layer.merge(originLooksLikeGitHub, NodeServices.layer)
-          : TestTeamGitLayer,
+          : options.lsRemoteTimesOut === true
+            ? Layer.merge(lsRemoteTimesOut, NodeServices.layer)
+            : TestTeamGitLayer,
         TestConsole.layer,
       ),
     ),
@@ -536,27 +567,43 @@ describe("t3 team init on the remote", () => {
     }),
   );
 
-  it.effect("writes the files but starts nothing when it cannot push or is signed out", () =>
-    Effect.gen(function* () {
-      const { repo, origin } = makeRemoteRepo();
-      const stateDirectory = NodePath.join(makeHome(), "team");
-      const noPush = yield* initRemote(
-        { startDirectory: repo, stateDirectory },
-        {
-          host: fakeTeamHost(TEST_TEAM_LOGIN, { status: "found", canPush: false, isPublic: false }),
-          gitHubOrigin: true,
-        },
-      );
-      assert.isUndefined(noPush.failure);
-      assert.include(noPush.output, "was not started: Mouhssine cannot push to acme/app.");
-      assert.isTrue(exists(repo, ".team/team.json"));
+  it.effect(
+    "writes the files but starts nothing when it cannot push, is signed out or offline",
+    () =>
+      Effect.gen(function* () {
+        const { repo, origin } = makeRemoteRepo();
+        const stateDirectory = NodePath.join(makeHome(), "team");
+        const noPush = yield* initRemote(
+          { startDirectory: repo, stateDirectory },
+          {
+            host: fakeTeamHost(TEST_TEAM_LOGIN, {
+              status: "found",
+              canPush: false,
+              isPublic: false,
+            }),
+            gitHubOrigin: true,
+          },
+        );
+        assert.isUndefined(noPush.failure);
+        assert.include(noPush.output, "was not started: Mouhssine cannot push to acme/app.");
+        assert.isTrue(exists(repo, ".team/team.json"));
 
-      const signedOut = yield* initRemote(
-        { startDirectory: repo, stateDirectory },
-        { host: fakeTeamHost(null) },
-      );
-      assert.include(signedOut.output, "was not started: Not signed in.");
-      assert.equal(originRefs(origin), "");
-    }),
+        const signedOut = yield* initRemote(
+          { startDirectory: repo, stateDirectory },
+          { host: fakeTeamHost(null) },
+        );
+        assert.include(signedOut.output, "was not started: Not signed in.");
+
+        const timedOut = yield* initRemote(
+          { startDirectory: repo, stateDirectory },
+          { lsRemoteTimesOut: true },
+        );
+        assert.isUndefined(timedOut.failure);
+        assert.include(
+          timedOut.output,
+          "was not started: could not reach origin (Git command timed out.).",
+        );
+        assert.equal(originRefs(origin), "");
+      }),
   );
 });
