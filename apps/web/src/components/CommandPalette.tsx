@@ -2256,6 +2256,11 @@ function OpenCommandPaletteDialog(props: {
         return;
       }
 
+      // team-layer: wait for the project to reach the client, as the clone flow
+      // does, so the first draft reads t3.json instead of defaulting to "local".
+      await waitForProject(scopeProjectRef(input.environmentId, projectId), 3_000).catch(
+        () => null,
+      );
       const navigationResult = await settlePromise(() =>
         handleNewThread(scopeProjectRef(input.environmentId, projectId)),
       );
