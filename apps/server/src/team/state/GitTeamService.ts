@@ -300,6 +300,14 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       return result;
     });
 
+  /** Fetches the others' files and reads the result. Pushes nothing. */
+  const refreshEntry = (entry: TeamEntry, timeoutMs?: number) =>
+    Effect.gen(function* () {
+      const fetched = yield* entry.repo.fetch({ timeoutMs });
+      if (fetched.status !== "unreachable") yield* entry.lock.withPermits(1)(reload(entry));
+      return fetched;
+    });
+
   /** Shares this server's latest writes in {@link TEAM_SYNC_DELAY}, together with any that follow. */
   const scheduleSync = (entry: TeamEntry) =>
     Effect.gen(function* () {
@@ -922,6 +930,12 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         const taken = entry.late.filter((overlap) => sameThread(overlap.mine.thread, thread));
         entry.late = entry.late.filter((overlap) => !taken.includes(overlap));
         return taken;
+      }),
+    refresh: (teamId) =>
+      Effect.gen(function* () {
+        const entry = teams.get(teamId);
+        if (entry === undefined) return yield* new TeamNotFoundError({ teamId });
+        return yield* refreshEntry(entry);
       }),
     sync: (teamId) =>
       Effect.gen(function* () {

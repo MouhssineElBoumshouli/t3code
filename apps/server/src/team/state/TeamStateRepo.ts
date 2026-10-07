@@ -335,7 +335,7 @@ export const make = Effect.fn("TeamStateRepo.make")(function* (options: TeamStat
 
   return {
     /** Fetches the state ref (only that ref, depth 1). */
-    fetch: (fetchOptions?: { readonly timeoutMs?: number }) =>
+    fetch: (fetchOptions?: { readonly timeoutMs?: number | undefined }) =>
       remoteLock.withPermits(1)(fetchUnlocked(fetchOptions?.timeoutMs)),
 
     /** The state as last fetched or pushed, with this server's files on top. No network. */

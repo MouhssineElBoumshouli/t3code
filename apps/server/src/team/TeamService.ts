@@ -32,7 +32,7 @@ import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
 
 import type { TeamLateOverlap } from "./state/TeamStateModel.ts";
-import type { TeamStateSyncResult } from "./state/TeamStateRepo.ts";
+import type { TeamStateFetchResult, TeamStateSyncResult } from "./state/TeamStateRepo.ts";
 import type { TeamNotFoundError, TeamServiceError, TeamStorageError } from "./TeamErrors.ts";
 
 /** Whether this server can use a team, and if not, why. */
@@ -238,6 +238,10 @@ export class TeamService extends Context.Service<
       teamId: TeamId,
       thread: TeamThreadRef,
     ) => Effect.Effect<ReadonlyArray<TeamLateOverlap>>;
+    /** Fetches the others' files now, without pushing this server's. */
+    readonly refresh: (
+      teamId: TeamId,
+    ) => Effect.Effect<TeamStateFetchResult, TeamNotFoundError | TeamStorageError>;
     /** Pushes this server's files and fetches the others' now. */
     readonly sync: (
       teamId: TeamId,
