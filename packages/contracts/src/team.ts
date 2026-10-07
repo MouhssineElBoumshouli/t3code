@@ -1,8 +1,8 @@
 /**
  * Team layer schemas (fork-only). A team is one Git repo, identified by the
  * `teamId` in the repo's checked-in `.team/team.json`; live state (members,
- * claims, tasks, handoffs, activity) lives in the host's `team_*` tables.
- * See team/DESIGN.md in this fork.
+ * claims, tasks, handoffs, activity) lives on a hidden ref of that repo's
+ * remote (./teamState.ts). See team/DESIGN.md and team/STORAGE_PLAN.md.
  */
 import * as Schema from "effect/Schema";
 
@@ -62,14 +62,18 @@ export type Team = typeof Team.Type;
 export const TeamMemberRole = Schema.Literals(["owner", "member"]);
 export type TeamMemberRole = typeof TeamMemberRole.Type;
 
+/**
+ * A person in the team. One person may write from several T3 servers; they
+ * are one member. `memberId` is their GitHub login.
+ */
 export const TeamMember = Schema.Struct({
   memberId: TeamMemberId,
   teamId: TeamId,
   displayName: TrimmedNonEmptyString,
+  /** `owner` is the login that created the team; display only. */
   role: TeamMemberRole,
-  /** The member's own T3 server. */
-  environmentId: EnvironmentId,
-  joinedAt: IsoDateTime,
+  /** When any of this person's servers last changed its writer file. */
+  lastSeenAt: IsoDateTime,
 });
 export type TeamMember = typeof TeamMember.Type;
 

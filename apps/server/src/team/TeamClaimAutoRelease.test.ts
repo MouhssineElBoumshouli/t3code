@@ -14,6 +14,7 @@ import {
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -25,10 +26,10 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { RELEASE_REASONS, TeamClaimAutoReleaseLive } from "./TeamClaimAutoRelease.ts";
 import * as TeamService from "./TeamService.ts";
+import { makeTeamOrigin, testTeamServiceLayer, useTeamOrigin } from "./testing/teamState.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const PROJECT_ID = ProjectId.make("project-1");
@@ -142,11 +143,17 @@ const makeHarness = Effect.fn("makeTeamClaimAutoReleaseHarness")(function* (
   // Every release call, in order, with what it released.
   const releases = yield* Queue.unbounded<Released>();
 
-  // The real service, recording each release call.
+  // The real service on a local origin, recording each release call.
+  const fs = yield* FileSystem.FileSystem;
+  const checkout = yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-release-" });
+  useTeamOrigin(
+    checkout,
+    makeTeamOrigin(yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-origin-" })),
+  );
   const teamContext = yield* Layer.build(
     Layer.effect(
       TeamService.TeamService,
-      TeamService.make.pipe(
+      TeamService.TeamService.pipe(
         Effect.map((service) =>
           TeamService.TeamService.of({
             ...service,
@@ -163,14 +170,19 @@ const makeHarness = Effect.fn("makeTeamClaimAutoReleaseHarness")(function* (
           }),
         ),
       ),
-    ).pipe(Layer.provideMerge(SqlitePersistenceMemory), Layer.provide(NodeServices.layer)),
+    ).pipe(
+      Layer.provide(
+        testTeamServiceLayer({
+          environmentId: ENVIRONMENT_ID,
+          stateDirectory: yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-state-" }),
+        }),
+      ),
+    ),
   );
   const teams = yield* TeamService.TeamService.pipe(Effect.provide(teamContext));
-  const { owner } = yield* teams.ensureTeam({
-    teamFile: TEAM_FILE,
-    canonicalKey: null,
-    owner: { environmentId: ENVIRONMENT_ID, displayName: "Mouhssine" },
-  });
+  const { membership } = yield* teams.ensureTeam({ teamFile: TEAM_FILE, checkout });
+  assert.equal(membership.status, "member");
+  const owner = Option.getOrThrow(yield* teams.currentMember(TEAM_FILE.teamId));
   const claim = (threadId: ThreadId, paths: Array<string>) =>
     teams.claimPaths({
       teamId: TEAM_FILE.teamId,
@@ -243,7 +255,7 @@ const makeHarness = Effect.fn("makeTeamClaimAutoReleaseHarness")(function* (
     publish: (value: OrchestrationEvent) => PubSub.publish(events, value),
     merge: (value: PullRequestService.PullRequestMergeEvent) => PubSub.publish(merges, value),
   };
-});
+}, Effect.provide(NodeServices.layer));
 
 describe("TeamClaimAutoRelease", () => {
   it.effect("keeps claims when a turn ends: nothing releases them by default", () =>

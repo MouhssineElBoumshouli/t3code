@@ -45,6 +45,10 @@ import {
 export const HANDOFF_NOTHING_CHANGED_MESSAGE =
   "Saved, but this chat changed no files and holds no claims. Write a handoff only after editing files or when the user stops work partway, not after answering a question.";
 
+/** A claim whose push did not land: kept on this server, unknown to teammates for now. */
+export const CLAIM_NOT_SHARED_MESSAGE =
+  "Claimed on this computer, not shared yet: the team's remote could not be reached. Overlaps with teammates' newest claims are unknown. It is shared on the next successful sync.";
+
 /** Caps on `team_status`, which every team agent may call often. Oldest items go first. */
 export const TEAM_STATUS_LIMITS = { tasks: 8, claims: 10, pathsPerClaim: 5, activity: 5 };
 
@@ -171,6 +175,23 @@ const make = Effect.gen(function* () {
     ...(claim.note === null ? {} : { note: claim.note }),
   });
 
+  /**
+   * Teammates' claims found to overlap this thread's after both were made
+   * (team/STORAGE_PLAN.md Q4), as sentences; each overlap is told only once.
+   */
+  const lateOverlapsOf = (context: TeamContext) =>
+    Effect.gen(function* () {
+      const late = yield* teams.takeLateOverlaps(context.teamFile.teamId, context.thread);
+      if (late.length === 0) return {};
+      const names = yield* namesOf(context);
+      return {
+        lateOverlaps: late.map(
+          (overlap) =>
+            `Since you claimed, ${names.get(overlap.theirs.memberId) ?? "a teammate"} also claimed ${capPaths(overlap.paths).join(", ")}. Tell the user before editing those.`,
+        ),
+      };
+    });
+
   const heldPaths = (context: TeamContext) =>
     teams.listActiveClaims(context.teamFile.teamId).pipe(
       Effect.mapError(fromService("lookup")),
@@ -212,6 +233,7 @@ const make = Effect.gen(function* () {
             .listActivity(teamId, { limit: TEAM_STATUS_LIMITS.activity })
             .pipe(Effect.mapError(fromService("status")));
           const doNotTouch = yield* readDoNotTouch(context).pipe(withFiles);
+          const late = yield* lateOverlapsOf(context);
 
           const yourTask = tasks.findLast((task) => sameThread(task.thread, context.thread));
           const openTasks = tasks
@@ -251,6 +273,7 @@ const make = Effect.gen(function* () {
                   .flatMap((claim) => claim.paths),
               ),
             ]),
+            ...late,
             recent: activity.map((item) => item.summary),
             ...(omitted.length === 0 ? {} : { omitted: omitted.join(", ") }),
           } satisfies TeamStatusResult;
@@ -285,7 +308,7 @@ const make = Effect.gen(function* () {
           if (paths === undefined || paths.length === 0) {
             return yield* new TeamToolError({ detail: "Pass paths to claim." });
           }
-          const { claim, overlaps } = yield* teams
+          const { claim, overlaps, confirmed } = yield* teams
             .claimPaths({
               teamId,
               memberId: context.member.memberId,
@@ -307,16 +330,22 @@ const make = Effect.gen(function* () {
               ),
             ),
           );
+          const overlapText =
+            shown.length === 0
+              ? null
+              : shown.some((overlap) => overlap.where === CLAIM_WHERE.ownCopy)
+                ? "teammates hold overlapping paths. Their changes are in their own copy and not merged yet, so you may not see them. Tell the user before editing those."
+                : "teammates hold overlapping paths. Tell the user before editing those.";
           return {
             claimed: claim.paths,
             released: [],
             overlaps: shown,
-            message:
-              shown.length === 0
+            ...(yield* lateOverlapsOf(context)),
+            message: !confirmed
+              ? `${CLAIM_NOT_SHARED_MESSAGE}${overlapText === null ? "" : ` Already known: ${overlapText}`}`
+              : overlapText === null
                 ? "Claimed. No overlaps."
-                : shown.some((overlap) => overlap.where === CLAIM_WHERE.ownCopy)
-                  ? "Claimed, but teammates hold overlapping paths. Their changes are in their own copy and not merged yet, so you may not see them. Tell the user before editing those."
-                  : "Claimed, but teammates hold overlapping paths. Tell the user before editing those.",
+                : `Claimed, but ${overlapText}`,
           };
         }),
       ),

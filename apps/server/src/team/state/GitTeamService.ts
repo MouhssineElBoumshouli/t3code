@@ -14,7 +14,8 @@
  * - Every sync looks for late overlaps: a teammate's claim that overlaps one of
  *   this server's, found after both were made. Each is handed out once.
  *
- * Not wired into the server yet (slice 5 swaps it in for `TeamService`).
+ * The server provides it as `TeamService` ({@link layer}); its state repos
+ * live in `<T3 state dir>/team/<teamId>.git`.
  *
  * @module GitTeamService
  */
@@ -24,23 +25,19 @@ import {
   normalizeTeamPath,
   type Team,
   TeamActivityId,
-  type TeamActivity,
   type TeamClaim,
   TeamClaimId,
-  type TeamClaimOverlap,
-  type TeamFile,
   type TeamHandoff,
   TeamHandoffId,
   TeamId,
   type TeamLogin,
+  type TeamMember,
   TEAM_HANDOFF_MAX_WORDS,
   TEAM_STATE_FORMAT,
   TEAM_STATE_TEAM_FILE,
   TeamMemberId,
-  type TeamMemberRole,
   type TeamStateClaim,
   type TeamStateTask,
-  type TeamTask,
   TeamTaskId,
   type TeamThreadRef,
   type ThreadId,
@@ -51,11 +48,14 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
+import * as ServerConfig from "../../config.ts";
+import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import {
   TeamClaimPathsInvalidError,
@@ -66,14 +66,17 @@ import {
   TeamStorageError,
   TeamTaskNotFoundError,
 } from "../TeamErrors.ts";
-import type {
-  ClaimPathsInput,
-  CreateTaskInput,
-  ReleasePathsInput,
-  ReleaseThreadClaimsInput,
-  SaveAutomaticNoteInput,
-  UpdateTaskInput,
-  WriteHandoffInput,
+import {
+  type ClaimPathsInput,
+  type CreateTaskInput,
+  type OpenTeamInput,
+  type ReleasePathsInput,
+  type ReleaseThreadClaimsInput,
+  type SaveAutomaticNoteInput,
+  type TeamMembership,
+  TeamService,
+  type UpdateTaskInput,
+  type WriteHandoffInput,
 } from "../TeamService.ts";
 import * as TeamHost from "./TeamHost.ts";
 import * as Model from "./TeamStateModel.ts";
@@ -87,41 +90,6 @@ export const TEAM_SYNC_DELAY = Duration.seconds(2);
 export const TEAM_CLAIM_NETWORK_TIMEOUT_MS = 3_000;
 
 const DEFAULT_LIST_LIMIT = 50;
-
-/**
- * A person in the team. One person may write from several T3 servers; they
- * are one member. `memberId` is the GitHub login.
- */
-export interface GitTeamMember {
-  readonly memberId: TeamMemberId;
-  readonly teamId: TeamId;
-  readonly displayName: string;
-  /** `owner` is the login that created the team; display only. */
-  readonly role: TeamMemberRole;
-  /** When any of this person's servers last changed its writer file. */
-  readonly lastSeenAt: string;
-}
-
-/** Whether this server can use a team, and if not, why. */
-export type TeamMembership =
-  | { readonly status: "member"; readonly team: Team; readonly member: GitTeamMember }
-  /** The checkout has no `origin` remote. */
-  | { readonly status: "noRemote" }
-  | { readonly status: "signedOut"; readonly detail: string }
-  /** The host says no such repo, which is also what it says without read access. */
-  | { readonly status: "noAccess" }
-  | { readonly status: "noPushAccess" }
-  /** The remote has no team state yet: `t3 team init` starts it. */
-  | { readonly status: "noTeamState" }
-  /** The remote's team state belongs to another team than `.team/team.json` names. */
-  | { readonly status: "otherTeam"; readonly teamId: TeamId }
-  | { readonly status: "unavailable"; readonly detail: string };
-
-export interface OpenTeamInput {
-  readonly teamFile: TeamFile;
-  /** A checkout of the project; its `origin` remote holds the team state. */
-  readonly checkout: string;
-}
 
 export interface GitTeamServiceOptions {
   /** This T3 server. */
@@ -183,7 +151,7 @@ const toTeam = (view: Model.TeamStateView): Team => ({
   createdAt: view.team.createdAt,
 });
 
-const toMember = (view: Model.TeamStateView, member: Model.TeamStateMember): GitTeamMember => ({
+const toMember = (view: Model.TeamStateView, member: Model.TeamStateMember): TeamMember => ({
   memberId: TeamMemberId.make(member.login),
   teamId: view.team.teamId,
   displayName: member.displayName,
@@ -851,86 +819,35 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
 
   const view = (teamId: TeamId) => requireEntry(teamId).pipe(Effect.map(({ view }) => view));
 
-  return {
-    /**
-     * Opens the team a checkout names and says whether this server can use it.
-     * The first open of a team in this process reads the remote; the first
-     * open by this server writes its writer file (joining the team).
-     */
-    openTeam: (input: OpenTeamInput): Effect.Effect<TeamMembership, TeamServiceError> =>
-      open(input, false).pipe(Effect.map((result) => result.membership)),
-
-    /**
-     * Like {@link openTeam}, but starts the team state when the remote has
-     * none: `team.json` and this server's writer file, pushed at once.
-     */
-    ensureTeam: (
-      input: OpenTeamInput,
-    ): Effect.Effect<
-      { readonly membership: TeamMembership; readonly created: boolean },
-      TeamServiceError
-    > => open(input, true),
-
-    getTeam: (teamId: TeamId): Effect.Effect<Option.Option<Team>> =>
+  return TeamService.of({
+    openTeam: (input) => open(input, false).pipe(Effect.map((result) => result.membership)),
+    ensureTeam: (input) => open(input, true),
+    getTeam: (teamId) =>
       Effect.sync(() => {
         const found = teams.get(teamId)?.view;
         return found ? Option.some(toTeam(found)) : Option.none();
       }),
-
-    /** Teams this server has opened, by name. */
-    listTeams: (): Effect.Effect<ReadonlyArray<Team>> =>
+    listTeams: () =>
       Effect.sync(() =>
         [...teams.values()]
           .flatMap((entry) => (entry.view === null ? [] : [toTeam(entry.view)]))
           .toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
       ),
-
-    /** By login. */
-    listMembers: (teamId: TeamId): Effect.Effect<ReadonlyArray<GitTeamMember>, TeamServiceError> =>
+    listMembers: (teamId) =>
       view(teamId).pipe(
         Effect.map((found) => found.members.map((member) => toMember(found, member))),
       ),
-
-    /** Who this server writes as, once {@link openTeam} said `member`. */
-    currentMember: (teamId: TeamId): Effect.Effect<Option.Option<GitTeamMember>> =>
+    currentMember: (teamId) =>
       Effect.sync(() => {
         const entry = teams.get(teamId);
         const login = entry?.me?.login;
         return Option.fromNullishOr(entry && login ? memberOf(entry, login) : null);
       }),
-
-    /**
-     * Adds a claim, shares it at once and returns other threads' active claims
-     * that overlap it, including claims pushed from elsewhere. `confirmed` is
-     * false when the push did not land: the claim is kept on this computer and
-     * the overlaps are only those known before.
-     */
-    claimPaths: (
-      input: ClaimPathsInput,
-    ): Effect.Effect<
-      {
-        readonly claim: TeamClaim;
-        readonly overlaps: ReadonlyArray<TeamClaimOverlap>;
-        readonly confirmed: boolean;
-      },
-      TeamServiceError
-    > => claimPaths(input),
-
-    releasePaths: (
-      input: ReleasePathsInput,
-    ): Effect.Effect<ReadonlyArray<TeamClaim>, TeamServiceError> => releasePaths(input),
-
-    /** Oldest first. */
-    listActiveClaims: (teamId: TeamId): Effect.Effect<ReadonlyArray<TeamClaim>, TeamServiceError> =>
-      view(teamId).pipe(Effect.map((found) => found.activeClaims)),
-
-    /** Releases this server's active claims of a thread, in every team. */
-    releaseThreadClaims: (
-      input: ReleaseThreadClaimsInput,
-    ): Effect.Effect<ReadonlyArray<TeamClaim>, TeamServiceError> => releaseThreadClaims(input),
-
-    /** Threads of this server that hold active claims, in any team. */
-    listClaimedThreads: (forEnvironment: EnvironmentId): Effect.Effect<ReadonlyArray<ThreadId>> =>
+    claimPaths,
+    releasePaths,
+    listActiveClaims: (teamId) => view(teamId).pipe(Effect.map((found) => found.activeClaims)),
+    releaseThreadClaims,
+    listClaimedThreads: (forEnvironment) =>
       Effect.sync(() => {
         const threads = new Set<ThreadId>();
         for (const entry of teams.values()) {
@@ -944,25 +861,15 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         }
         return [...threads].toSorted();
       }),
-
-    createTask: (input: CreateTaskInput): Effect.Effect<TeamTask, TeamServiceError> =>
-      createTask(input),
-    updateTask: (input: UpdateTaskInput): Effect.Effect<TeamTask, TeamServiceError> =>
-      updateTask(input),
-    getTask: (
-      teamId: TeamId,
-      taskId: TeamTaskId,
-    ): Effect.Effect<Option.Option<TeamTask>, TeamServiceError> =>
+    createTask,
+    updateTask,
+    getTask: (teamId, taskId) =>
       view(teamId).pipe(
         Effect.map((found) =>
           Option.fromNullishOr(found.tasks.find((task) => task.taskId === taskId)),
         ),
       ),
-    /** The newest task linked to the thread. */
-    findTaskForThread: (
-      teamId: TeamId,
-      thread: TeamThreadRef,
-    ): Effect.Effect<Option.Option<TeamTask>, TeamServiceError> =>
+    findTaskForThread: (teamId, thread) =>
       view(teamId).pipe(
         Effect.map((found) =>
           Option.fromNullishOr(
@@ -970,21 +877,10 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
           ),
         ),
       ),
-    /** Oldest first. */
-    listTasks: (teamId: TeamId): Effect.Effect<ReadonlyArray<TeamTask>, TeamServiceError> =>
-      view(teamId).pipe(Effect.map((found) => found.tasks)),
-
-    writeHandoff: (input: WriteHandoffInput): Effect.Effect<TeamHandoff, TeamServiceError> =>
-      writeHandoff(input),
-    /** One per thread, updated in place, never an activity line. */
-    saveAutomaticNote: (
-      input: SaveAutomaticNoteInput,
-    ): Effect.Effect<TeamHandoff, TeamServiceError> => saveAutomaticNote(input),
-    /** Newest first; automatic notes included. */
-    listHandoffs: (
-      teamId: TeamId,
-      listOptions?: { readonly thread?: TeamThreadRef; readonly limit?: number },
-    ): Effect.Effect<ReadonlyArray<TeamHandoff>, TeamServiceError> =>
+    listTasks: (teamId) => view(teamId).pipe(Effect.map((found) => found.tasks)),
+    writeHandoff,
+    saveAutomaticNote,
+    listHandoffs: (teamId, listOptions) =>
       view(teamId).pipe(
         Effect.map((found) =>
           found.notes
@@ -995,23 +891,11 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
             .slice(0, listOptions?.limit ?? DEFAULT_LIST_LIMIT),
         ),
       ),
-    /** Newest first. */
-    listActivity: (
-      teamId: TeamId,
-      listOptions?: { readonly limit?: number },
-    ): Effect.Effect<ReadonlyArray<TeamActivity>, TeamServiceError> =>
+    listActivity: (teamId, listOptions) =>
       view(teamId).pipe(
         Effect.map((found) => found.activity.slice(0, listOptions?.limit ?? DEFAULT_LIST_LIMIT)),
       ),
-
-    /**
-     * Late overlaps of the thread's claims not handed out yet; each is handed
-     * out once ("Since you claimed, Yassine also claimed src/auth/login.ts").
-     */
-    takeLateOverlaps: (
-      teamId: TeamId,
-      thread: TeamThreadRef,
-    ): Effect.Effect<ReadonlyArray<Model.TeamLateOverlap>> =>
+    takeLateOverlaps: (teamId, thread) =>
       Effect.sync(() => {
         const entry = teams.get(teamId);
         if (entry === undefined) return [];
@@ -1019,17 +903,28 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         entry.late = entry.late.filter((overlap) => !taken.includes(overlap));
         return taken;
       }),
-
-    /** Pushes this server's files and fetches the others' now. */
-    sync: (
-      teamId: TeamId,
-    ): Effect.Effect<TeamStateRepo.TeamStateSyncResult, TeamNotFoundError | TeamStorageError> =>
+    sync: (teamId) =>
       Effect.gen(function* () {
         const entry = teams.get(teamId);
         if (entry === undefined) return yield* new TeamNotFoundError({ teamId });
         return yield* syncEntry(entry);
       }),
-  };
+  });
 });
 
-export type GitTeamService = Effect.Success<ReturnType<typeof make>>;
+/**
+ * `TeamService` for the server: this server's environment, state repos in
+ * `<state dir>/team`, GitHub through `gh`.
+ */
+export const layer = Layer.effect(
+  TeamService,
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const path = yield* Path.Path;
+    const environment = yield* ServerEnvironment.ServerEnvironment;
+    return yield* make({
+      environmentId: yield* environment.getEnvironmentId,
+      stateDirectory: path.join(config.stateDir, "team"),
+    });
+  }),
+).pipe(Layer.provide(Layer.mergeAll(GitVcsDriver.layer, TeamHost.layer)));

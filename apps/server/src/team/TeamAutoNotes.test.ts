@@ -26,12 +26,17 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { TeamAutoNotesLive } from "./TeamAutoNotes.ts";
 import * as TeamService from "./TeamService.ts";
 import { git, initRepo, writeFile } from "./testing/gitRepo.ts";
+import {
+  makeTeamOrigin,
+  TEST_TEAM_LOGIN,
+  testTeamServiceLayer,
+  useTeamOrigin,
+} from "./testing/teamState.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const PROJECT_ID = ProjectId.make("project-1");
@@ -126,10 +131,16 @@ const makeHarness = Effect.fn("makeTeamAutoNotesHarness")(function* (options: {
   const events = yield* PubSub.unbounded<OrchestrationEvent>();
   // Every saved note, in order.
   const saved = yield* Queue.unbounded<TeamHandoff>();
+  const fs = yield* FileSystem.FileSystem;
+  // The team state lives on the project's origin, a local bare repo here.
+  useTeamOrigin(
+    git(options.workspaceRoot, "rev-parse", "--show-toplevel"),
+    makeTeamOrigin(yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-origin-" })),
+  );
   const teamContext = yield* Layer.build(
     Layer.effect(
       TeamService.TeamService,
-      TeamService.make.pipe(
+      TeamService.TeamService.pipe(
         Effect.map((service) =>
           TeamService.TeamService.of({
             ...service,
@@ -138,14 +149,20 @@ const makeHarness = Effect.fn("makeTeamAutoNotesHarness")(function* (options: {
           }),
         ),
       ),
-    ).pipe(Layer.provideMerge(SqlitePersistenceMemory), Layer.provide(NodeServices.layer)),
+    ).pipe(
+      Layer.provide(
+        testTeamServiceLayer({
+          environmentId: ENVIRONMENT_ID,
+          stateDirectory: yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-state-" }),
+        }),
+      ),
+    ),
   );
   const teams = yield* TeamService.TeamService.pipe(Effect.provide(teamContext));
-  // This server hosts the team, as after `t3 team init` (team/DESIGN.md M2.1).
+  // The team state is on origin with this server as owner, as after `t3 team init`.
   yield* teams.ensureTeam({
     teamFile: TeamFile.make({ teamId: TEAM_ID, name: "Core" }),
-    canonicalKey: null,
-    owner: { environmentId: ENVIRONMENT_ID, displayName: "Mouhssine's laptop" },
+    checkout: options.workspaceRoot,
   });
 
   yield* Layer.build(
@@ -178,7 +195,7 @@ const makeHarness = Effect.fn("makeTeamAutoNotesHarness")(function* (options: {
             getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
             getDescriptor: Effect.succeed({
               environmentId: ENVIRONMENT_ID,
-              label: "Mouhssine's laptop",
+              label: TEST_TEAM_LOGIN,
               platform: { os: "linux" as const, arch: "x64" as const },
               serverVersion: "0.0.0-test",
               capabilities: { repositoryIdentity: true },

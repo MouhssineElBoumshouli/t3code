@@ -13,9 +13,9 @@ The answers below are only in this file and in the seed script, both in the t3co
    node apps/server/scripts/team-cold-start-seed.ts
    ```
 
-   Defaults: `--home-dir ~/.t3-dev`, `--project ~/code/team-demo5`. It prints your member name ("You are ..."). Safe to run again: it rebuilds `~/code/team-demo5` (only if this script made it) and resets the team's rows. After a re-run, archive the project's old chats in T3: their worktrees belonged to the old repo.
+   Defaults: `--home-dir ~/.t3-dev`, `--project ~/code/team-demo5`, `--you` your user name. It makes the repo with a local bare remote next to it (`~/code/team-demo5-remote.git`) and writes the team state to that remote's `refs/t3-team/state` as three servers: yours and Sara's and Omar's. It prints your login ("You are ...") and the command to start the server. Safe to run again: it rebuilds the project and its remote (only if this script made them) and deletes the dev home's copy of this team's state. After a re-run, archive the project's old chats in T3: their worktrees belonged to the old repo.
 
-3. Start the dev server: `vp run dev --home-dir ~/.t3-dev`. Add `~/code/team-demo5` as a project (once; the path stays the same on re-runs).
+3. Start the dev server as you, with the command the script printed: `T3CODE_TEAM_LOGIN_OVERRIDE=<you> vp run dev --home-dir ~/.t3-dev`. A remote on this computer has no GitHub account, so without it the team tools say "not signed in to GitHub". Add `~/code/team-demo5` as a project (once; the path stays the same on re-runs).
 4. Open a new chat in that project. Worktree mode should be on (from the project's `t3.json`).
 5. Ask the five questions below, one at a time, in this exact wording. No hints, no follow-ups that steer.
 6. Repeat in a new chat for each provider you test (D8 asks for Claude Code and Codex in M1).
@@ -23,7 +23,7 @@ The answers below are only in this file and in the seed script, both in the t3co
 ## What the seed holds
 
 - Repo (`main`, three commits): Pinboard app; "Set up team Demo team 5" (`.team/team.json`, rulebook, one decision, `t3.json`); "Search ignores case" (changes `src/pins/search.ts`).
-- Team "Demo team 5": you (this server), Sara and Omar (on their own servers).
+- Team "Demo team 5", on the remote's `refs/t3-team/state`: you (this server, owner), Sara and Omar (on their own servers). Names are logins.
 - Tasks: "Rate-limit the login endpoint" (yours, in progress, not linked to any chat); "Add tag filters to search" (Sara's, in progress).
 - Claims: Sara's chat holds `src/pins/search.ts` and `src/api/routes.ts`; Omar's chat holds `src/auth/session.ts` (no task card).
 - Handoffs: Sara's on search (now **maybe outdated**: the later commit changed `search.ts`), and yours from an earlier chat on rate limiting (fresh).

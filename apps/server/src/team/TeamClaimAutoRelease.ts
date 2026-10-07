@@ -151,9 +151,7 @@ export const make = Effect.gen(function* () {
           yield* release(threadId, RELEASE_REASONS.merged, event.mergedAt);
         }
       }
-    }).pipe(
-      Effect.catch((cause) => Effect.logWarning("Team claim release on merge failed.", { cause })),
-    );
+    });
 
   /** Claims of threads archived or deleted while nothing was listening. */
   const releaseInactive = Effect.gen(function* () {

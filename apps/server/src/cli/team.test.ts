@@ -2,9 +2,9 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeSqlite from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { EnvironmentId, TeamFile, TeamId } from "@t3tools/contracts";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import * as NetService from "@t3tools/shared/Net";
 import { assert, describe, it } from "@effect/vitest";
@@ -14,6 +14,15 @@ import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/unstable/cli";
 
 import { cli } from "../bin.ts";
+import { git } from "../team/testing/gitRepo.ts";
+import {
+  makeTeamOrigin,
+  TEST_TEAM_LOGIN,
+  testTeamServiceLayer,
+  useTeamOrigin,
+} from "../team/testing/teamState.ts";
+import * as TeamService from "../team/TeamService.ts";
+import { TEAM_STATE_NOT_STARTED } from "./team.ts";
 
 const runCli = (args: ReadonlyArray<string>) =>
   Command.runWith(cli, { version: "0.0.0" })(args).pipe(
@@ -30,28 +39,6 @@ const makeRepo = (name = "acme-app") => {
 
 /** A fresh T3 home for `--base-dir`, like a member's new server. */
 const makeHome = () => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-team-home-"));
-
-/** Rows in every team table of a home's database. */
-const teamRowCounts = (home: string) => {
-  const db = new NodeSqlite.DatabaseSync(NodePath.join(home, "userdata", "state.sqlite"), {
-    readOnly: true,
-  });
-  try {
-    const tables = db
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND substr(name, 1, 5) = 'team_' AND name != 'team_sql_migrations' ORDER BY name",
-      )
-      .all() as Array<{ name: string }>;
-    return Object.fromEntries(
-      tables.map(({ name }) => [
-        name,
-        (db.prepare(`SELECT COUNT(*) AS count FROM ${name}`).get() as { count: number }).count,
-      ]),
-    );
-  } finally {
-    db.close();
-  }
-};
 
 const read = (repo: string, file: string) => NodeFS.readFileSync(NodePath.join(repo, file), "utf8");
 const exists = (repo: string, file: string) => NodeFS.existsSync(NodePath.join(repo, file));
@@ -89,8 +76,9 @@ describe("t3 team init", () => {
         assert.include(output, "created   t3.json");
         assert.include(output, "does not commit");
         assert.include(output, "commit them");
-        assert.include(output, `Registered in the T3 home at ${home}, which now hosts this team`);
-        assert.deepInclude(teamRowCounts(home), { team_teams: 1, team_members: 1 });
+        // Starting the team state on the remote is not built yet (team/STORAGE_PLAN.md slice 6).
+        assert.include(output, TEAM_STATE_NOT_STARTED);
+        assert.isFalse(NodeFS.existsSync(NodePath.join(home, "userdata", "team")));
         // It never touches Git itself.
         assert.deepEqual(NodeFS.readdirSync(NodePath.join(repo, ".git")), []);
       }),
@@ -215,62 +203,42 @@ describe("t3 team init", () => {
     }),
   );
 
-  it.effect("registers once: running it again keeps one team and one owner", () =>
+  it.effect("status lists the teams the home has opened, with their members", () =>
     Effect.gen(function* () {
       const repo = makeRepo();
       const home = makeHome();
       yield* runCli(["team", "init", repo, "--name", "Core", "--base-dir", home]);
-      yield* runCli(["team", "init", repo, "--base-dir", home]);
-      assert.include(yield* lastOutput, `Already hosted by the T3 home at ${home}.`);
-      assert.deepInclude(teamRowCounts(home), { team_teams: 1, team_members: 1 });
+      // The home's server opened the team, which started its state on origin.
+      git(repo, "init", "--quiet");
+      useTeamOrigin(repo, makeTeamOrigin(NodePath.dirname(repo)));
+      yield* TeamService.TeamService.pipe(
+        Effect.flatMap((teams) =>
+          teams.ensureTeam({
+            teamFile: TeamFile.make({ teamId: TeamId.make(readTeam(repo).teamId), name: "Core" }),
+            checkout: repo,
+          }),
+        ),
+        Effect.provide(
+          testTeamServiceLayer({
+            environmentId: EnvironmentId.make("environment-1"),
+            stateDirectory: NodePath.join(home, "userdata", "team"),
+          }),
+        ),
+      );
 
       yield* runCli(["team", "status", "--base-dir", home]);
       const status = yield* lastOutput;
-      assert.include(status, `Teams hosted by the T3 home at ${home}:`);
+      assert.include(status, `Teams the T3 home at ${home} has opened, as last fetched:`);
       assert.include(status, `Core (teamId ${readTeam(repo).teamId})`);
-      assert.match(status, /members: .+ \(owner\)/u);
+      assert.match(status, new RegExp(`members: ${TEST_TEAM_LOGIN} \\(owner, last seen `, "u"));
     }),
   );
 
-  // Security (team/DESIGN.md 7.2 S7, M2.1): a member's server must never make
-  // itself owner of a team it only found in a cloned repo.
-  it.effect("never registers a cloned repo's team on a fresh server, and writes nothing", () =>
-    Effect.gen(function* () {
-      const hostRepo = makeRepo("host-copy");
-      const hostHome = makeHome();
-      yield* runCli(["team", "init", hostRepo, "--name", "Core", "--base-dir", hostHome]);
-
-      // The member's clone: the team files came with the repo.
-      const clone = makeRepo("member-copy");
-      NodeFS.cpSync(NodePath.join(hostRepo, ".team"), NodePath.join(clone, ".team"), {
-        recursive: true,
-      });
-      NodeFS.rmSync(NodePath.join(clone, ".team", "rulebook.md"));
-      const memberHome = makeHome();
-
-      const failure = yield* runCli(["team", "init", clone, "--base-dir", memberHome]).pipe(
-        Effect.flip,
-      );
-      assert.include(String(failure), 'This repo is already team "Core"');
-      assert.include(String(failure), "joining from a clone is not supported yet");
-      assert.include(String(failure), "Nothing was written or registered.");
-      // Refused before any write: the missing rulebook and t3.json stay missing.
-      assert.isFalse(exists(clone, ".team/rulebook.md"));
-      assert.isFalse(exists(clone, "t3.json"));
-      for (const [table, count] of Object.entries(teamRowCounts(memberHome))) {
-        assert.equal(count, 0, table);
-      }
-
-      yield* runCli(["team", "status", "--base-dir", memberHome]);
-      assert.include(yield* lastOutput, `The T3 home at ${memberHome} hosts no teams.`);
-    }),
-  );
-
-  it.effect("status says so for a home with no data, without creating a database", () =>
+  it.effect("status says so for a home with no teams, without creating a database", () =>
     Effect.gen(function* () {
       const home = makeHome();
       yield* runCli(["team", "status", "--base-dir", home]);
-      assert.include(yield* lastOutput, `No T3 data at ${home} yet, so it hosts no teams.`);
+      assert.include(yield* lastOutput, `The T3 home at ${home} has opened no teams.`);
       assert.isFalse(NodeFS.existsSync(NodePath.join(home, "userdata", "state.sqlite")));
     }),
   );

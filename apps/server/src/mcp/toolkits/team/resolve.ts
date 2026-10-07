@@ -1,8 +1,11 @@
 /**
  * thread -> project -> working folder -> `.team/team.json` -> team and this
- * server's member (team/DESIGN.md D5). Shared by the team tools and the team
- * briefing, so both agree on which threads are in a team. It never registers
- * a team: only `t3 team init` on the host does (M2.1).
+ * server's member (team/DESIGN.md D5). Shared by the team tools, the team
+ * briefing and automatic notes, so all agree on which threads are in a team.
+ *
+ * The team state lives on the project's remote (team/STORAGE_PLAN.md), so
+ * opening the team asks the Git host whether this person may use it. It never
+ * starts the team state: only `t3 team init` does.
  */
 import type {
   EnvironmentId,
@@ -27,11 +30,34 @@ const NOT_IN_TEAM: NotInTeamResult = {
   message: "This project is not in a team, so team tools do nothing here. Carry on without them.",
 };
 
-/** The result for a team file whose team this server does not host (M2.1). */
-export const hostedElsewhere = (teamFile: TeamFile): NotInTeamResult => ({
-  inTeam: false,
-  message: `This project is in team ${teamFile.name}, which is hosted on another T3 server. This server has not joined it, so team tools do nothing here. Joining from another server is not supported yet.`,
-});
+/** Why this server cannot use the team a project names, in words the agent can pass on. */
+export const notInTeamReason = (
+  teamFile: TeamFile,
+  membership: Exclude<TeamService.TeamMembership, { readonly status: "member" }>,
+): NotInTeamResult => {
+  const why = (() => {
+    switch (membership.status) {
+      case "noRemote":
+        return "its Git repo has no origin remote, where the team's shared state lives";
+      case "signedOut":
+        return "this computer is not signed in to GitHub (run gh auth login)";
+      case "noAccess":
+        return "the GitHub account signed in here cannot see the project's repo";
+      case "noPushAccess":
+        return "the GitHub account signed in here cannot push to the project's repo";
+      case "noTeamState":
+        return "the project's remote has no team state yet (t3 team init starts it)";
+      case "otherTeam":
+        return `the project's remote holds the state of another team (${membership.teamId})`;
+      case "unavailable":
+        return `the team state could not be read right now: ${membership.detail}`;
+    }
+  })();
+  return {
+    inTeam: false,
+    message: `This project is in team ${teamFile.name}, but ${why}. Team tools do nothing here.`,
+  };
+};
 
 export interface TeamContext {
   readonly teamFile: TeamFile;
@@ -97,27 +123,13 @@ export const makeTeamResolver = Effect.gen(function* () {
       if (Option.isNone(found)) return notInTeam(NOT_IN_TEAM);
       const { teamFile, teamRoot } = found.value;
 
-      const existing = yield* teams
-        .getTeam(teamFile.teamId)
-        .pipe(Effect.mapError(fromService("lookup")));
-      if (Option.isNone(existing)) {
-        // Only the host has the team's row (team/DESIGN.md M2.1): a file with no
-        // row is a clone of a team that another server hosts. Never register it.
-        return notInTeam(hostedElsewhere(teamFile));
-      }
       const membership = yield* teams
-        .findMemberByEnvironment(teamFile.teamId, scope.environmentId)
+        .openTeam({ teamFile, checkout: teamRoot })
         .pipe(Effect.mapError(fromService("lookup")));
-      if (Option.isNone(membership)) {
-        return notInTeam({
-          inTeam: false,
-          message: `This project is in team ${teamFile.name}, but this T3 server is not a member. Team tools do nothing here.`,
-        });
-      }
-      const member = membership.value;
+      if (membership.status !== "member") return notInTeam(notInTeamReason(teamFile, membership));
       return inTeamWith({
         teamFile,
-        member,
+        member: membership.member,
         thread: { environmentId: scope.environmentId, threadId: scope.threadId },
         teamRoot,
         workingFolder,

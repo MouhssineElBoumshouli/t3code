@@ -67,6 +67,8 @@ export const TeamStatusResult = Schema.Struct({
   /** Other threads' claims, newest first, capped. */
   claims: Schema.Array(ClaimSummary),
   yourClaims: Schema.Array(Schema.String),
+  /** Teammates' claims that overlap yours, found since you claimed; each told once. */
+  lateOverlaps: Schema.optionalKey(Schema.Array(Schema.String)),
   recent: Schema.Array(Schema.String),
   /** How many older items were left out, when any were. */
   omitted: Schema.optionalKey(Schema.String),
@@ -77,6 +79,8 @@ export const TeamClaimResult = Schema.Struct({
   claimed: Schema.Array(Schema.String),
   released: Schema.Array(Schema.String),
   overlaps: Schema.Array(ClaimSummary),
+  /** Teammates' claims that overlap this thread's earlier claims, found since; each told once. */
+  lateOverlaps: Schema.optionalKey(Schema.Array(Schema.String)),
   message: Schema.String,
 });
 export type TeamClaimResult = typeof TeamClaimResult.Type;

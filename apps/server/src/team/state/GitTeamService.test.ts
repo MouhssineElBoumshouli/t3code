@@ -26,6 +26,7 @@ import * as ServerConfig from "../../config.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../../vcs/VcsProcess.ts";
 import { git } from "../testing/gitRepo.ts";
+import type { TeamMembership } from "../TeamService.ts";
 import * as GitTeamService from "./GitTeamService.ts";
 import * as TeamHost from "./TeamHost.ts";
 
@@ -150,7 +151,7 @@ const bench = Effect.gen(function* () {
   };
 });
 
-const memberOf = (membership: GitTeamService.TeamMembership) => {
+const memberOf = (membership: TeamMembership) => {
   if (membership.status !== "member") {
     return assert.fail(`expected a member, got ${JSON.stringify(membership)}`);
   }

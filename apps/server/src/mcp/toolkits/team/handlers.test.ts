@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - a temp origin per test, made and removed synchronously.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
@@ -5,11 +10,12 @@ import {
   ProviderInstanceId,
   TeamFile,
   TeamId,
+  TeamMemberId,
   ThreadId,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
-import { assert, describe, it } from "@effect/vitest";
+import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -18,20 +24,27 @@ import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { Tool } from "effect/unstable/ai";
 
 import * as ServerConfig from "../../../config.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
 import { TEAM_RULEBOOK_TEMPLATE } from "../../../team/TeamProjectFiles.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import { commitAll, git, initRepo, writeFile } from "../../../team/testing/gitRepo.ts";
+import {
+  fakeTeamHost,
+  makeTeamOrigin,
+  TEST_TEAM_LOGIN,
+  testTeamServiceLayer,
+  useTeamOrigin,
+} from "../../../team/testing/teamState.ts";
+import type * as TeamHost from "../../../team/state/TeamHost.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import {
+  CLAIM_NOT_SHARED_MESSAGE,
   CLAIM_WHERE,
   HANDOFF_NOTHING_CHANGED_MESSAGE,
   TEAM_STATUS_LIMITS,
@@ -46,6 +59,21 @@ const THREAD_B = ThreadId.make("thread-b");
 const THREAD_C = ThreadId.make("thread-c");
 const TEAM_ID = TeamId.make("team-1");
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+const TEAM_FILE = TeamFile.make({ teamId: TEAM_ID, name: "Core" });
+/** The fake host's login is the member's name in every result. */
+const ME = TEST_TEAM_LOGIN;
+
+/**
+ * One `origin` per test, shared by every team folder of that test: the team
+ * state lives there (team/STORAGE_PLAN.md).
+ */
+let originRoot = "";
+let originUrl = "";
+beforeEach(() => {
+  originRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-team-origin-"));
+  originUrl = makeTeamOrigin(originRoot);
+});
+afterEach(() => NodeFS.rmSync(originRoot, { recursive: true, force: true }));
 
 type ToolName = keyof typeof TeamToolkit.tools;
 type ToolResult<Name extends ToolName> = Tool.Success<(typeof TeamToolkit.tools)[Name]>;
@@ -97,6 +125,7 @@ const writeTeamFile = (root: string) =>
       path.join(root, ".team", "team.json"),
       `{ "teamId": "${TEAM_ID}", "name": "Core" }`,
     );
+    useTeamOrigin(root, originUrl);
   });
 
 interface HarnessOptions {
@@ -105,10 +134,12 @@ interface HarnessOptions {
   readonly worktreePath?: string | null;
   /** Worktrees for single threads, over `worktreePath`. */
   readonly worktrees?: Partial<Record<ThreadId, string | null>>;
-  /** Run real Git instead of the mock (`gitCalls` stays empty). */
+  /** Run real Git for the tools instead of the mock (`gitCalls` stays empty). */
   readonly realGit?: boolean;
-  /** Register the team with this server as owner, as `t3 team init` does. Default true. */
-  readonly hostsTeam?: boolean;
+  /** Start the team state on `origin` with this server as owner, as `t3 team init` will. Default true. */
+  readonly startsTeam?: boolean;
+  /** Default: {@link ME}, signed in with push access. */
+  readonly host?: TeamHost.TeamHost["Service"];
 }
 
 const RealGitLayer = GitVcsDriver.layer.pipe(
@@ -119,7 +150,13 @@ const RealGitLayer = GitVcsDriver.layer.pipe(
 
 const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: HarnessOptions) {
   const gitCalls = yield* Ref.make<ReadonlyArray<GitVcsDriver.ExecuteGitInput>>([]);
-  const teamLayer = TeamService.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory));
+  const fs = yield* FileSystem.FileSystem;
+  // The team service always runs real Git: its state is a Git repo.
+  const teamLayer = testTeamServiceLayer({
+    environmentId: ENVIRONMENT_ID,
+    stateDirectory: yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-state-" }),
+    host: options.host,
+  });
   const dependencies = Layer.mergeAll(
     teamLayer,
     Layer.mock(ProjectionSnapshotQuery)({
@@ -151,7 +188,7 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
       getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
       getDescriptor: Effect.succeed({
         environmentId: ENVIRONMENT_ID,
-        label: "Mouhssine's laptop",
+        label: ME,
         platform: { os: "linux" as const, arch: "x64" as const },
         serverVersion: "0.0.0-test",
         capabilities: { repositoryIdentity: true },
@@ -184,18 +221,20 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
       Effect.provide(context),
     );
   const teams = yield* TeamService.TeamService.pipe(Effect.provide(context));
-  if (options.hostsTeam !== false) {
-    yield* teams.ensureTeam({
-      teamFile: TeamFile.make({ teamId: TEAM_ID, name: "Core" }),
-      canonicalKey: null,
-      owner: { environmentId: ENVIRONMENT_ID, displayName: "Mouhssine's laptop" },
+  if (options.startsTeam !== false) {
+    const started = yield* teams.ensureTeam({
+      teamFile: TEAM_FILE,
+      checkout: options.worktreePath ?? options.workspaceRoot,
     });
+    assert.equal(started.membership.status, "member");
   }
-  const sql = yield* SqlClient.SqlClient.pipe(Effect.provide(context));
-  return { call, teams, gitCalls, sql };
-});
+  return { call, teams, gitCalls };
+}, Effect.provide(NodeServices.layer));
 
-/** A temp project folder; with `team: true` it holds `.team/team.json`. */
+/**
+ * A temp project folder; with `team: true` it holds `.team/team.json` and is a
+ * Git repo whose `origin` is this test's.
+ */
 const makeProjectFolder = (team: boolean) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -203,6 +242,23 @@ const makeProjectFolder = (team: boolean) =>
     if (team) yield* writeTeamFile(root);
     return root;
   }).pipe(Effect.provide(NodeServices.layer));
+
+/** Another person's T3 server, on this test's origin. */
+const teammate = (login: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const context = yield* Layer.build(
+      testTeamServiceLayer({
+        environmentId: EnvironmentId.make(`${login}-server`),
+        stateDirectory: yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-mate-" }),
+        host: fakeTeamHost(login),
+      }),
+    );
+    return yield* TeamService.TeamService.pipe(Effect.provide(context));
+  }).pipe(Effect.provide(NodeServices.layer));
+
+/** The state ref on this test's origin; empty when there is none. */
+const originStateRefs = () => git(NodePath.join(originRoot, "origin.git"), "for-each-ref");
 
 const inTeam = <R>(result: R) => {
   assert.isFalse(
@@ -223,7 +279,7 @@ describe("team toolkit", () => {
   it.effect("answers every tool with a plain result in a project that is not in a team", () =>
     Effect.gen(function* () {
       const root = yield* makeProjectFolder(false);
-      const { call, teams } = yield* makeHarness({ workspaceRoot: root, hostsTeam: false });
+      const { call, teams } = yield* makeHarness({ workspaceRoot: root, startsTeam: false });
       const results = [
         yield* call("team_status", {}),
         yield* call("team_claim", { paths: ["src/a.ts"] }),
@@ -242,66 +298,79 @@ describe("team toolkit", () => {
     }),
   );
 
-  // Security (team/DESIGN.md 7.2 S7, M2.1): a member's server must never make
-  // itself owner of a team it only found in a cloned repo.
-  it.effect(
-    "never registers a team from a cloned repo: every tool says it is hosted elsewhere",
-    () =>
-      Effect.gen(function* () {
-        const root = yield* makeProjectFolder(true);
-        const { call, sql } = yield* makeHarness({ workspaceRoot: root, hostsTeam: false });
-        const results = [
-          yield* call("team_status", {}),
-          yield* call("team_claim", { paths: ["src/a.ts"] }),
-          yield* call("team_task", { title: "Anything", status: "in_progress" }),
-          yield* call("team_handoff", { changed: "Something.", files: ["src/a.ts"] }),
-          yield* call("team_memory_search", { query: "login" }),
-          yield* call("team_status", {}, THREAD_B),
-        ];
-        for (const result of results) {
-          assert.deepEqual(result, {
-            inTeam: false,
-            message:
-              "This project is in team Core, which is hosted on another T3 server. This server has not joined it, so team tools do nothing here. Joining from another server is not supported yet.",
-          });
-        }
-        const tables = yield* sql<{ readonly name: string }>`
-        SELECT name FROM sqlite_master
-        WHERE type = 'table' AND substr(name, 1, 5) = 'team_' AND name != 'team_sql_migrations'
-      `;
-        assert.includeMembers(
-          tables.map((table) => table.name),
-          [
-            "team_teams",
-            "team_members",
-            "team_claims",
-            "team_tasks",
-            "team_handoffs",
-            "team_activity",
-          ],
-        );
-        for (const { name } of tables) {
-          const rows = yield* sql.unsafe<{ readonly count: number }>(
-            `SELECT COUNT(*) AS count FROM ${name}`,
-          );
-          assert.equal(rows[0]?.count, 0, name);
-        }
-      }),
-  );
-
-  it.effect("says so when this server is not a member of a team it already knows", () =>
+  // Only `t3 team init` starts the team state: a tool call never pushes it.
+  it.effect("says so when the remote has no team state, and never starts it", () =>
     Effect.gen(function* () {
       const root = yield* makeProjectFolder(true);
-      const { call, teams } = yield* makeHarness({ workspaceRoot: root, hostsTeam: false });
-      yield* teams.ensureTeam({
-        teamFile: TeamFile.make({ teamId: TEAM_ID, name: "Core" }),
-        canonicalKey: null,
-        owner: { environmentId: EnvironmentId.make("someone-else"), displayName: "Host" },
-      });
-      const result = yield* call("team_status", {});
-      assert.deepInclude(result, { inTeam: false });
-      assert.include((result as { message: string }).message, "not a member");
+      const { call, teams } = yield* makeHarness({ workspaceRoot: root, startsTeam: false });
+      const results = [
+        yield* call("team_status", {}),
+        yield* call("team_claim", { paths: ["src/a.ts"] }),
+        yield* call("team_task", { title: "Anything", status: "in_progress" }),
+        yield* call("team_handoff", { changed: "Something.", files: ["src/a.ts"] }),
+        yield* call("team_memory_search", { query: "login" }),
+        yield* call("team_status", {}, THREAD_B),
+      ];
+      for (const result of results) {
+        assert.deepEqual(result, {
+          inTeam: false,
+          message:
+            "This project is in team Core, but the project's remote has no team state yet (t3 team init starts it). Team tools do nothing here.",
+        });
+      }
+      assert.equal(originStateRefs(), "");
+      assert.isTrue(Option.isNone(yield* teams.getTeam(TEAM_ID)));
     }),
+  );
+
+  it.effect("gives the reason when this server cannot use the team", () =>
+    Effect.gen(function* () {
+      const reasonOf = (result: unknown) => {
+        assert.deepInclude(result, { inTeam: false });
+        return (result as NotInTeamResult).message;
+      };
+
+      // Signed out of GitHub, on a team someone else started.
+      const root = yield* makeProjectFolder(true);
+      const sara = yield* teammate("Sara");
+      yield* sara.ensureTeam({ teamFile: TEAM_FILE, checkout: root });
+      const signedOut = yield* makeHarness({
+        workspaceRoot: root,
+        startsTeam: false,
+        host: fakeTeamHost(null),
+      });
+      assert.equal(
+        reasonOf(yield* signedOut.call("team_status", {})),
+        "This project is in team Core, but this computer is not signed in to GitHub (run gh auth login). Team tools do nothing here.",
+      );
+
+      // A repo with no origin remote.
+      const noRemote = yield* makeProjectFolder(true);
+      git(noRemote, "remote", "remove", "origin");
+      const local = yield* makeHarness({ workspaceRoot: noRemote, startsTeam: false });
+      assert.equal(
+        reasonOf(yield* local.call("team_status", {})),
+        "This project is in team Core, but its Git repo has no origin remote, where the team's shared state lives. Team tools do nothing here.",
+      );
+
+      // The remote holds another team's state.
+      const other = yield* makeProjectFolder(true);
+      const otherOrigin = makeTeamOrigin(
+        yield* FileSystem.FileSystem.pipe(
+          Effect.flatMap((fs) => fs.makeTempDirectoryScoped({ prefix: "t3-team-origin-" })),
+        ),
+      );
+      useTeamOrigin(other, otherOrigin);
+      yield* sara.ensureTeam({
+        teamFile: TeamFile.make({ teamId: TeamId.make("team-2"), name: "Other" }),
+        checkout: other,
+      });
+      const elsewhere = yield* makeHarness({ workspaceRoot: other, startsTeam: false });
+      assert.equal(
+        reasonOf(yield* elsewhere.call("team_claim", { paths: ["src/a.ts"] })),
+        "This project is in team Core, but the project's remote holds the state of another team (team-2). Team tools do nothing here.",
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("finds the team file at the repo root when the project is a subfolder", () =>
@@ -309,7 +378,6 @@ describe("team toolkit", () => {
       const repo = yield* makeProjectFolder(true);
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      yield* fs.makeDirectory(path.join(repo, ".git"));
       const workspaceRoot = path.join(repo, "packages", "web");
       yield* fs.makeDirectory(workspaceRoot, { recursive: true });
       const { call } = yield* makeHarness({ workspaceRoot });
@@ -334,7 +402,7 @@ describe("team toolkit", () => {
       assert.deepEqual(mine.claimed, ["src/auth/login.ts", "docs/auth.md"]);
       assert.deepEqual(mine.overlaps, [
         {
-          who: "Mouhssine's laptop",
+          who: ME,
           task: "no task",
           where: CLAIM_WHERE.sameCheckout,
           paths: ["src/auth"],
@@ -382,7 +450,7 @@ describe("team toolkit", () => {
         task: {
           title: "Add login",
           status: "in_progress",
-          owner: "Mouhssine's laptop",
+          owner: ME,
           note: "Use OAuth.",
         },
         message: "Created this thread's task.",
@@ -395,7 +463,7 @@ describe("team toolkit", () => {
         yield* call("team_task", { status: "in_review", note: "", title: "Other" }),
       );
       assert.deepEqual(moved, {
-        task: { title: "Add login", status: "in_review", owner: "Mouhssine's laptop" },
+        task: { title: "Add login", status: "in_review", owner: ME },
         message: "This thread already has a task; the title was not changed.",
       });
 
@@ -564,7 +632,7 @@ describe("team toolkit", () => {
       assert.deepEqual(full.yourTask, {
         title: "My task",
         status: "in_progress",
-        owner: "Mouhssine's laptop",
+        owner: ME,
       });
       assert.lengthOf(full.tasks, TEAM_STATUS_LIMITS.tasks);
       assert.equal(full.tasks[0]?.title, `Task ${TEAM_STATUS_LIMITS.tasks + extraTasks - 1}`);
@@ -581,7 +649,7 @@ describe("team toolkit", () => {
         `file-${TEAM_STATUS_LIMITS.claims + extraClaims - 1}.ts`,
       ]);
       assert.notDeepInclude(full.claims, {
-        who: "Mouhssine's laptop",
+        who: ME,
         task: "no task",
         where: CLAIM_WHERE.sameCheckout,
         paths: ["file-1.ts"],
@@ -622,8 +690,8 @@ describe("team toolkit", () => {
       assert.sameDeepMembers(
         mine.overlaps.map(({ who, task }) => ({ who, task })),
         [
-          { who: "Mouhssine's laptop", task: "Login page" },
-          { who: "Mouhssine's laptop", task: "no task" },
+          { who: ME, task: "Login page" },
+          { who: ME, task: "no task" },
         ],
       );
       const status = inTeam(yield* call("team_status", {}));
@@ -674,6 +742,80 @@ describe("team toolkit", () => {
       assert.equal(
         sameCheckout.message,
         "Claimed, but teammates hold overlapping paths. Tell the user before editing those.",
+      );
+    }),
+  );
+
+  it.effect("says a claim is not shared yet when the remote cannot be reached", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      const { call, teams } = yield* makeHarness({ workspaceRoot: root });
+      yield* call("team_claim", { paths: ["src/b.ts"] }, THREAD_B);
+      const origin = NodePath.join(originRoot, "origin.git");
+      NodeFS.renameSync(origin, `${origin}.offline`);
+
+      const offline = inTeam(yield* call("team_claim", { paths: ["src/a.ts", "src/b.ts"] }));
+      assert.deepEqual(offline.claimed, ["src/a.ts", "src/b.ts"]);
+      // Overlaps known before still show; the message says the rest is unknown.
+      assert.deepEqual(
+        offline.overlaps.map(({ paths }) => paths),
+        [["src/b.ts"]],
+      );
+      assert.equal(
+        offline.message,
+        `${CLAIM_NOT_SHARED_MESSAGE} Already known: teammates hold overlapping paths. Tell the user before editing those.`,
+      );
+      // Kept on this server, and shared once the remote is back.
+      const status = inTeam(yield* call("team_status", {}));
+      assert.deepEqual(status.yourClaims, ["src/a.ts", "src/b.ts"]);
+      NodeFS.renameSync(`${origin}.offline`, origin);
+      assert.isTrue((yield* teams.sync(TEAM_ID)).confirmed);
+      assert.include(
+        git(origin, "show", `refs/t3-team/state:writers/${ME}/${ENVIRONMENT_ID}.json`),
+        '"src/a.ts"',
+      );
+    }),
+  );
+
+  it.effect("tells a thread once about a teammate's claim that overlaps it later", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      const { call, teams } = yield* makeHarness({ workspaceRoot: root });
+      const mine = inTeam(yield* call("team_claim", { paths: ["src/login.ts"] }));
+      assert.equal(mine.message, "Claimed. No overlaps.");
+
+      // Sara claims the same file from her own server after that.
+      const sara = yield* teammate("Sara");
+      assert.equal(
+        (yield* sara.openTeam({ teamFile: TEAM_FILE, checkout: root })).status,
+        "member",
+      );
+      const hers = yield* sara.claimPaths({
+        teamId: TEAM_ID,
+        memberId: TeamMemberId.make("Sara"),
+        thread: { environmentId: EnvironmentId.make("Sara-server"), threadId: THREAD_C },
+        paths: ["src/"],
+      });
+      // She hears of it at once, from her claim's result.
+      assert.deepEqual(
+        hers.overlaps.map(({ paths }) => paths),
+        [["src/login.ts"]],
+      );
+
+      yield* teams.sync(TEAM_ID);
+      const late = [
+        `Since you claimed, Sara also claimed src. Tell the user before editing those.`,
+      ];
+      // Only the claiming thread is told, and only once.
+      assert.notProperty(inTeam(yield* call("team_status", {}, THREAD_B)), "lateOverlaps");
+      assert.deepEqual(inTeam(yield* call("team_status", {})).lateOverlaps, late);
+      assert.notProperty(inTeam(yield* call("team_status", {})), "lateOverlaps");
+      // Sara's claim is a normal overlap from now on.
+      const again = inTeam(yield* call("team_claim", { paths: ["src/login.ts"] }));
+      assert.notProperty(again, "lateOverlaps");
+      assert.deepEqual(
+        again.overlaps.map(({ who, paths }) => ({ who, paths })),
+        [{ who: "Sara", paths: ["src"] }],
       );
     }),
   );
@@ -731,7 +873,7 @@ describe("team toolkit", () => {
       });
       assert.deepInclude(handoff, {
         says: "Login form posts to /api/login. Left: Error states.",
-        who: "Mouhssine's laptop",
+        who: ME,
         files: ["src/login.ts"],
       });
       assert.match(handoff!.when, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/u);

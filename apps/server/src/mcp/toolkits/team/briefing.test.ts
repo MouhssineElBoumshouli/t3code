@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - a temp origin per test, made and removed synchronously.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
@@ -9,7 +14,7 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
-import { afterEach, assert, describe, it } from "@effect/vitest";
+import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -18,9 +23,17 @@ import * as Path from "effect/Path";
 
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
+import type * as TeamHost from "../../../team/state/TeamHost.ts";
 import { readTeamBriefing, renderTeamBriefing } from "../../../team/TeamBriefing.ts";
 import * as TeamService from "../../../team/TeamService.ts";
+import { git } from "../../../team/testing/gitRepo.ts";
+import {
+  fakeTeamHost,
+  makeTeamOrigin,
+  TEST_TEAM_LOGIN,
+  testTeamServiceLayer,
+  useTeamOrigin,
+} from "../../../team/testing/teamState.ts";
 import * as McpProviderSession from "../../McpProviderSession.ts";
 import { TeamBriefingLive, makeTeamBriefingResolver } from "./briefing.ts";
 
@@ -28,6 +41,16 @@ const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const PROJECT_ID = ProjectId.make("project-1");
 const THREAD_ID = ThreadId.make("thread-a");
 const TEAM_ID = TeamId.make("team-1");
+const TEAM_FILE = TeamFile.make({ teamId: TEAM_ID, name: "Core" });
+
+/** Per test: the team's `origin` and this server's state folder. */
+let testRoot = "";
+let originUrl = "";
+beforeEach(() => {
+  testRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-team-briefing-origin-"));
+  originUrl = makeTeamOrigin(testRoot);
+});
+afterEach(() => NodeFS.rmSync(testRoot, { recursive: true, force: true }));
 
 function makeProject(workspaceRoot: string): OrchestrationProjectShell {
   return {
@@ -90,31 +113,28 @@ const makeFolder = (options: { readonly team: boolean }) =>
         path.join(root, ".team", "team.json"),
         `{ "teamId": "${TEAM_ID}", "name": "Core" }`,
       );
+      useTeamOrigin(root, originUrl);
     }
     return root;
   });
 
-/** This server hosts the team, as after `t3 team init` (team/DESIGN.md M2.1). */
-const RegisterHostedTeam = Layer.effectDiscard(
-  TeamService.TeamService.pipe(
-    Effect.flatMap((teams) =>
-      teams.ensureTeam({
-        teamFile: TeamFile.make({ teamId: TEAM_ID, name: "Core" }),
-        canonicalKey: null,
-        owner: { environmentId: ENVIRONMENT_ID, displayName: "Mouhssine's laptop" },
-      }),
-    ),
-    Effect.orDie,
-  ),
-);
+interface DependencyOptions {
+  /** Start the team state on `origin` with this server as owner. Default true. */
+  readonly startsTeam?: boolean;
+  readonly host?: TeamHost.TeamHost["Service"];
+}
 
 const makeDependencies = (
   workspaceRoot: string,
   worktreePath: string | null = null,
-  options: { readonly hostsTeam?: boolean } = {},
+  options: DependencyOptions = {},
 ) =>
   Layer.mergeAll(
-    TeamService.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    testTeamServiceLayer({
+      environmentId: ENVIRONMENT_ID,
+      stateDirectory: NodePath.join(testRoot, "state"),
+      host: options.host,
+    }),
     Layer.mock(ProjectionSnapshotQuery)({
       getThreadShellById: (threadId) =>
         Effect.succeed(
@@ -126,7 +146,7 @@ const makeDependencies = (
       getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
       getDescriptor: Effect.succeed({
         environmentId: ENVIRONMENT_ID,
-        label: "Mouhssine's laptop",
+        label: TEST_TEAM_LOGIN,
         platform: { os: "linux" as const, arch: "x64" as const },
         serverVersion: "0.0.0-test",
         capabilities: { repositoryIdentity: true },
@@ -134,16 +154,23 @@ const makeDependencies = (
     }),
   ).pipe(
     (dependencies) =>
-      options.hostsTeam === false
+      options.startsTeam === false
         ? dependencies
-        : RegisterHostedTeam.pipe(Layer.provideMerge(dependencies)),
+        : Layer.effectDiscard(
+            TeamService.TeamService.pipe(
+              Effect.flatMap((teams) =>
+                teams.ensureTeam({ teamFile: TEAM_FILE, checkout: worktreePath ?? workspaceRoot }),
+              ),
+              Effect.orDie,
+            ),
+          ).pipe(Layer.provideMerge(dependencies)),
     Layer.provideMerge(NodeServices.layer),
   );
 
 const briefingIn = (
   workspaceRoot: string,
   worktreePath: string | null = null,
-  options: { readonly hostsTeam?: boolean } = {},
+  options: DependencyOptions = {},
 ) =>
   Effect.gen(function* () {
     const resolver = yield* makeTeamBriefingResolver;
@@ -152,7 +179,7 @@ const briefingIn = (
 
 const EXPECTED = renderTeamBriefing({
   teamName: "Core",
-  memberName: "Mouhssine's laptop",
+  memberName: TEST_TEAM_LOGIN,
   rulebookPath: ".team/rulebook.md",
 });
 
@@ -167,7 +194,7 @@ describe("team briefing resolver", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("briefs a thread in a team this server hosts", () =>
+  it.effect("briefs a thread in a team this server is a member of", () =>
     Effect.gen(function* () {
       attachMcp();
       const root = yield* makeFolder({ team: true });
@@ -175,8 +202,8 @@ describe("team briefing resolver", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  // Security (team/DESIGN.md 7.2 S7, M2.1): no briefing and no team row for a clone.
-  it.effect("gives no briefing and registers nothing for a team hosted elsewhere", () =>
+  // Only `t3 team init` starts the team state; a briefing lookup never does.
+  it.effect("gives no briefing, and starts nothing, when the remote has no team state", () =>
     Effect.gen(function* () {
       attachMcp();
       const root = yield* makeFolder({ team: true });
@@ -187,9 +214,10 @@ describe("team briefing resolver", () => {
           Effect.flatMap((teams) => teams.getTeam(TEAM_ID)),
         );
         return { briefing, team };
-      }).pipe(Effect.provide(makeDependencies(root, null, { hostsTeam: false })));
+      }).pipe(Effect.provide(makeDependencies(root, null, { startsTeam: false })));
       assert.isUndefined(briefing);
       assert.isTrue(Option.isNone(team));
+      assert.equal(git(NodePath.join(testRoot, "origin.git"), "for-each-ref"), "");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -199,7 +227,6 @@ describe("team briefing resolver", () => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const repo = yield* makeFolder({ team: true });
-      yield* fs.makeDirectory(path.join(repo, ".git"));
       const project = path.join(repo, "packages", "web");
       yield* fs.makeDirectory(project, { recursive: true });
       const briefing = yield* briefingIn(project);
@@ -223,20 +250,25 @@ describe("team briefing resolver", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("gives no briefing when this server is not a member of the team", () =>
+  it.effect("gives no briefing when this server cannot use the team", () =>
     Effect.gen(function* () {
       attachMcp();
       const root = yield* makeFolder({ team: true });
-      const briefing = yield* Effect.gen(function* () {
-        const teams = yield* TeamService.TeamService;
-        yield* teams.ensureTeam({
-          teamFile: TeamFile.make({ teamId: TEAM_ID, name: "Core" }),
-          canonicalKey: null,
-          owner: { environmentId: EnvironmentId.make("someone-else"), displayName: "Host" },
-        });
-        const resolver = yield* makeTeamBriefingResolver;
-        return yield* resolver(THREAD_ID);
-      }).pipe(Effect.provide(makeDependencies(root, null, { hostsTeam: false })));
+      // Sara started the team from her server; this one is signed out of GitHub.
+      yield* TeamService.TeamService.pipe(
+        Effect.flatMap((teams) => teams.ensureTeam({ teamFile: TEAM_FILE, checkout: root })),
+        Effect.provide(
+          testTeamServiceLayer({
+            environmentId: EnvironmentId.make("sara-server"),
+            stateDirectory: NodePath.join(testRoot, "sara-state"),
+            host: fakeTeamHost("Sara"),
+          }),
+        ),
+      );
+      const briefing = yield* briefingIn(root, null, {
+        startsTeam: false,
+        host: fakeTeamHost(null),
+      });
       assert.isUndefined(briefing);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
