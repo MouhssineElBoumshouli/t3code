@@ -2,6 +2,61 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — The poller pushes writes that did not land; why the first chat used the local checkout; slice 8 (two people for real)
+
+**What changed**
+
+- **Poller retry** (3f85420c2): every sync now records whether this server's files reached the remote (`unshared` on the team entry: set when a sync is not confirmed or fails, cleared when one is). While it is set, the poller syncs instead of its ETag check, with the same backoff (30 s doubling to 15 min). When a state repo is loaded, a new `TeamStateRepo.pending` (no network) compares this server's files with the tree as last fetched, so writes a previous run could not push are retried too, once the team is opened in this run. New poll outcome `pushed`.
+- **"Local checkout" in the slice 6/7 self-test: upstream, not our code.** No code change. Details under "Unsure about / notes".
+- **Slice 8**, as written in STORAGE_PLAN.md 3.7: two dev servers (`~/.t3-dev` as you, `~/.t3-dev-member` as `Yassine-T3Test` through the dev login override), two clones of the private scratch repo, one Playwright chat on each. For it I added four small source files to the scratch repo's `main` (d744af6) and cloned `~/code/t3-team-scratch-member`.
+
+**Files touched**
+
+- `apps/server/src/team/state/GitTeamService.ts` and `.test.ts`, `apps/server/src/team/state/TeamStateRepo.ts`. No upstream file.
+- `team/PROGRESS.md`.
+
+**How it was checked**
+
+- `vp test run src/mcp/toolkits/team/ src/team/ src/cli/team.test.ts src/auth/ChatGptRpcScopes.test.ts` in `apps/server`: 16 files, **156 passed** (154 before + 2 new). Typecheck `apps/server` (`tsc --noEmit`, no dev server running): 0 errors. Lint on `src/team/state/`: clean.
+- New tests: a claim made with origin offline: the next check retries and fails (backs off 30 s), origin back, the next check says `pushed` and origin holds the claim, gh was not asked while it waited, then back to ETag checks with no further push. And: a claim a stopped server could not push is pushed at the first check after a restarted server opens the team.
+- Mutation checks, restored with `cmp`: poller ignoring `unshared`: both new tests fail; `pending` always false: the restart test fails.
+- **Slice 8 self-test** (`test-screenshots` 0d896c09c, folder `2026-10-07-slice8/`, 23 pictures, NOTES.md has every step and picture). Timing from Git: a script read both state repos every 0.5 s; "seen" is when the other server's state ref held that version (or a newer one) of the writer file.
+
+  | What                                | Direction                     | Pushed      | Seen by the other |
+  | ----------------------------------- | ----------------------------- | ----------- | ----------------- |
+  | Member joins                        | member → host                 | 5.8 s       | 9.0 s             |
+  | Claim `query.ts`                    | host → member                 | 2.7 s       | 10.6 s            |
+  | Task (search)                       | host → member                 | 5.1 s       | 7.9 s             |
+  | Claim `avatar.ts`                   | member → host                 | 2.7 s       | 5.3 s             |
+  | Task (avatar)                       | member → host                 | 5.3 s       | 19.1 s            |
+  | Handoff (search)                    | host → member                 | 4.8 s       | 5.9 s             |
+  | Handoff (avatar)                    | member → host                 | 4.3 s       | 15.8 s            |
+  | Race 1 claim `format.ts`            | member → host / host → member | 3.2 / 5.3 s | 5.8 / 9.5 s       |
+  | Race 2 claim `client.ts`            | member → host / host → member | 3.2 / 3.2 s | 7.9 / 19.5 s      |
+  | Host claims `avatar.ts` (edit test) | host → member                 | 3.2 s       | 12.2 s            |
+
+  All 12 under 20 s (5.3 to 19.5 s, median about 9 s), both ways.
+  - Claims and tasks: each side's agent listed the other's claim and task when asked "what is the team working on" (no tool named). Once the host's agent asked 1 s before its poller fetched Yassine's task, so that answer had the claim but not the task; asked again it had both.
+  - Handoffs: both crossed (checked in each state repo). The host's agent read Yassine's note; Yassine's agent first said it could not (see notes), then found it when asked about `src/search/query.ts`.
+  - Race: both chats got "claim src/shared/format.ts as your first action" in the same second. The agents' claims landed 2.1 s apart, so the second (host) was warned in its claim result; the first (member) got "No overlaps", then at its next `team_status` the late overlap ("Since you claimed, MouhssineElBoumshouli also claimed src/shared/format.ts. Tell the user before editing those.", from the agent's transcript). Both warned. A second race (`client.ts`) landed 8 s apart, same result.
+  - Edit a file the other holds, tools not named: both agents stopped before editing, named the teammate, their task and handoff, and asked whether to go ahead. `git status` clean in both clones and worktrees.
+  - Both servers stopped by their PIDs, then their four children on the ports (working folders in this checkout). Monitor stopped, browser closed. No typecheck ran while the servers ran.
+
+**What's left**
+
+- Read-only mode without push access (from slice 5).
+- Handoffs are hard for agents to find (see notes). Not fixed; say if you want it.
+- Step 1 of VISION.md is otherwise done (slices 0 to 8).
+
+**Unsure about / notes**
+
+- **Why the first chat used the local checkout.** Upstream reads `defaultThreadEnvMode` in `useHandleNewThread.ts` (`resolveDefaultEnvMode`): project override, then the environment setting, then `t3.json`, then the built-in `local` (`packages/shared/src/projectSettings.ts`). It reads `t3.json` only when `project !== undefined`, and `project` comes from `readProjects()` at call time. "Add project → Local folder" (`CommandPalette.tsx`, about line 2235) calls `handleNewThread` right after `createProject` returns, before the new project reaches the client, so `t3.json` is skipped and the draft gets `local`. The clone flow in the same file waits first (`waitForProject(projectRef, 3_000)`, with a comment saying why). `~/.t3-dev` has no environment-level or project value set, so nothing else decided it. Seen live in slice 8: the draft right after adding the member's clone said "Current checkout" (`m00`), the next new thread for the same project said "New worktree" (`m01`), and the host's (known project) said "New worktree" (`h00`). Every chat after the first follows `t3.json`. **Smallest fix (upstream, not made):** in that local-folder branch, add `await waitForProject(scopeProjectRef(input.environmentId, projectId), 3_000).catch(() => null);` before `handleNewThread`, as the clone flow does. The setup wizard's project import (`WelcomeWizard.tsx`) may have the same race; not checked.
+- **The true same-second race was not reached in the UI**: agents made their claim calls 2.1 s and 8 s apart, outside the ~3 s window where neither sees the other. That case is covered by the GitTeamService test and the 6 GitHub races in STORAGE_PLAN.md Q4, not by this self-test.
+- **Handoffs are hard to find.** `team_status` shows "X wrote a handoff note" but not the note; `team_memory_search` with "handoff" finds nothing, since it searches the note's text. Both agents tried "handoff" first. A small fix would be listing teammates' latest handoffs in `team_status`.
+- In the edit test the host's agent claimed `avatar.ts` for its own thread before asking, so there is now a second overlapping claim on it. It still asked before editing.
+- Retry backoff: while offline, the retry waits like a failed check (up to 15 minutes), so after a long outage the push can take up to 15 minutes after the network is back. Say if you want a shorter cap for retries.
+- Left in place: `~/code/t3-team-scratch-member`, `~/.t3-dev-member`, the two chat worktrees and their branches in the scratch clones, the scratch repo's state ref (now with this round's claims, tasks and handoffs) and its `main` commit d744af6.
+
 ## 2026-10-07 — First-turn briefing fix; slice 6 (`t3 team init` on the remote); slice 7 (the poller); self-test on GitHub
 
 **What changed**
