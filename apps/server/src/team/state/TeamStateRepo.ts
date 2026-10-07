@@ -41,6 +41,11 @@ export type TeamStateFetchResult =
   /** Offline, no access, or too slow. */
   | { readonly status: "unreachable" };
 
+export type TeamStateRemoteTip =
+  | { readonly status: "tip"; readonly sha: string }
+  | { readonly status: "missing" }
+  | { readonly status: "unreachable" };
+
 export type TeamStateSyncResult =
   | {
       readonly confirmed: true;
@@ -337,6 +342,19 @@ export const make = Effect.fn("TeamStateRepo.make")(function* (options: TeamStat
     /** Fetches the state ref (only that ref, depth 1). */
     fetch: (fetchOptions?: { readonly timeoutMs?: number | undefined }) =>
       remoteLock.withPermits(1)(fetchUnlocked(fetchOptions?.timeoutMs)),
+
+    /** The state ref's commit as last fetched or pushed; null before the first. No network. */
+    localTip: localTip.pipe(Effect.map((tip) => tip || null)),
+
+    /** The state ref's commit on the remote, with `git ls-remote` (for remotes without gh). */
+    remoteTip: (timeoutMs?: number) =>
+      network("remoteTip", ["ls-remote", "origin", TEAM_STATE_REF], timeoutMs).pipe(
+        Effect.map((result): TeamStateRemoteTip => {
+          if (result === null || result.exitCode !== 0) return { status: "unreachable" };
+          const sha = result.stdout.trim().split(/\s/u)[0] ?? "";
+          return sha === "" ? { status: "missing" } : { status: "tip", sha };
+        }),
+      ),
 
     /** The state as last fetched or pushed, with this server's files on top. No network. */
     read: Effect.gen(function* () {

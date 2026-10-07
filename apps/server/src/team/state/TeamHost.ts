@@ -62,6 +62,8 @@ export type TeamHostRefCheck =
   | { readonly status: "current"; readonly sha: string; readonly etag: string | null }
   /** The remote has no team state. */
   | { readonly status: "missing" }
+  /** gh is not installed or not signed in: check with plain Git instead. */
+  | { readonly status: "noApi"; readonly detail: string }
   | { readonly status: "unavailable"; readonly detail: string };
 
 export class TeamHost extends Context.Service<
@@ -200,6 +202,7 @@ export const make = Effect.fn("TeamHost.make")(function* (options: TeamHostOptio
         Effect.catch((error) =>
           Effect.succeed({
             ok: false,
+            notInstalled: error._tag === "VcsProcessSpawnError",
             detail:
               error._tag === "VcsProcessSpawnError"
                 ? "The GitHub CLI (gh) is not installed."
@@ -318,13 +321,23 @@ export const make = Effect.fn("TeamHost.make")(function* (options: TeamHostOptio
         ...(etag === null ? [] : ["-H", `If-None-Match: ${etag}`]),
         `repos/${repo.owner}/${repo.name}/git/ref/${TEAM_STATE_REF.replace(/^refs\//u, "")}`,
       ]);
-      if (!result.ok) return { status: "unavailable", detail: result.detail } as const;
+      if (!result.ok) {
+        return result.notInstalled
+          ? ({ status: "noApi", detail: result.detail } as const)
+          : ({ status: "unavailable", detail: result.detail } as const);
+      }
       // gh exits 1 on a 304 as on any other non-2xx, so the status line decides.
       const response = parseHttpResponse(result.output.stdout);
       if (response === null) {
-        return { status: "unavailable", detail: firstLine(result.output.stderr) } as const;
+        // Signed out, gh sends nothing and says to run `gh auth login`.
+        return /gh auth login/u.test(result.output.stderr)
+          ? ({ status: "noApi", detail: "gh is not signed in." } as const)
+          : ({ status: "unavailable", detail: firstLine(result.output.stderr) } as const);
       }
       if (response.status === 304) return { status: "unchanged" } as const;
+      if (response.status === 401) {
+        return { status: "noApi", detail: "GitHub refused gh's sign-in (HTTP 401)." } as const;
+      }
       if (response.status === 404) return { status: "missing" } as const;
       if (response.status !== 200) {
         return {

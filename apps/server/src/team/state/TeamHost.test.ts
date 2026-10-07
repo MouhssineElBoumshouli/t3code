@@ -310,7 +310,7 @@ describe("TeamHost.refChanged", () => {
     }),
   );
 
-  it.effect("is unavailable on a rate limit, a garbled answer or no gh", () =>
+  it.effect("is unavailable on a rate limit, a garbled answer or offline", () =>
     Effect.gen(function* () {
       const limited = yield* hostWith(() => ({
         exitCode: 1,
@@ -329,9 +329,25 @@ describe("TeamHost.refChanged", () => {
         status: "unavailable",
         detail: "dial tcp: no such host",
       });
+    }),
+  );
 
+  it.effect("says to check with Git instead without gh or a working sign-in", () =>
+    Effect.gen(function* () {
       const missing = yield* hostWith(() => "not-installed");
-      assert.equal((yield* missing.host.refChanged(repo, null)).status, "unavailable");
+      assert.equal((yield* missing.host.refChanged(repo, null)).status, "noApi");
+
+      const signedOut = yield* hostWith(() => ({
+        exitCode: 4,
+        stderr: "To get started with GitHub CLI, please run:  gh auth login\n",
+      }));
+      assert.equal((yield* signedOut.host.refChanged(repo, null)).status, "noApi");
+
+      const refused = yield* hostWith(() => ({
+        exitCode: 1,
+        stdout: httpOutput("401 Unauthorized", {}, "{}"),
+      }));
+      assert.equal((yield* refused.host.refChanged(repo, null)).status, "noApi");
     }),
   );
 });

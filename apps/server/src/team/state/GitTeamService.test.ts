@@ -15,11 +15,15 @@ import {
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
+import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../config.ts";
@@ -78,17 +82,27 @@ const bench = Effect.gen(function* () {
   const pushes: Array<string> = [];
   let pushLanded: Deferred.Deferred<void> | null = null;
 
+  /** Network Git commands of the state repos, as `<server>:<command>`. */
+  const networkCalls: Array<string> = [];
+  const countCalls = (call: string) => networkCalls.filter((made) => made === call).length;
+
   const server = (input: {
     readonly name: string;
     readonly environmentId: EnvironmentId;
     readonly host: TeamHost.TeamHost["Service"];
+    readonly locate?: GitTeamService.GitTeamServiceOptions["locate"];
+    readonly onPoll?: GitTeamService.GitTeamServiceOptions["onPoll"];
   }) =>
     Effect.gen(function* () {
       const real = yield* GitVcsDriver.GitVcsDriver;
       const recording: GitVcsDriver.GitVcsDriver["Service"] = {
         ...real,
-        execute: (execute) =>
-          execute.args[0] !== "push"
+        execute: (execute) => {
+          const command = execute.args[0] ?? "";
+          if (["fetch", "ls-remote", "push"].includes(command)) {
+            networkCalls.push(`${input.name}:${command}`);
+          }
+          return command !== "push"
             ? real.execute(execute)
             : real.execute(execute).pipe(
                 Effect.tap(() =>
@@ -97,11 +111,14 @@ const bench = Effect.gen(function* () {
                     if (pushLanded !== null) yield* Deferred.succeed(pushLanded, undefined);
                   }),
                 ),
-              ),
+              );
+        },
       };
       return yield* GitTeamService.make({
         environmentId: input.environmentId,
         stateDirectory: path.join(root, input.name, "team"),
+        locate: input.locate,
+        onPoll: input.onPoll,
       }).pipe(
         Effect.provideService(GitVcsDriver.GitVcsDriver, recording),
         Effect.provideService(TeamHost.TeamHost, input.host),
@@ -127,6 +144,9 @@ const bench = Effect.gen(function* () {
       .split("\n")
       .filter((line) => line.length > 0);
   const originFile = (file: string) => git(origin, "show", `${TEAM_STATE_REF}:${file}`);
+  /** The state ref's commit on origin; null when it has none. */
+  const originTip = () =>
+    git(origin, "for-each-ref", "--format=%(objectname)", TEAM_STATE_REF) || null;
   const takeOffline = () => NodeFS.renameSync(origin, `${origin}.offline`);
   const bringOnline = () => NodeFS.renameSync(`${origin}.offline`, origin);
   /** Resolves when the next push lands. */
@@ -148,6 +168,8 @@ const bench = Effect.gen(function* () {
     bringOnline,
     nextPush,
     pushes,
+    originTip,
+    countCalls,
   };
 });
 
@@ -931,6 +953,256 @@ describe("GitTeamService (new on Git)", () => {
       const unsafe = TeamFile.make({ teamId: TeamId.make("../escape"), name: "Bad" });
       const error = yield* open(fakeHost(signedIn("Friend")), b.checkout, unsafe).pipe(Effect.flip);
       assert.equal(error._tag, "TeamStorageError");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+});
+
+/** Where the poller tests say the repo lives, so it is checked with ETags as on GitHub. */
+const onGitHub = () => ({ host: "github.com", owner: "acme", name: "app" });
+
+type Bench = Effect.Success<typeof bench>;
+
+/**
+ * A host that answers ETag checks like GitHub: the ETag is the ref's commit
+ * on origin, so it answers "unchanged" until the ref moves. `mode` makes it
+ * fail, or say gh cannot check.
+ */
+const gitHubLikeHost = (b: Bench, login: string) => {
+  const state = {
+    mode: "ok" as "ok" | "failing" | "noApi",
+    /** The commit GitHub reports, when set; else origin's. */
+    pinnedSha: null as string | null,
+    /** The ETag sent with each check. */
+    checks: [] as Array<string | null>,
+  };
+  const host = TeamHost.TeamHost.of({
+    login: () => Effect.succeed(signedIn(login)),
+    repoAccess: () => Effect.succeed({ status: "found", canPush: true, isPublic: false }),
+    refChanged: (_repo, etag) =>
+      Effect.sync((): TeamHost.TeamHostRefCheck => {
+        state.checks.push(etag);
+        if (state.mode === "failing") return { status: "unavailable", detail: "offline" };
+        if (state.mode === "noApi") return { status: "noApi", detail: "gh is not installed." };
+        const sha = state.pinnedSha ?? b.originTip();
+        if (sha === null) return { status: "missing" };
+        return etag === `"${sha}"`
+          ? { status: "unchanged" }
+          : { status: "current", sha, etag: `"${sha}"` };
+      }),
+  });
+  return { host, state };
+};
+
+/** The owner's server, watched by the poller, with the team started on origin. */
+const setUpPolledOwner = Effect.gen(function* () {
+  const b = yield* bench;
+  const owner = gitHubLikeHost(b, "Mouhssine");
+  const polls = yield* Queue.unbounded<GitTeamService.TeamPollOutcome>();
+  const teams = yield* b.server({
+    name: "owner",
+    environmentId: ownerEnvironment,
+    host: owner.host,
+    locate: onGitHub,
+    onPoll: (_teamId, outcome) => Queue.offer(polls, outcome).pipe(Effect.asVoid),
+  });
+  memberOf((yield* teams.ensureTeam({ teamFile, checkout: b.checkout })).membership);
+  /** Moves the clock and waits for the owner's next check. */
+  const nextCheck = (after: Duration.Input) =>
+    TestClock.adjust(after).pipe(Effect.andThen(Queue.take(polls)));
+  return { ...b, teams, owner, polls, nextCheck };
+});
+
+describe("GitTeamService poller", () => {
+  it("waits 15 s, or 60 s with ls-remote, and backs off from 30 s to at most 15 minutes", () => {
+    const delay = (mode: GitTeamService.TeamPollMode, failures: number) =>
+      Duration.toSeconds(GitTeamService.nextPollDelay({ mode, failures }));
+    assert.deepEqual(
+      [0, 1, 2, 3, 6, 20].map((failures) => delay("etag", failures)),
+      [15, 30, 60, 120, 900, 900],
+    );
+    assert.equal(delay("lsRemote", 0), 60);
+    assert.equal(delay("lsRemote", 1), 30);
+  });
+
+  it.effect("checks every 15 seconds and fetches nothing while the ref stays put (304)", () =>
+    Effect.gen(function* () {
+      const set = yield* setUpPolledOwner;
+      const fetches = set.countCalls("owner:fetch");
+
+      assert.equal(yield* set.nextCheck("15 seconds"), "unchanged");
+      assert.equal(yield* set.nextCheck("15 seconds"), "unchanged");
+      assert.equal(yield* set.nextCheck("15 seconds"), "unchanged");
+      // The first check had no ETag; later ones send the one GitHub gave.
+      const etag = `"${set.originTip()}"`;
+      assert.deepEqual(set.owner.state.checks, [null, etag, etag]);
+      assert.equal(set.countCalls("owner:fetch"), fetches);
+      assert.equal(set.countCalls("owner:ls-remote"), 0);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("fetches once when a teammate pushes, and finds their claim and the late overlap", () =>
+    Effect.gen(function* () {
+      const set = yield* setUpPolledOwner;
+      const friendTeams = yield* set.friendServer();
+      const friend = memberOf(yield* friendTeams.openTeam({ teamFile, checkout: set.checkout }));
+      yield* friendTeams.sync(teamFile.teamId);
+      // The owner's own claim is pushed with the friend's file already fetched.
+      yield* set.teams.claimPaths({
+        teamId: teamFile.teamId,
+        memberId: TeamMemberId.make("Mouhssine"),
+        thread: threadA,
+        paths: ["src/auth"],
+      });
+      // The friend claims the same folder after the owner's last fetch.
+      yield* friendTeams.claimPaths({
+        teamId: teamFile.teamId,
+        memberId: friend.memberId,
+        thread: friendThread,
+        paths: ["src/auth/login.ts"],
+      });
+      const fetches = set.countCalls("owner:fetch");
+      assert.isFalse(
+        (yield* set.teams.listActiveClaims(teamFile.teamId)).some(
+          (claim) => claim.memberId === friend.memberId,
+        ),
+      );
+
+      assert.equal(yield* set.nextCheck("15 seconds"), "fetched");
+      assert.equal(set.countCalls("owner:fetch"), fetches + 1);
+      const claims = yield* set.teams.listActiveClaims(teamFile.teamId);
+      assert.deepEqual(
+        claims.filter((claim) => claim.memberId === friend.memberId).map((claim) => claim.paths),
+        [["src/auth/login.ts"]],
+      );
+      const late = yield* set.teams.takeLateOverlaps(teamFile.teamId, threadA);
+      assert.lengthOf(late, 1);
+      assert.equal(late[0]!.theirs.paths[0], "src/auth/login.ts");
+
+      // One fetch per change: the next checks see the same tip.
+      assert.equal(yield* set.nextCheck("15 seconds"), "unchanged");
+      assert.equal(yield* set.nextCheck("15 seconds"), "unchanged");
+      assert.equal(set.countCalls("owner:fetch"), fetches + 1);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("fetches again after a fetch failed, even though GitHub then answers 304", () =>
+    Effect.gen(function* () {
+      const set = yield* setUpPolledOwner;
+      const friendTeams = yield* set.friendServer();
+      memberOf(yield* friendTeams.openTeam({ teamFile, checkout: set.checkout }));
+      yield* friendTeams.sync(teamFile.teamId);
+
+      // GitHub says the ref moved, but the fetch cannot reach origin.
+      set.owner.state.pinnedSha = set.originTip();
+      set.takeOffline();
+      assert.equal(yield* set.nextCheck("15 seconds"), "failed");
+      set.bringOnline();
+      set.owner.state.pinnedSha = null;
+
+      assert.equal(yield* set.nextCheck("30 seconds"), "fetched");
+      assert.deepEqual(
+        (yield* set.teams.listMembers(teamFile.teamId)).map((member) => member.memberId),
+        ["Friend", "Mouhssine"],
+      );
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("backs off after failed checks and goes back to 15 seconds after one works", () =>
+    Effect.gen(function* () {
+      const set = yield* setUpPolledOwner;
+      set.owner.state.mode = "failing";
+      assert.equal(yield* set.nextCheck("15 seconds"), "failed");
+
+      // 30 seconds after the first failure, not 15.
+      yield* TestClock.adjust("29 seconds");
+      assert.equal(yield* Queue.size(set.polls), 0);
+      assert.equal(yield* set.nextCheck("1 second"), "failed");
+
+      // Then 60 seconds.
+      yield* TestClock.adjust("59 seconds");
+      assert.equal(yield* Queue.size(set.polls), 0);
+      set.owner.state.mode = "ok";
+      assert.equal(yield* set.nextCheck("1 second"), "unchanged");
+
+      // Back to every 15 seconds.
+      yield* TestClock.adjust("14 seconds");
+      assert.equal(yield* Queue.size(set.polls), 0);
+      assert.equal(yield* set.nextCheck("1 second"), "unchanged");
+      assert.lengthOf(set.owner.state.checks, 4);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("checks with git ls-remote every 60 seconds when gh cannot check", () =>
+    Effect.gen(function* () {
+      const set = yield* setUpPolledOwner;
+      set.owner.state.mode = "noApi";
+      assert.equal(yield* set.nextCheck("15 seconds"), "fallback");
+
+      // A teammate joins: the ref moves.
+      const friendTeams = yield* set.friendServer();
+      memberOf(yield* friendTeams.openTeam({ teamFile, checkout: set.checkout }));
+      yield* friendTeams.sync(teamFile.teamId);
+      const fetches = set.countCalls("owner:fetch");
+
+      yield* TestClock.adjust("59 seconds");
+      assert.equal(yield* Queue.size(set.polls), 0);
+      assert.equal(yield* set.nextCheck("1 second"), "fetched");
+      assert.equal(set.countCalls("owner:ls-remote"), 1);
+      assert.equal(set.countCalls("owner:fetch"), fetches + 1);
+      assert.deepEqual(
+        (yield* set.teams.listMembers(teamFile.teamId)).map((member) => member.memberId),
+        ["Friend", "Mouhssine"],
+      );
+
+      assert.equal(yield* set.nextCheck("60 seconds"), "unchanged");
+      assert.equal(set.countCalls("owner:ls-remote"), 2);
+      // gh was asked once, then never again.
+      assert.lengthOf(set.owner.state.checks, 1);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("stops when the server stops", () =>
+    Effect.gen(function* () {
+      const b = yield* bench;
+      const owner = gitHubLikeHost(b, "Mouhssine");
+      const polls = yield* Queue.unbounded<GitTeamService.TeamPollOutcome>();
+      const serverScope = yield* Scope.make();
+      const teams = yield* b
+        .server({
+          name: "owner",
+          environmentId: ownerEnvironment,
+          host: owner.host,
+          locate: onGitHub,
+          onPoll: (_teamId, outcome) => Queue.offer(polls, outcome).pipe(Effect.asVoid),
+        })
+        .pipe(Effect.provideService(Scope.Scope, serverScope));
+      memberOf((yield* teams.ensureTeam({ teamFile, checkout: b.checkout })).membership);
+      yield* TestClock.adjust("15 seconds");
+      assert.equal(yield* Queue.take(polls), "unchanged");
+
+      yield* Scope.close(serverScope, Exit.void);
+      yield* TestClock.adjust("1 hour");
+      assert.equal(yield* Queue.size(polls), 0);
+      assert.lengthOf(owner.state.checks, 1);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("does not watch a team this server has not opened in this run", () =>
+    Effect.gen(function* () {
+      const set = yield* setUpPolledOwner;
+      // A restart: the team is on disk, not opened yet.
+      const restartedPolls = yield* Queue.unbounded<GitTeamService.TeamPollOutcome>();
+      const restartedHost = gitHubLikeHost(set, "Mouhssine");
+      yield* set.server({
+        name: "owner",
+        environmentId: ownerEnvironment,
+        host: restartedHost.host,
+        locate: onGitHub,
+        onPoll: (_teamId, outcome) => Queue.offer(restartedPolls, outcome).pipe(Effect.asVoid),
+      });
+      yield* TestClock.adjust("15 seconds");
+      assert.equal(yield* Queue.take(restartedPolls), "idle");
+      assert.lengthOf(restartedHost.state.checks, 0);
     }).pipe(Effect.provide(TestLayer)),
   );
 });

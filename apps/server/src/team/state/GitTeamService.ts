@@ -13,6 +13,10 @@
  *   writes are pushed together about 2 seconds later (STORAGE_PLAN.md 4.9).
  * - Every sync looks for late overlaps: a teammate's claim that overlaps one of
  *   this server's, found after both were made. Each is handed out once.
+ * - A poller per team checks every 15 seconds whether the state ref moved
+ *   (an ETag request through gh, free when nothing changed; `git ls-remote`
+ *   every 60 seconds without gh) and fetches only when it did. It backs off
+ *   after failures and stops with the server.
  *
  * The server provides it as `TeamService` ({@link layer}); its state repos
  * live in `<T3 state dir>/team/<teamId>.git`.
@@ -47,6 +51,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -88,6 +93,37 @@ export const TEAM_MEMBERSHIP_TTL = Duration.minutes(10);
 export const TEAM_SYNC_DELAY = Duration.seconds(2);
 /** A claim's fetch and push each get this long (STORAGE_PLAN.md Q4). */
 export const TEAM_CLAIM_NETWORK_TIMEOUT_MS = 3_000;
+/** The poller's ETag check: free on GitHub when nothing changed (STORAGE_PLAN.md Q2). */
+export const TEAM_POLL_INTERVAL = Duration.seconds(15);
+/** Without gh (or a remote on no Git host), `git ls-remote`, which GitHub does count. */
+export const TEAM_POLL_FALLBACK_INTERVAL = Duration.seconds(60);
+/** After a failed check the wait doubles from this, up to the max (upstream's SourceControlRateLimit). */
+export const TEAM_POLL_BACKOFF = Duration.seconds(30);
+export const TEAM_POLL_MAX_BACKOFF = Duration.minutes(15);
+
+export type TeamPollMode = "etag" | "lsRemote";
+
+/** What one check of the poller did, for tests and logs. */
+export type TeamPollOutcome =
+  /** Not opened in this run, so nothing to watch yet. */
+  | "idle"
+  | "unchanged"
+  | "fetched"
+  /** gh could not check; from now on this team is checked with `git ls-remote`. */
+  | "fallback"
+  | "failed";
+
+/** The wait before the poller's next check of a team. */
+export const nextPollDelay = (input: {
+  readonly mode: TeamPollMode;
+  readonly failures: number;
+}): Duration.Duration => {
+  if (input.failures === 0) {
+    return input.mode === "etag" ? TEAM_POLL_INTERVAL : TEAM_POLL_FALLBACK_INTERVAL;
+  }
+  const backoff = Duration.toMillis(TEAM_POLL_BACKOFF) * 2 ** (input.failures - 1);
+  return Duration.millis(Math.min(backoff, Duration.toMillis(TEAM_POLL_MAX_BACKOFF)));
+};
 
 const DEFAULT_LIST_LIMIT = 50;
 
@@ -96,6 +132,10 @@ export interface GitTeamServiceOptions {
   readonly environmentId: EnvironmentId;
   /** `<T3 home>/team`: one bare repo per team, `<teamId>.git`. */
   readonly stateDirectory: string;
+  /** The repo on its Git host for a remote URL. Default: {@link TeamHost.parseTeamRemoteUrl}. */
+  readonly locate?: ((remoteUrl: string) => TeamHost.TeamRepoLocation | null) | undefined;
+  /** Called after each check of the poller; tests wait on it. */
+  readonly onPoll?: ((teamId: TeamId, outcome: TeamPollOutcome) => Effect.Effect<void>) | undefined;
 }
 
 /** Only ids that are safe as one folder name (team ids are UUIDs). */
@@ -194,6 +234,11 @@ interface TeamEntry {
   /** Late overlaps not handed out yet. */
   late: ReadonlyArray<Model.TeamLateOverlap>;
   syncScheduled: boolean;
+  /** How the poller checks this team, and the ETag of the host's last answer. */
+  pollMode: TeamPollMode;
+  etag: string | null;
+  /** The poller's fiber; stopped when the entry is replaced. */
+  poller: Fiber.Fiber<never> | null;
 }
 
 export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeamServiceOptions) {
@@ -322,6 +367,76 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       );
     });
 
+  /**
+   * One check of a team (STORAGE_PLAN.md slice 7): ask the host whether the
+   * state ref moved (an ETag request, or `git ls-remote` without gh), fetch
+   * only when it did, then read the state again, which finds late overlaps.
+   */
+  const checkEntry = (entry: TeamEntry): Effect.Effect<TeamPollOutcome, TeamStorageError> =>
+    Effect.gen(function* () {
+      // A team is watched once this server has opened it in this run.
+      if (entry.me === null) return "idle";
+      const localTip = yield* entry.repo.localTip;
+      const fetchNow = Effect.gen(function* () {
+        const fetched = yield* refreshEntry(entry);
+        return fetched.status === "unreachable" ? "failed" : "fetched";
+      });
+
+      if (entry.pollMode === "etag" && entry.location !== null) {
+        const check = yield* host.refChanged(entry.location, entry.etag);
+        switch (check.status) {
+          case "unchanged":
+            return "unchanged";
+          case "current": {
+            if (check.sha === localTip) {
+              entry.etag = check.etag;
+              return "unchanged";
+            }
+            const outcome = yield* fetchNow;
+            // Keep the ETag only once the fetch landed, or the next 304 would hide the change.
+            if (outcome === "fetched") entry.etag = check.etag;
+            return outcome;
+          }
+          case "missing":
+            entry.etag = null;
+            return localTip === null ? "unchanged" : yield* fetchNow;
+          case "noApi":
+            yield* Effect.logInfo(
+              `team ${entry.teamId}: ${check.detail} Checking for changes with git ls-remote instead.`,
+            );
+            entry.pollMode = "lsRemote";
+            entry.etag = null;
+            return "fallback";
+          case "unavailable":
+            yield* Effect.logDebug(`team ${entry.teamId}: check failed: ${check.detail}`);
+            return "failed";
+        }
+      }
+
+      const remote = yield* entry.repo.remoteTip();
+      if (remote.status === "unreachable") return "failed";
+      const remoteTip = remote.status === "tip" ? remote.sha : null;
+      return remoteTip === localTip ? "unchanged" : yield* fetchNow;
+    });
+
+  /** Checks a team every 15 seconds (60 with `ls-remote`), slower after failures, until the server stops. */
+  const pollEntry = (entry: TeamEntry) =>
+    Effect.gen(function* () {
+      let failures = 0;
+      while (true) {
+        yield* Effect.sleep(nextPollDelay({ mode: entry.pollMode, failures }));
+        const outcome = yield* checkEntry(entry).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning(`team ${entry.teamId}: checking for changes failed`, error).pipe(
+              Effect.as("failed" as const),
+            ),
+          ),
+        );
+        failures = outcome === "failed" ? failures + 1 : 0;
+        if (options.onPoll !== undefined) yield* options.onPoll(entry.teamId, outcome);
+      }
+    });
+
   const makeEntry = (teamId: TeamId, remoteUrl: string) =>
     Effect.gen(function* () {
       const directory = yield* repoDirectory(teamId);
@@ -330,10 +445,11 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),
       );
+      const location = (options.locate ?? TeamHost.parseTeamRemoteUrl)(remoteUrl);
       const entry: TeamEntry = {
         teamId,
         remoteUrl,
-        location: TeamHost.parseTeamRemoteUrl(remoteUrl),
+        location,
         repo,
         lock: yield* Semaphore.make(1),
         openLock: yield* Semaphore.make(1),
@@ -343,8 +459,12 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         reported: new Set(),
         late: [],
         syncScheduled: false,
+        pollMode: location === null ? "lsRemote" : "etag",
+        etag: null,
+        poller: null,
       };
       yield* reload(entry);
+      entry.poller = yield* pollEntry(entry).pipe(Effect.forkIn(scope));
       return entry;
     });
 
@@ -389,6 +509,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       Effect.gen(function* () {
         const existing = teams.get(teamId);
         if (existing !== undefined && existing.remoteUrl === remoteUrl) return existing;
+        if (existing?.poller) yield* Fiber.interrupt(existing.poller);
         const entry = yield* makeEntry(teamId, remoteUrl);
         teams.set(teamId, entry);
         return entry;
