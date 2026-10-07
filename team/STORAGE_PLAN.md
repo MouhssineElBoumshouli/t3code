@@ -95,6 +95,26 @@ Clock differences between laptops only change the order claims are listed in, no
 
 How sure: medium. The parts (fetch, push, check) are measured one at a time; the end-to-end time is an estimate until slice 7 measures a full sync.
 
+**Measured on GitHub (2026-10-07), next to the estimates above.** The real `TeamStateRepo` (slice 2) with two writers ("Sara", "Yassine": two state repos on this laptop) against the private scratch repo `t3-team-scratch`, over HTTPS with `gh auth git-credential`. Three runs of 5 rounds and 3 same-moment races each. The table uses the last two runs (10 rounds, 6 races); I cut off the first run's output when printing it, and the rounds I saw were in the same range. The ref was deleted afterwards [measured]:
+
+| Step                                                   | Estimate      | Measured (min–max, median)                                     |
+| ------------------------------------------------------ | ------------- | -------------------------------------------------------------- |
+| Write a claim (sync: fetch, commit, push)              | about 3 s     | 2.55–3.04 s, 2.7 s                                             |
+| First sync that creates the ref                        | –             | 2.37 s (once)                                                  |
+| Sync with nothing new (fetch only, no push)            | –             | 1.07–1.48 s, 1.08 s                                            |
+| Teammate's ETag check, ref moved (`200`)               | –             | 0.47–0.57 s, 0.52 s                                            |
+| Teammate's ETag check, nothing moved (`304`)           | –             | 0.45–0.64 s, 0.48 s; not counted against the limit             |
+| Teammate's fetch of the new tip (depth 1)              | 0.7 s         | 0.99–1.21 s, 1.1 s                                             |
+| Teammate's read of the tree (local)                    | –             | 14–19 ms                                                       |
+| Claim to teammate, without the wait for the next check | –             | 4.2–4.7 s, 4.35 s                                              |
+| Both push at the same moment                           | "redo, works" | 6 of 6: both land, the later one on its 2nd attempt, 5.3–5.8 s |
+
+- So a claim reaches a teammate in about **4.4 s plus the wait for their next 15 s check**: about 12 s on average and about 19 s at worst, against the 10 s and 18 s estimated. A fetch is slower than the 0.7 s measured earlier on the public fork (an authenticated fetch through the credential helper), and it is the larger part of a sync.
+- "Fetch first" in `claimPaths` costs about 1.1 s, inside its 3 s budget.
+- `gh api` exits with code 1 on a `304`, so TeamHost reads the status line, not the exit code.
+- The ETag check used 2 rate limit points per round (the `200` and a plain read to reset the ETag); every `304` left `X-Ratelimit-Used` unchanged.
+- History after a fresh run: 17 commits, 1 root and 16 with exactly one parent. Only fast-forwards landed.
+
 ## 3. Plan for step 1: the storage swap
 
 ### 3.1 What stays the same
@@ -207,7 +227,7 @@ Each slice: its own commit, focused tests, a PROGRESS.md entry, and a self-test 
 
 **Slice 1: the state format and model, no I/O.** `teamState.ts`, `TeamStateModel.ts`. Tests: two writers' files merge into one view; the same person on two servers counts as one member with two writers; concurrent task edits resolve the same way on every reader; caps; a broken or newer-format writer file is skipped or tolerated; late overlaps are found once, from both sides; a 7-day-old released claim drops out.
 
-**Slice 2: the Git repo for state.** `TeamStateRepo.ts`. Tests use a local bare repo as `origin` (a `file://` remote: real Git, no network) and two state repos as two writers. Both push at once and both land, with no force; a push refused for being behind is redone; with `origin` unreachable, the write is kept and the result says "not confirmed", then a later sync lands it; `git log` of the ref shows only fast-forwards. Also time a real sync to GitHub once, on a scratch private repo, to check the Q4 numbers.
+**Slice 2: the Git repo for state.** `TeamStateRepo.ts`. Tests use a local bare repo as `origin` (a `file://` remote: real Git, no network) and two state repos as two writers. Both push at once and both land, with no force; a push refused for being behind is redone; with `origin` unreachable, the write is kept and the result says "not confirmed", then a later sync lands it; `git log` of the ref shows only fast-forwards. Also time a real sync to GitHub once, on a scratch private repo, to check the Q4 numbers (done 2026-10-07, see the table in Q4).
 
 **Slice 3: identity and host calls.** `TeamHost.ts`. Tests with a fake process runner: login from `gh auth status --json` (several accounts, the active one wins, signed out), `canPush`/`isPublic` from `gh api`, ETag `304` handling, the dev override refused outside dev mode.
 
