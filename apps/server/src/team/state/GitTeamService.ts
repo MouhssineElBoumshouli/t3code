@@ -15,8 +15,10 @@
  *   this server's, found after both were made. Each is handed out once.
  * - A poller per team checks every 15 seconds whether the state ref moved
  *   (an ETag request through gh, free when nothing changed; `git ls-remote`
- *   every 60 seconds without gh) and fetches only when it did. It backs off
- *   after failures and stops with the server.
+ *   every 60 seconds without gh) and fetches only when it did. While this
+ *   server has writes that did not land (made offline, say), it syncs
+ *   instead, so they are shared once the network is back. It backs off after
+ *   failures and stops with the server.
  *
  * The server provides it as `TeamService` ({@link layer}); its state repos
  * live in `<T3 state dir>/team/<teamId>.git`.
@@ -109,6 +111,8 @@ export type TeamPollOutcome =
   | "idle"
   | "unchanged"
   | "fetched"
+  /** This server's writes that had not landed were pushed. */
+  | "pushed"
   /** gh could not check; from now on this team is checked with `git ls-remote`. */
   | "fallback"
   | "failed";
@@ -234,6 +238,8 @@ interface TeamEntry {
   /** Late overlaps not handed out yet. */
   late: ReadonlyArray<Model.TeamLateOverlap>;
   syncScheduled: boolean;
+  /** This server has writes the remote does not hold yet; the poller pushes them. */
+  unshared: boolean;
   /** How the poller checks this team, and the ETag of the host's last answer. */
   pollMode: TeamPollMode;
   etag: string | null;
@@ -336,11 +342,15 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
     Effect.gen(function* () {
       entry.syncScheduled = false;
       const login = entry.me?.login ?? myFiles(entry)[0]?.file.login ?? "t3-team";
-      const result = yield* entry.repo.sync({
-        message: `team state: ${login}`,
-        author: { name: login, email: `${login}@users.noreply.github.com` },
-        timeoutMs,
-      });
+      const result = yield* entry.repo
+        .sync({
+          message: `team state: ${login}`,
+          author: { name: login, email: `${login}@users.noreply.github.com` },
+          timeoutMs,
+        })
+        .pipe(Effect.tapError(() => Effect.sync(() => (entry.unshared = true))));
+      // A write made during this sync schedules its own, which sets this again if it fails.
+      entry.unshared = !result.confirmed;
       yield* entry.lock.withPermits(1)(reload(entry));
       return result;
     });
@@ -419,13 +429,21 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       return remoteTip === localTip ? "unchanged" : yield* fetchNow;
     });
 
+  /** Pushes this server's writes that did not land; the sync fetches the others' too. */
+  const shareEntry = (entry: TeamEntry): Effect.Effect<TeamPollOutcome, TeamStorageError> =>
+    Effect.gen(function* () {
+      if (entry.me === null) return "idle";
+      const synced = yield* syncEntry(entry);
+      return synced.confirmed ? "pushed" : "failed";
+    });
+
   /** Checks a team every 15 seconds (60 with `ls-remote`), slower after failures, until the server stops. */
   const pollEntry = (entry: TeamEntry) =>
     Effect.gen(function* () {
       let failures = 0;
       while (true) {
         yield* Effect.sleep(nextPollDelay({ mode: entry.pollMode, failures }));
-        const outcome = yield* checkEntry(entry).pipe(
+        const outcome = yield* (entry.unshared ? shareEntry(entry) : checkEntry(entry)).pipe(
           Effect.catch((error) =>
             Effect.logWarning(`team ${entry.teamId}: checking for changes failed`, error).pipe(
               Effect.as("failed" as const),
@@ -459,6 +477,8 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         reported: new Set(),
         late: [],
         syncScheduled: false,
+        // Writes a previous run could not push (offline when it stopped, say).
+        unshared: yield* repo.pending,
         pollMode: location === null ? "lsRemote" : "etag",
         etag: null,
         poller: null,

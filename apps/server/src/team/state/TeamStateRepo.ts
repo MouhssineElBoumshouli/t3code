@@ -364,6 +364,21 @@ export const make = Effect.fn("TeamStateRepo.make")(function* (options: TeamStat
       return { tip, files } satisfies TeamStateSnapshot;
     }),
 
+    /**
+     * Whether this server's files differ from the state as last fetched or
+     * pushed, so a sync has something to push (a write made offline). No network.
+     */
+    pending: remoteLock.withPermits(1)(
+      Effect.gen(function* () {
+        const mine = yield* readMine;
+        if (mine.length === 0) return false;
+        const tip = (yield* localTip) || null;
+        if (tip === null) return true;
+        const tree = yield* buildTree(tip, mine);
+        return tree !== (yield* local("pending", ["rev-parse", `${tip}^{tree}`]));
+      }),
+    ),
+
     /** Saves one of this server's files locally; the next sync shares it. */
     saveMine: (file: string, contents: string) =>
       saveLock.withPermits(1)(

@@ -1107,6 +1107,70 @@ describe("GitTeamService poller", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect("pushes a claim made offline at its next check once origin is back", () =>
+    Effect.gen(function* () {
+      const set = yield* setUpPolledOwner;
+      set.takeOffline();
+      const mine = yield* set.teams.claimPaths({
+        teamId: teamFile.teamId,
+        memberId: TeamMemberId.make("Mouhssine"),
+        thread: threadA,
+        paths: ["src/offline.ts"],
+      });
+      assert.isFalse(mine.confirmed);
+      const pushes = set.pushes.length;
+
+      // Still offline: the retry fails and backs off like a failed check.
+      assert.equal(yield* set.nextCheck("15 seconds"), "failed");
+      set.bringOnline();
+      assert.equal(yield* set.nextCheck("30 seconds"), "pushed");
+      assert.include(
+        set.originFile(`writers/Mouhssine/${ownerEnvironment}.json`),
+        "src/offline.ts",
+      );
+      // Retries sync with Git; gh was not asked while the claim waited.
+      assert.lengthOf(set.owner.state.checks, 0);
+
+      // Shared: back to ETag checks, nothing more to push.
+      assert.equal(yield* set.nextCheck("15 seconds"), "unchanged");
+      assert.equal(set.pushes.length, pushes + 1);
+      assert.lengthOf(set.owner.state.checks, 1);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("pushes a claim a previous run could not, once the team is opened again", () =>
+    Effect.gen(function* () {
+      const b = yield* bench;
+      const firstRun = yield* Scope.make();
+      const before = yield* b.ownerServer().pipe(Effect.provideService(Scope.Scope, firstRun));
+      const owner = memberOf(
+        (yield* before.ensureTeam({ teamFile, checkout: b.checkout })).membership,
+      );
+      b.takeOffline();
+      yield* before.claimPaths({
+        teamId: teamFile.teamId,
+        memberId: owner.memberId,
+        thread: threadA,
+        paths: ["src/offline.ts"],
+      });
+      yield* Scope.close(firstRun, Exit.void);
+      b.bringOnline();
+
+      const polls = yield* Queue.unbounded<GitTeamService.TeamPollOutcome>();
+      const restarted = yield* b.server({
+        name: "owner",
+        environmentId: ownerEnvironment,
+        host: gitHubLikeHost(b, "Mouhssine").host,
+        locate: onGitHub,
+        onPoll: (_teamId, outcome) => Queue.offer(polls, outcome).pipe(Effect.asVoid),
+      });
+      memberOf(yield* restarted.openTeam({ teamFile, checkout: b.checkout }));
+      yield* TestClock.adjust("15 seconds");
+      assert.equal(yield* Queue.take(polls), "pushed");
+      assert.include(b.originFile(`writers/Mouhssine/${ownerEnvironment}.json`), "src/offline.ts");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("backs off after failed checks and goes back to 15 seconds after one works", () =>
     Effect.gen(function* () {
       const set = yield* setUpPolledOwner;
