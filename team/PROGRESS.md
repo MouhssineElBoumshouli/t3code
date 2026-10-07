@@ -2,6 +2,60 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — First-turn briefing fix; slice 6 (`t3 team init` on the remote); slice 7 (the poller); self-test on GitHub
+
+**What changed**
+
+- **First-turn briefing** (caea4e50a, 0c0bfe32d): a new `TeamWarmup` layer (`apps/server/src/team/TeamWarmup.ts`, one `team-layer:` line in `server.ts`) opens the team of every project at server start and of each project added later (`project.created`). `GitTeamService` lets one open per team run at a time, so a turn that comes during the warm-up waits for it instead of asking gh again. `TeamHost` keeps a signed-in gh login per host for 10 minutes (signed-out answers are not kept). The briefing keeps its 2-second limit; it now logs "Team briefing added." or, past the limit, a warning (before, a slow lookup dropped it without a word).
+- **Slice 6** (f258aa82b, df397ce55): `t3 team init [path] [--name] [--yes] [--public-ok] --base-dir`.
+  - Before writing anything (through `initTeamProject`'s `register` step) it checks the remote: on a public repo it refuses unless `--public-ok`; if the remote already holds a team's state and the checkout has no `.team/team.json`, it refuses and says to pull first. Both write nothing.
+  - It still writes `.team/` and `t3.json` and never commits. Then it shows what it will create on `refs/t3-team/state` (`team.json` and this server's writer file) and creates it after `--yes` or a prompt; from a script without `--yes` it creates nothing and says so.
+  - In a clone whose remote has the team's state it joins (pushes this server's writer file, no prompt); a second init changes nothing on the remote.
+  - When it cannot start the state (no origin, signed out, no access or push access, origin unreachable or timed out) it writes the files and says why.
+  - `t3 team status` fetches each team's ref (new `TeamService.refresh`: fetch, no push) and lists members and active claims; offline it says "as last fetched".
+- **Slice 7** (d3a50e77c): a poller per team in `GitTeamService`. Every 15 s an ETag check of the state ref through gh, a depth-1 fetch only when it moved, then the state is read again (which finds late overlaps). `TeamHost.refChanged` answers `noApi` when gh is missing or signed out (or GitHub says 401); then, and for a remote on no Git host, `git ls-remote` every 60 s. After a failed check it waits 30 s, doubling up to 15 minutes, and back to normal after one works. An ETag is kept only once its fetch landed. Only teams opened in this run are watched; pollers stop with the server, and a replaced entry's poller is stopped.
+- Test fix (01175a77c): the init join test cloned nothing under the repo-root test config (the bare origin's HEAD named `master`); it now clones `main`.
+
+**Files touched**
+
+- New: `apps/server/src/team/TeamWarmup.ts` and `.test.ts`.
+- Changed (ours): `team/state/GitTeamService.ts` and test, `team/state/TeamHost.ts` and test, `team/state/TeamStateRepo.ts`, `team/TeamService.ts` (`refresh`), `team/TeamProjectFiles.ts` (`findTeamFile`, moved from `resolve.ts`), `mcp/toolkits/team/resolve.ts`, `mcp/toolkits/team/briefing.ts`, `cli/team.ts` and test.
+- Upstream: `apps/server/src/server.ts`, one `team-layer:` line plus its import.
+
+**How it was checked**
+
+- `vp test run src/mcp/toolkits/team/ src/team/ src/cli/team.test.ts` in `apps/server`: 15 files, 150 tests passed. With `src/server.test.ts` and `src/auth/ChatGptRpcScopes.test.ts`: 17 files, 358 passed (after the self-test, dev server stopped). `GitTeamService.test.ts` 5 runs in a row and `cli/team.test.ts` 9 runs: all passed.
+- Typecheck `apps/server` (`tsc --noEmit`, no dev server running): 0 errors after each step. Lint on the changed files: no new warnings (the old `server.ts:8` one is upstream's). `packages/contracts` not changed.
+- New tests:
+  - Warm-up (real clock): a restarted server whose gh would hang after start-up gives the first turn its briefing, and the turn asks gh nothing; a project added while the server runs is opened then. TeamHost: one `gh auth status` per host for 10 minutes; signed-out answers not kept.
+  - Init (local bare origin, fake host): asks, then creates the ref with `team.json` and the writer file in one commit; "no" leaves the remote alone; a second init changes nothing and does not ask; a clone with `.team/` joins (2 commits, `createdBy` unchanged, same teamId); public refused with nothing written, accepted with `--public-ok`; remote state without a team file refused; no push access, signed out and a timed-out `ls-remote` write the files and start nothing. Status lists a teammate's claim pushed after the home last fetched.
+  - Poller (test clock, a GitHub-like fake host whose ETag is origin's commit): 304s fetch nothing and later checks send the ETag; a teammate's push is fetched once, with their claim and the late overlap; after a fetch fails, the next check fetches even though the ETag would say 304; backoff 30 s, 60 s, then 15 s again; `noApi` falls back to `ls-remote` every 60 s and never asks gh again; stops when the server's scope closes; does not watch a team not opened in this run; `nextPollDelay` caps at 15 minutes.
+- Mutation checks, each restored with `cmp`: warm-up off: the first-turn test fails ("expected undefined", after 2.25 s), and the project-added test times out; no public refusal: 1 fails; never asks: 2; join does not push: 2; no remote-without-file refusal: 1; ls-remote timeout not caught: 1; fetch even when the tip is ours: 3; no backoff: 1; no fallback: 1; poller detached from the scope: 1; watching unopened teams: 1; ETag kept before the fetch landed: 1 (that one went uncaught until I added the test for it).
+- **Self-test** (`test-screenshots` f99a5e4a0, folder `2026-10-07-slice6-7/`, transcripts in its NOTES.md):
+  - `t3 team init ~/code/t3-team-scratch --base-dir ~/.t3-dev` for real: without a terminal it showed the plan and created nothing; in a pseudo-terminal it asked "Create it?", I answered yes, and it created `refs/t3-team/state` on GitHub (1 commit, `team.json` + your writer file). `t3 team status` listed you as owner. I committed and pushed `.team/` and `t3.json` to the scratch repo's `main` (2c074c0).
+  - Public refusal: with a fake host (see Unsure).
+  - Dev server, Playwright: added the scratch repo; the warm-up fetched the team 2 s later. New Claude Sonnet 5.5 chat, "Call team_status and show me the raw result.": the server logged "Team briefing added." for that first turn, no skip warning; the raw result showed the team, you, no claims (`q1-team-status-first-turn.png`).
+  - Fake teammate `Sara-T3Test` (dev login override, second state repo in my scratchpad) claimed `src/auth`. The dev server's state repo had her commit **3.8 s** after her push was confirmed. "Call team_status again." showed her claim (`q2-team-status-teammate-claim.png`).
+  - Dev server stopped by its PID, then its two children on the ports (working folders in this checkout). Browser closed.
+
+**What's left**
+
+- Slice 8: two people for real (two dev servers, two clones, the same-second claim race).
+- A claim made offline ("not shared yet") is pushed by the next write, not by the poller (slice 7 as written only checks and fetches). Say if the poller should also retry unpushed writes.
+- Read-only mode without push access (from slice 5) is still not built.
+
+**Unsure about / notes**
+
+- **Public refusal tested with a fake.** A real test needs a public repo you can push to: a new one (I do not create repos on your account) or your public fork (you asked me not to touch your other repos). A public repo you cannot push to stops at "cannot push" before the public check.
+- **The 3.8 s is luck of timing**: the poller checks every 15 s, so expect up to about 16 s (one check interval plus a 1 s fetch). One measurement, not a range.
+- **Briefing evidence** is the new log line plus no warning; the agent itself was not asked about its instructions.
+- **First init try timed out** on `git ls-remote` after 20 s (by hand it took 1.2 s right after; the next CLI run took 4.6 s in all). I treated it as a network stall and made a timeout end as "could not reach origin" instead of a raw error (df397ce55).
+- **The chat used the current checkout**, not a new worktree, though the scratch repo's `t3.json` asks for worktrees: the composer showed "Current checkout" when the project was new. Not looked into; the team lookup works either way.
+- **My mistake in the scratch repo:** my first commit of `.team/` used an email I typed by hand; GitHub refused the push (email privacy), so it never reached GitHub. I amended it with the repo's configured noreply address and pushed that.
+- Left on GitHub on purpose: the scratch repo's state ref (your writer file and Sara-T3Test's claim on `src/auth`) and its `main` commit with `.team/`. Say if you want the ref deleted.
+- `team/DESIGN.md` still describes host-mode `t3 team init` (registration, "Already hosted by …"). I left it, as earlier slices did; STORAGE_PLAN.md is the current plan.
+- The warm-up and per-team open lock are tested through the warm-up; there is no separate test that two concurrent opens make one gh call (I found no way to order them without sleeps).
+
 ## 2026-10-07 — Slice 5: the switch to the Git team store; cold start self-test
 
 **What changed** (commit 5e7f7bb79)
