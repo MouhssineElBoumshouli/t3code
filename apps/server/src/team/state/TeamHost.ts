@@ -59,8 +59,12 @@ export type TeamHostRefCheck =
 export class TeamHost extends Context.Service<
   TeamHost,
   {
-    /** The signed-in account for the repo's host. */
-    readonly login: (repo: TeamRepoLocation) => Effect.Effect<TeamHostLogin>;
+    /**
+     * The signed-in account for the repo's host. Null is a remote on this
+     * computer (a folder or `file://` URL, for tests and demos): it has no
+     * account, so only the dev override can name the person.
+     */
+    readonly login: (repo: TeamRepoLocation | null) => Effect.Effect<TeamHostLogin>;
     readonly repoAccess: (repo: TeamRepoLocation) => Effect.Effect<TeamHostRepoAccess>;
     /**
      * A conditional request for the state ref. Pass the ETag of the last
@@ -205,6 +209,12 @@ export const make = Effect.fn("TeamHost.make")(function* (options: TeamHostOptio
             status: "unavailable",
             detail: `${TEAM_LOGIN_OVERRIDE_ENV} is not a GitHub login: "${override}".`,
           } as const);
+    }
+    if (repo === null) {
+      return {
+        status: "signedOut",
+        detail: `This project's remote is a folder on this computer, which has no GitHub account. Dev servers can set ${TEAM_LOGIN_OVERRIDE_ENV}.`,
+      } as const;
     }
     const result = yield* gh("login", [
       "auth",

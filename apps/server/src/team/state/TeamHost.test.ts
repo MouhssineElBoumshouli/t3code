@@ -171,6 +171,11 @@ describe("TeamHost.login", () => {
 
       const invalid = yield* hostWith(gh, { devMode: true, loginOverride: "../sara" });
       assert.equal((yield* invalid.host.login(repo)).status, "unavailable");
+
+      // A remote on this computer has no account: only the dev override names the person.
+      assert.equal((yield* dev.host.login(null)).status, "signedIn");
+      assert.equal((yield* notDev.host.login(null)).status, "signedOut");
+      assert.lengthOf(notDev.calls, 1, "no gh call for a local remote");
     }),
   );
 });
