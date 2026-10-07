@@ -151,12 +151,34 @@ export const make = Effect.fn("TeamStateRepo.make")(function* (options: TeamStat
   yield* fs.makeDirectory(mineRoot, { recursive: true }).pipe(storage("init"));
   yield* local("init", ["config", "remote.origin.url", options.remoteUrl]);
 
-  const localTip = local("localTip", [
-    "rev-parse",
-    "--verify",
-    "--quiet",
-    `${TEAM_STATE_REF}^{commit}`,
-  ]).pipe(Effect.orElseSucceed(() => ""));
+  /**
+   * The state ref's commit, or "" when there is none. A Git call that fails
+   * or times out (a slow disk, antivirus) fails: taking it for "no state"
+   * would hide every teammate until the next read.
+   */
+  const localTip = git
+    .execute({
+      operation: "TeamStateRepo.localTip",
+      cwd: directory,
+      args: ["rev-parse", "--verify", "--quiet", `${TEAM_STATE_REF}^{commit}`],
+      env: GIT_ENV,
+      allowNonZeroExit: true,
+      timeoutMs: LOCAL_TIMEOUT_MS,
+    })
+    .pipe(
+      storage("localTip"),
+      Effect.flatMap((result) => {
+        if (result.exitCode === 0) return Effect.succeed(result.stdout.trim());
+        // `--verify --quiet` exits 1 with nothing on stderr when the ref is not there.
+        if (result.exitCode === 1 && result.stderr.trim() === "") return Effect.succeed("");
+        return Effect.fail(
+          new TeamStorageError({
+            operation: "localTip",
+            cause: new Error(`git rev-parse exited ${result.exitCode}: ${result.stderr.trim()}`),
+          }),
+        );
+      }),
+    );
 
   const fetchUnlocked = (timeoutMs: number | undefined) =>
     Effect.gen(function* () {
@@ -356,7 +378,10 @@ export const make = Effect.fn("TeamStateRepo.make")(function* (options: TeamStat
         }),
       ),
 
-    /** The state as last fetched or pushed, with this server's files on top. No network. */
+    /**
+     * The state as last fetched or pushed, with this server's files on top. No
+     * network. Fails when Git cannot read it, never answers with less.
+     */
     read: Effect.gen(function* () {
       const tip = (yield* localTip) || null;
       const files = new Map<string, string>(tip === null ? [] : yield* readTree(tip));

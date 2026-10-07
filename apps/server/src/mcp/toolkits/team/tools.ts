@@ -59,6 +59,8 @@ const TaskSummary = Schema.Struct({
 export const TeamStatusResult = Schema.Struct({
   team: Schema.String,
   you: Schema.String,
+  /** Set when the team state could not be read just now: the rest is the last state read. */
+  notFresh: Schema.optionalKey(Schema.String),
   /** The rulebook's "Do not touch" list, capped; absent when it has none. */
   doNotTouch: Schema.optionalKey(Schema.Array(Schema.String)),
   yourTask: Schema.NullOr(TaskSummary),

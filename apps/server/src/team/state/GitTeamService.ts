@@ -231,6 +231,10 @@ interface TeamEntry {
   parsed: Model.ParsedTeamState;
   /** Null until `team.json` is there. */
   view: Model.TeamStateView | null;
+  /** When the state repo was last read; `parsed` and `view` are from then. */
+  readAt: string | null;
+  /** The last read failed, so `parsed` and `view` are older than the state repo. */
+  readFailed: boolean;
   /** Who this server writes as, once a membership check passed. */
   me: { readonly login: TeamLogin; readonly checkedAt: number } | null;
   /** Overlap keys already reported, by a claim's result or as a late overlap. */
@@ -278,10 +282,27 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
           }),
         );
 
-  /** Reads the state repo again and finds late overlaps. Call holding `entry.lock`. */
+  /**
+   * Reads the state repo again and finds late overlaps. Call holding
+   * `entry.lock`. When the read fails (a Git call timed out), the last view
+   * stays and is marked not fresh, instead of losing the teammates.
+   */
   const reload = (entry: TeamEntry) =>
     Effect.gen(function* () {
-      const snapshot = yield* entry.repo.read;
+      const snapshot = yield* entry.repo.read.pipe(
+        Effect.catch((error) =>
+          Effect.logWarning(
+            `team ${entry.teamId}: reading the team state failed; keeping the last one read`,
+            error,
+          ).pipe(Effect.as(null)),
+        ),
+      );
+      if (snapshot === null) {
+        entry.readFailed = true;
+        return;
+      }
+      entry.readFailed = false;
+      entry.readAt = yield* nowIso;
       entry.parsed = Model.parseTeamState(snapshot.files);
       for (const warning of entry.parsed.warnings) {
         yield* Effect.logDebug(`team ${entry.teamId}: ${warning}`);
@@ -473,12 +494,15 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         openLock: yield* Semaphore.make(1),
         parsed: { team: null, writers: [], warnings: [] },
         view: null,
+        readAt: null,
+        readFailed: false,
         me: null,
         reported: new Set(),
         late: [],
         syncScheduled: false,
         // Writes a previous run could not push (offline when it stopped, say).
-        unshared: yield* repo.pending,
+        // When Git cannot tell, a sync finds out.
+        unshared: yield* repo.pending.pipe(Effect.orElseSucceed(() => true)),
         pollMode: location === null ? "lsRemote" : "etag",
         etag: null,
         poller: null,
@@ -1064,6 +1088,13 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       view(teamId).pipe(
         Effect.map((found) => found.activity.slice(0, listOptions?.limit ?? DEFAULT_LIST_LIMIT)),
       ),
+    freshness: (teamId) =>
+      Effect.sync(() => {
+        const entry = teams.get(teamId);
+        return entry === undefined || !entry.readFailed
+          ? ({ fresh: true } as const)
+          : ({ fresh: false, readAt: entry.readAt } as const);
+      }),
     takeLateOverlaps: (teamId, thread) =>
       Effect.sync(() => {
         const entry = teams.get(teamId);

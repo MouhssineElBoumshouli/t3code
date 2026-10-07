@@ -50,6 +50,10 @@ export const HANDOFF_NOTHING_CHANGED_MESSAGE =
 export const CLAIM_NOT_SHARED_MESSAGE =
   "Claimed on this computer, not shared yet: the team's remote could not be reached. Overlaps with teammates' newest claims are unknown. It is shared on the next successful sync.";
 
+/** `team_status` when the team state could not be read just now and the last one read is shown. */
+export const notFreshMessage = (readAt: string | null) =>
+  `Not fresh: the team state could not be read just now, so this is the last state read${readAt === null ? "" : ` (${readAt})`}. Teammates' newer claims may be missing; call team_status again before editing shared files.`;
+
 /** Caps on `team_status`, which every team agent may call often. Oldest items go first. */
 export const TEAM_STATUS_LIMITS = {
   tasks: 8,
@@ -245,6 +249,7 @@ const make = Effect.gen(function* () {
             .pipe(Effect.mapError(fromService("status")));
           const doNotTouch = yield* readDoNotTouch(context).pipe(withFiles);
           const late = yield* lateOverlapsOf(context);
+          const freshness = yield* teams.freshness(teamId);
 
           // Written notes from other chats; this chat knows its own.
           const handoffs = notes
@@ -283,6 +288,7 @@ const make = Effect.gen(function* () {
           return {
             team: context.teamFile.name,
             you: context.member.displayName,
+            ...(freshness.fresh ? {} : { notFresh: notFreshMessage(freshness.readAt) }),
             ...(doNotTouch.length === 0 ? {} : { doNotTouch }),
             yourTask: yourTask === undefined ? null : summarizeTask(yourTask, names),
             tasks: openTasks

@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
+  GitCommandError,
   TEAM_AUTOMATIC_NOTE_MAX_FILES,
   TEAM_STATE_REF,
   TeamFile,
@@ -82,6 +83,12 @@ const bench = Effect.gen(function* () {
   const pushes: Array<string> = [];
   let pushLanded: Deferred.Deferred<void> | null = null;
 
+  /** While set, the state repos' `rev-parse --verify` fails, as when Git times out on a slow disk. */
+  let stateReadsFail = false;
+  const failStateReads = (fail: boolean) => {
+    stateReadsFail = fail;
+  };
+
   /** Network Git commands of the state repos, as `<server>:<command>`. */
   const networkCalls: Array<string> = [];
   const countCalls = (call: string) => networkCalls.filter((made) => made === call).length;
@@ -99,6 +106,21 @@ const bench = Effect.gen(function* () {
         ...real,
         execute: (execute) => {
           const command = execute.args[0] ?? "";
+          // Decided when it runs: the state repo builds some commands once.
+          if (command === "rev-parse" && execute.args.includes("--verify")) {
+            return Effect.suspend(() =>
+              stateReadsFail
+                ? Effect.fail(
+                    new GitCommandError({
+                      operation: execute.operation,
+                      command: "git rev-parse",
+                      cwd: execute.cwd,
+                      detail: "Git command timed out.",
+                    }),
+                  )
+                : real.execute(execute),
+            );
+          }
           if (["fetch", "ls-remote", "push"].includes(command)) {
             networkCalls.push(`${input.name}:${command}`);
           }
@@ -167,6 +189,7 @@ const bench = Effect.gen(function* () {
     takeOffline,
     bringOnline,
     nextPush,
+    failStateReads,
     pushes,
     originTip,
     countCalls,
@@ -868,6 +891,42 @@ describe("GitTeamService (new on Git)", () => {
         const seen = Option.getOrThrow(yield* service.getTask(teamFile.teamId, task.taskId));
         assert.deepEqual([seen.status, seen.ownerMemberId], ["in_progress", "Friend"]);
       }
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("keeps the last state read when Git cannot read it, and says it is not fresh", () =>
+    Effect.gen(function* () {
+      const { teams, friendTeams, friend, failStateReads } = yield* setUpTwo;
+      yield* friendTeams.claimPaths({
+        teamId: teamFile.teamId,
+        memberId: friend.memberId,
+        thread: friendThread,
+        paths: ["src/auth"],
+      });
+      yield* teams.refresh(teamFile.teamId);
+      const friendClaims = () =>
+        teams
+          .listActiveClaims(teamFile.teamId)
+          .pipe(
+            Effect.map((claims) => claims.map((claim) => [String(claim.memberId), claim.paths])),
+          );
+      assert.deepEqual(yield* friendClaims(), [["Friend", ["src/auth"]]]);
+      assert.deepEqual(yield* teams.freshness(teamFile.teamId), { fresh: true });
+
+      // The fetch lands, but reading the state repo after it fails.
+      failStateReads(true);
+      assert.equal((yield* teams.refresh(teamFile.teamId)).status, "fetched");
+      assert.deepEqual(yield* friendClaims(), [["Friend", ["src/auth"]]]);
+      assert.lengthOf(yield* teams.listMembers(teamFile.teamId), 2);
+      const stale = yield* teams.freshness(teamFile.teamId);
+      assert.isFalse(stale.fresh);
+      assert.isString(!stale.fresh && stale.readAt);
+
+      // The next good read is fresh again.
+      failStateReads(false);
+      yield* teams.refresh(teamFile.teamId);
+      assert.deepEqual(yield* teams.freshness(teamFile.teamId), { fresh: true });
+      assert.deepEqual(yield* friendClaims(), [["Friend", ["src/auth"]]]);
     }).pipe(Effect.provide(TestLayer)),
   );
 

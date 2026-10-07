@@ -2,6 +2,35 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — A failed read of the team state keeps the last one, marked not fresh
+
+**What changed**
+
+- `TeamStateRepo.localTip` told "no state ref" and "Git failed or timed out" apart only by luck: any failure counted as "no tip", so a `read` after a timed-out `rev-parse` returned only this server's files and every teammate vanished until the next good read. Now only `rev-parse --verify --quiet` exiting 1 with nothing on stderr means "no ref"; a failure or timeout fails the read.
+- `GitTeamService.reload` catches a failed read: it keeps the last view, logs a warning and marks the team not fresh until a read works again. New `TeamService.freshness(teamId)`: `{ fresh: true }` or `{ fresh: false, readAt }` (when the last good read was).
+- `team_status` gets `notFresh` only when not fresh: "Not fresh: the team state could not be read just now, so this is the last state read (<time>). Teammates' newer claims may be missing; call team_status again before editing shared files."
+- Loading a state repo at startup: if Git cannot tell whether there are unpushed writes, the poller syncs once to find out (before, the failed tip read made it push too, by accident).
+
+**Files touched**
+
+- `apps/server/src/team/state/TeamStateRepo.ts`, `GitTeamService.ts` and `.test.ts`, `apps/server/src/team/TeamService.ts`, `apps/server/src/mcp/toolkits/team/handlers.ts`, `tools.ts`. No upstream file.
+
+**How it was checked**
+
+- New test (`GitTeamService.test.ts`, "keeps the last state read when Git cannot read it"): a teammate's claim is seen; then the state repo's `rev-parse --verify` fails like a timeout; a refresh fetches, the read fails, the teammate's claim and both members are still listed, `freshness` says not fresh with a time; the next good read is fresh again.
+- Mutation check: putting back "failure = no tip" makes the test fail with `expected [] to deeply equal [ [ 'Friend', [ 'src/auth' ] ] ]`, the original bug. Restored with `cmp`.
+- `vp test run src/mcp/toolkits/team/ src/team/ src/cli/team.test.ts src/auth/ChatGptRpcScopes.test.ts`: 16 files, **159 passed** (158 + 1). The file 3 times in a row: green. `tsc --noEmit` in `apps/server`: 0 errors. Lint on the changed folders: exit 0. `vp fmt` applied.
+
+**What's left**
+
+- Steps 3 and 4 (next entries).
+
+**Unsure about / notes**
+
+- The `notFresh` line in `team_status` is a spread of `freshness`; there is no handler-level test for it, since the handler test harness cannot make Git fail without new plumbing. The service test covers the behaviour.
+- A corrupt ref file (not a timeout) still reads as "no ref" with `--quiet`, as before.
+- The briefing and `t3 team status` do not show "not fresh"; only `team_status` does, as asked.
+
 ## 2026-10-07 — Steps 1 and 2 marked done; "Local folder" fix; handoffs in `team_status`; design mockups started (unfinished)
 
 **What changed**

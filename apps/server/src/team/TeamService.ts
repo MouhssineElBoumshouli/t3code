@@ -50,6 +50,10 @@ export type TeamMembership =
   | { readonly status: "otherTeam"; readonly teamId: TeamId }
   | { readonly status: "unavailable"; readonly detail: string };
 
+export type TeamStateFreshness =
+  | { readonly fresh: true }
+  | { readonly fresh: false; readonly readAt: string | null };
+
 export interface OpenTeamInput {
   readonly teamFile: TeamFile;
   /** A checkout of the project; its `origin` remote holds the team state. */
@@ -238,6 +242,12 @@ export class TeamService extends Context.Service<
       teamId: TeamId,
       thread: TeamThreadRef,
     ) => Effect.Effect<ReadonlyArray<TeamLateOverlap>>;
+    /**
+     * Whether the team as listed is the state this server holds. Not fresh when
+     * the last read of it failed: the lists are then from `readAt` (null when
+     * never read).
+     */
+    readonly freshness: (teamId: TeamId) => Effect.Effect<TeamStateFreshness>;
     /** Fetches the others' files now, without pushing this server's. */
     readonly refresh: (
       teamId: TeamId,
