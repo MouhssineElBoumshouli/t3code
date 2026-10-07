@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Option B · Presence bar</title>
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="shared.css" />
     <style>
       .presence {
@@ -26,7 +27,7 @@
         box-shadow: 0 0 0 2px var(--surface);
       }
       .stack .who + .who {
-        margin-left: -5px;
+        margin-left: -3px;
       }
       .stack .who.away {
         opacity: 0.55;
@@ -86,7 +87,7 @@
       // The warning card is a centered sheet over the chat.
       const M = Mock;
       const params = new URLSearchParams(location.search);
-      let popOpen = params.get("pop") !== "0";
+      let popOpen = params.get("pop") === "1";
       document.addEventListener("click", (event) => {
         if (event.target.closest("[data-pop]")) {
           popOpen = !popOpen;
@@ -95,24 +96,26 @@
           document.querySelector(".popover")?.toggleAttribute("hidden", !popOpen);
         }
       });
-      Mock.mount("B", (s) => {
-        const pane = s.pane ?? "files";
-        const showPop = popOpen && !s.card;
-        const rightTab = (id, label, ic) =>
-          `<a class="tab ${pane === id ? "on" : ""}" data-pane="${id}">${M.icon(ic, "sm")}<span class="t">${label}</span></a>`;
-        const presence =
-          s.mode === "team"
-            ? `<button class="presence ${showPop ? "on" : ""}" data-pop>
+      Mock.mount(
+        "B",
+        (s) => {
+          const pane = s.pane ?? "files";
+          const showPop = popOpen && !s.card;
+          const rightTab = (id, label, ic) =>
+            `<a class="tab ${pane === id ? "on" : ""}" data-pane="${id}">${M.icon(ic, "sm")}<span class="t">${label}</span></a>`;
+          const presence =
+            s.mode === "team"
+              ? `<button class="presence ${showPop ? "on" : ""}" data-pop>
                  <span class="stack">${M.who(M.people.yassine)}<span class="who away" style="--c:var(--sara)">SA</span></span>
                  <span class="pill ok" style="box-shadow:none;padding:0"><span class="d"></span></span>
                  <span class="muted" style="font-size:12px">synced 8 s</span>
                </button>`
-            : `<button class="presence ${showPop ? "on" : ""}" data-pop>
+              : `<button class="presence ${showPop ? "on" : ""}" data-pop>
                  <span class="stack"><span class="who" style="--c:var(--chat-1)">1</span><span class="who" style="--c:var(--chat-2)">2</span></span>
                  <span class="muted" style="font-size:12px">2 chats running</span>
                  <span class="mark" style="--c:var(--warning)"></span>
                </button>`;
-        const popover = `
+          const popover = `
           <div class="popover appear" ${showPop ? "" : "hidden"}>
             <div class="team-only">
               <div class="section"><h4>Who is on what<span class="grow"></span><a>Catch me up</a></h4>${M.peopleNow()}</div>
@@ -125,9 +128,9 @@
               <div class="section"><h4>Notes</h4>${M.notesSolo()}</div>
             </div>
           </div>`;
-        const tree = M.fileTree();
-        const sheet = s.card ? `<div class="scrim">${M.warningCard(s.mode)}</div>` : "";
-        return `
+          const tree = M.fileTree();
+          const sheet = s.card ? `<div class="scrim">${M.warningCard(s.mode)}</div>` : "";
+          return `
           <div class="window">
             ${M.rail([
               { icon: "home", title: "Home" },
@@ -159,7 +162,10 @@
             </section>
             ${popover}
           </div>`;
-      });
+        },
+        (link) =>
+          link({ pop: popOpen ? null : "1" }, popOpen ? "Hide popover" : "Show popover", popOpen),
+      );
     </script>
   </body>
 </html>

@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-mode="team">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Option C · Team home</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="shared.css" />
+    <style>
+      /* Sidebar people block: who is around, under "New chat". */
+      .people {
+        margin: 6px 8px 2px;
+        padding: 6px;
+        border-radius: 10px;
+        background: var(--sunken);
+        box-shadow: inset 0 0 0 1px var(--border);
+      }
+      .people a {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 6px;
+        border-radius: 7px;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .people a:hover {
+        background: var(--hover);
+      }
+      .people .t {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--muted);
+      }
+      .people .t b {
+        font-weight: 500;
+        color: var(--fg);
+      }
+      .people .foot {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 6px 2px;
+        margin-top: 2px;
+        border-top: 1px solid var(--border);
+        font-size: 11.5px;
+        color: var(--faint);
+      }
+      .people .foot .grow {
+        flex: 1;
+      }
+      .away {
+        opacity: 0.55;
+      }
+
+      /* The warning card inside the agent's message, where it stopped. */
+      .inline-card {
+        margin: 4px 0 16px;
+      }
+
+      /* Team home: a full page in the main column. */
+      .home {
+        grid-column: 3;
+        grid-row: 2;
+        overflow: hidden;
+        background: var(--surface);
+        padding: 22px 0;
+      }
+      .home .col {
+        max-width: 980px;
+      }
+      .home h1 {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .home-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      .home-head .grow {
+        flex: 1;
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin: 14px 0;
+      }
+      .card {
+        border-radius: 12px;
+        padding: 12px 14px;
+        background: color-mix(in srgb, var(--raised) 72%, transparent);
+        box-shadow: inset 0 0 0 1px var(--border);
+        min-width: 0;
+      }
+      .card .name {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+      }
+      .card .name .grow {
+        flex: 1;
+      }
+      .card .what {
+        margin: 8px 0 6px;
+      }
+      .card .paths {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .card .last {
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .card.warn {
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 40%, var(--border));
+      }
+      .two {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 12px;
+      }
+      .two .section {
+        padding: 12px 14px 6px;
+      }
+      .page-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 8px;
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body>
+    <script src="shared.js"></script>
+    <script>
+      // Option C: the team gets its own page. The rail's first button opens
+      // "Team home" (solo: "Today"), a full page with people, tasks, notes and
+      // catch-up. In a chat, the sidebar keeps a small "who is around" block,
+      // and the warning card shows inside the agent's message, at the point
+      // where it stopped, like a question the agent asks.
+      const M = Mock;
+      Mock.mount(
+        "C",
+        (s) => {
+          const team = s.mode === "team";
+          const home = s.view === "home";
+
+          const peopleBlock = `
+            <div class="people team-only">
+              <a>${M.who(M.people.yassine)}<span class="t"><b>Yassine</b> · Login page</span><span class="mark" style="--c:var(--success)"></span></a>
+              <a class="away">${M.who(M.people.sara)}<span class="t"><b>Sara</b> · Avatar upload</span></a>
+              <div class="foot">${M.icon("cloud", "sm")}<span class="grow">Synced 8 s ago</span><a data-go="home" style="color:var(--primary)">Team home</a></div>
+            </div>
+            <div class="people solo-only">
+              <a>${M.icon("chats", "sm")}<span class="t"><b>2 chats running</b> · 1 overlap</span><span class="mark" style="--c:var(--warning)"></span></a>
+              <div class="foot"><span class="grow">Just you</span><a data-go="home" style="color:var(--primary)">Today</a></div>
+            </div>`;
+
+          const chatView = `
+            ${M.tabStrip(`<button class="icon-btn">${M.icon("panel", "sm")}</button>`)}
+            <main class="chat">
+              <div class="timeline"><div class="col">
+                <div class="team-only">${M.planTeam}</div>
+                <div class="solo-only">${M.planSolo}</div>
+                ${s.card ? `<div class="inline-card">${M.warningCard(s.mode)}</div>` : ""}
+              </div></div>
+              <div class="composer-wrap"><div class="col">
+                ${M.composer(
+                  s.card
+                    ? '<span class="pill warn"><span class="d"></span>waiting for your choice</span>'
+                    : team
+                      ? '<span class="pill warn"><span class="d"></span>2 files held by Yassine</span>'
+                      : '<span class="pill warn"><span class="d"></span>overlaps “Search page”</span>',
+                )}
+              </div></div>
+            </main>
+            <section class="right">
+              <div class="right-tabs">
+                <a class="tab">${M.icon("terminal", "sm")}<span class="t">Terminal</span></a>
+                <a class="tab on">${M.icon("files", "sm")}<span class="t">Files</span></a>
+                <a class="tab">${M.icon("globe", "sm")}<span class="t">Browser</span></a>
+                <span class="grow"></span>
+              </div>
+              <div class="right-body"><div class="pane on">${M.fileTree()}</div></div>
+            </section>`;
+
+          const card = (p, task, paths, last, extra = "") => `
+            <div class="card ${extra}">
+              <div class="name">${M.who(p, "lg")}<span class="grow">${p.name}</span>${p === M.people.yassine ? '<span class="pill ok"><span class="d"></span>active 2 min ago</span>' : p === M.people.sara ? '<span class="pill">3 h ago</span>' : '<span class="pill">you</span>'}</div>
+              <div class="what">${task}</div>
+              <div class="paths">${paths.map((x) => `<span class="path">${x}</span>`).join("")}</div>
+              <div class="last">${last}</div>
+            </div>`;
+
+          const homeTeam = `
+            <div class="home-head"><h1>team-demo</h1><span class="pill ok"><span class="d"></span>synced 8 s ago</span><span class="grow"></span>
+              <button class="btn">${M.icon("plus", "sm")}New task</button><button class="btn primary">${M.icon("sparkle", "sm")}Plan together</button></div>
+            <div class="callout"><b>Since yesterday 18:12</b> · Yassine started the login page (not merged yet). Sara wrote a handoff: avatar upload works, resizing is left. One task done.</div>
+            <div class="cards">
+              ${card(M.people.yassine, "Login page · own branch", ["src/auth/", "src/api/session.ts"], `Handoff 11:40 · <span class="pill warn"><span class="d"></span>not merged yet</span>`, "warn")}
+              ${card(M.people.sara, "Avatar upload", ["src/profile/avatar.ts"], `Handoff 14:02 · <span class="pill ok"><span class="d"></span>fresh</span>`)}
+              ${card(M.people.me, "Search page · Remember me on login", ["src/search/"], "2 chats open")}
+            </div>
+            <div class="two">
+              <div class="card" style="padding:0"><div class="section"><h4>Tasks<span class="grow"></span><span class="faint">3 open</span></h4>${M.tasksList()}</div></div>
+              <div class="card" style="padding:0"><div class="section"><h4>Notes and decisions</h4>${M.memorySearch()}<div style="height:4px"></div>${M.handoffsTeam()}</div></div>
+            </div>`;
+
+          const homeSolo = `
+            <div class="home-head"><h1>Today</h1><span class="pill">just you</span><span class="grow"></span>
+              <button class="btn">${M.icon("plus", "sm")}New chat</button></div>
+            ${M.catchUp()}
+            <div class="cards">
+              <div class="card warn"><div class="name"><span class="status working"></span><span class="grow">Search page</span><span class="pill">working</span></div>
+                <div class="what muted">Editing the query parser</div><div class="paths"><span class="path">src/search/</span></div>
+                <div class="last">Overlaps <b>Fix paging</b> on <span class="mono">query.ts</span></div></div>
+              <div class="card warn"><div class="name"><span class="status waiting"></span><span class="grow">Fix paging</span><span class="pill warn">waiting for you</span></div>
+                <div class="what muted">Planned, not started</div><div class="paths"><span class="path">src/search/Paging.tsx</span><span class="path">query.ts</span></div>
+                <div class="last">Asks how to share <span class="mono">query.ts</span></div></div>
+              <div class="card"><div class="name"><span class="status"></span><span class="grow">Dark mode toggle</span><span class="pill">idle</span></div>
+                <div class="what muted">Nothing held</div><div class="paths"></div>
+                <div class="last">Last note yesterday</div></div>
+            </div>
+            <div class="two">
+              <div class="card" style="padding:0"><div class="section"><h4>Notes</h4>${M.memorySearch()}<div style="height:4px"></div>${M.notesSolo()}</div></div>
+              <div class="card" style="padding:0"><div class="section"><h4>Working with others?</h4>
+                <p class="muted" style="margin:0 0 10px">Make this a team project to share claims, tasks and notes through the project's GitHub repo. Nothing changes until you do.</p>
+                <button class="btn">${M.icon("team", "sm")}Make this a team project</button></div></div>
+            </div>`;
+
+          const homeView = `
+            <header class="tabs"><span class="page-title">${M.icon(team ? "team" : "home", "sm")}${team ? "Team home" : "Today"}</span><span class="grow"></span></header>
+            <main class="home"><div class="col">${team ? homeTeam : homeSolo}</div></main>`;
+
+          return `
+            <div class="window ${home ? "no-right" : ""}">
+              ${M.rail([
+                {
+                  icon: team ? "team" : "home",
+                  title: team ? "Team home" : "Today",
+                  on: home,
+                  go: "home",
+                  dot: team,
+                },
+                { icon: "chats", title: "Chats", on: !home, go: "chat" },
+                { icon: "search", title: "Search" },
+              ])}
+              ${M.sidebar(peopleBlock)}
+              ${home ? homeView : chatView}
+            </div>`;
+        },
+        (link) =>
+          `${link({ view: null }, "Chat", Mock.state.view === "chat")}${link({ view: "home" }, "Home", Mock.state.view === "home")}`,
+      );
+    </script>
+  </body>
+</html>

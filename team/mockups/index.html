@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Team layer mockups</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="shared.css" />
+    <style>
+      body {
+        overflow: auto;
+      }
+      .wrap {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 40px 24px 60px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 24px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .lead {
+        max-width: 720px;
+        margin: 0 0 26px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        gap: 18px;
+      }
+      .opt {
+        display: flex;
+        flex-direction: column;
+        border-radius: 14px;
+        overflow: hidden;
+        background: var(--chrome);
+        backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+        -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+        box-shadow: var(--shadow);
+      }
+      .thumb {
+        display: block;
+        position: relative;
+        height: 220px;
+        overflow: hidden;
+        border-bottom: 1px solid var(--border);
+      }
+      .thumb iframe {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 1440px;
+        height: 900px;
+        border: 0;
+        transform: scale(0.25);
+        transform-origin: 0 0;
+        pointer-events: none;
+      }
+      .opt .body {
+        flex: 1;
+        padding: 14px 16px 16px;
+        background: var(--surface);
+      }
+      .opt h2 {
+        margin: 0 0 6px;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .opt p {
+        margin: 0 0 12px;
+        color: var(--muted);
+      }
+      .links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .links a {
+        text-decoration: none;
+      }
+      .theme {
+        position: fixed;
+        top: 12px;
+        right: 18px;
+      }
+      .theme a {
+        color: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Team layer: three ways to show it</h1>
+      <p class="lead">
+        Static mockups for VISION.md step 3: the team screen, file markers and the warning card.
+        Each option works with a team and solo (one person, several chats). Reasons and a pick are
+        in
+        <span class="mono">team/DESIGN_DIRECTION.md</span>.
+      </p>
+      <div class="grid" id="grid"></div>
+    </div>
+    <div class="theme controls"></div>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const theme = params.get("theme") === "dark" ? "dark" : "light";
+      document.documentElement.dataset.theme = theme;
+      document.querySelector(".theme").innerHTML =
+        `<a href="?theme=light" class="${theme === "light" ? "on" : ""}">Light</a><a href="?theme=dark" class="${theme === "dark" ? "on" : ""}">Dark</a>`;
+      const options = [
+        {
+          id: "a",
+          name: "A · Team tab",
+          idea: "The team is one more tab in the right panel, next to Terminal, Files and Browser. Solo, the tab is Memory. The warning card sits above the composer.",
+        },
+        {
+          id: "b",
+          name: "B · Presence bar",
+          idea: "No panel: teammates' faces and the sync state sit in the tab bar, always visible. A click opens a glass popover. The warning card is a sheet over the chat.",
+        },
+        {
+          id: "c",
+          name: "C · Team home",
+          idea: "The team gets its own page from the rail: people, tasks, notes, catch-up. The sidebar keeps a small who-is-around block. The warning card is inside the agent's message.",
+        },
+      ];
+      document.getElementById("grid").innerHTML = options
+        .map((option) => {
+          const page = `option-${option.id}.html`;
+          const link = (query, label) =>
+            `<a class="btn" href="${page}?theme=${theme}&${query}">${label}</a>`;
+          return `
+            <article class="opt">
+              <a class="thumb" href="${page}?theme=${theme}"><iframe loading="lazy" tabindex="-1" src="${page}?theme=${theme}&shot=1" title="${option.name}"></iframe></a>
+              <div class="body">
+                <h2>${option.name}</h2>
+                <p>${option.idea}</p>
+                <div class="links">
+                  ${link("mode=team", "Team")}
+                  ${link("mode=solo", "Solo")}
+                  ${link("mode=team&card=1", "Team card")}
+                  ${link("mode=solo&card=1", "Solo card")}
+                  ${option.id === "c" ? link("mode=team&view=home", "Team home") + link("mode=solo&view=home", "Today") : ""}
+                </div>
+              </div>
+            </article>`;
+        })
+        .join("");
+    </script>
+  </body>
+</html>

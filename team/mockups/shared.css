@@ -6,6 +6,11 @@
  * The wallpaper and the blur on .window stand in for the OS material
  * (Mica, Acrylic, vibrancy). In the app the OS draws it and the page only
  * uses translucent backgrounds, so the renderer never blurs anything.
+ *
+ * Layers, back to front: the wallpaper, the window (--chrome, blurred: what
+ * the sidebar and rail show), then the chat and right panel on top of it
+ * (--surface, --panel). Stacked, about a fifth of the wallpaper's colour
+ * still shows through the chat and a third through the panels.
  */
 
 :root {
@@ -14,12 +19,17 @@
     system-ui, sans-serif;
   --font-mono: "SF Mono", "Cascadia Code", "Ubuntu Sans Mono", ui-monospace, monospace;
 
+  /* A desktop picture with clear colour fields, so the glass has something to show. */
   --wall:
-    radial-gradient(1200px 700px at 12% 8%, #c9d6ff 0%, transparent 60%),
-    radial-gradient(900px 700px at 88% 18%, #ffd9c2 0%, transparent 60%),
-    radial-gradient(1000px 800px at 60% 100%, #d7f0e6 0%, transparent 60%), #eef0f6;
-  --chrome: rgb(248 248 250 / 0.58);
-  --surface: rgb(255 255 255 / 0.84);
+    radial-gradient(640px 520px at 14% 20%, #6f97ff 0%, transparent 64%),
+    radial-gradient(560px 520px at 86% 14%, #ff9a73 0%, transparent 62%),
+    radial-gradient(720px 600px at 72% 92%, #4fd1a1 0%, transparent 64%),
+    radial-gradient(520px 440px at 26% 96%, #c084fc 0%, transparent 62%),
+    radial-gradient(420px 360px at 50% 46%, #ffd166 0%, transparent 64%),
+    linear-gradient(135deg, #dfe6f7, #f5ece4);
+  --chrome: rgb(246 246 248 / 0.4);
+  --surface: rgb(255 255 255 / 0.66);
+  --panel: rgb(255 255 255 / 0.5);
   --raised: #ffffff;
   --sunken: rgb(244 244 245 / 0.7);
   --fg: #27272a;
@@ -48,17 +58,21 @@
   --chat-2: oklch(0.68 0.15 70);
 
   --radius: 10px;
-  --glass-blur: 36px;
+  --glass-blur: 30px;
   color-scheme: light;
 }
 
 :root[data-theme="dark"] {
   --wall:
-    radial-gradient(1200px 700px at 12% 8%, #1d2a5c 0%, transparent 60%),
-    radial-gradient(900px 700px at 88% 18%, #4a2a22 0%, transparent 60%),
-    radial-gradient(1000px 800px at 60% 100%, #12352c 0%, transparent 60%), #0b0c10;
-  --chrome: rgb(22 22 22 / 0.5);
-  --surface: rgb(12 12 12 / 0.8);
+    radial-gradient(640px 520px at 14% 20%, #2b4fd8 0%, transparent 64%),
+    radial-gradient(560px 520px at 86% 14%, #b8482a 0%, transparent 62%),
+    radial-gradient(720px 600px at 72% 92%, #0f8a64 0%, transparent 64%),
+    radial-gradient(520px 440px at 26% 96%, #6d2bb8 0%, transparent 62%),
+    radial-gradient(420px 360px at 50% 46%, #a36b00 0%, transparent 64%),
+    linear-gradient(135deg, #0a0c16, #120d0b);
+  --chrome: rgb(18 18 20 / 0.46);
+  --surface: rgb(12 12 14 / 0.66);
+  --panel: rgb(12 12 14 / 0.5);
   --raised: #191919;
   --sunken: rgb(255 255 255 / 0.03);
   --fg: #f5f5f5;
@@ -135,15 +149,16 @@ button {
 
 .window {
   position: absolute;
-  inset: 18px 18px 18px 18px;
+  /* The top margin holds the mockup controls, so they never cover the app. */
+  inset: 50px 18px 18px 18px;
   border-radius: 12px;
   overflow: hidden;
   display: grid;
   grid-template-columns: 52px 248px minmax(0, 1fr) var(--right-width, 400px);
   grid-template-rows: 44px minmax(0, 1fr);
   background: var(--chrome);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.5);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.5);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
   box-shadow: var(--shadow);
 }
 
@@ -396,11 +411,11 @@ svg.i.sm {
   font-size: 7.5px;
 }
 
-.held.chat {
+.held.by-chat {
   padding-left: 6px;
 }
 
-.held.chat::before {
+.held.by-chat::before {
   content: "";
   width: 6px;
   height: 6px;
@@ -667,7 +682,7 @@ svg.i.sm {
 }
 
 .right-body {
-  background: var(--surface);
+  background: var(--panel);
   overflow: hidden;
   min-height: 0;
 }
@@ -1026,9 +1041,8 @@ svg.i.sm {
 
 .controls {
   position: fixed;
-  left: 50%;
-  bottom: 26px;
-  transform: translateX(-50%);
+  top: 9px;
+  right: 18px;
   display: flex;
   gap: 4px;
   padding: 4px;

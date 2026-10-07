@@ -1,6 +1,7 @@
 // Shared pieces for the team-layer mockups. Static and clickable, no app code.
 // URL query: theme=light|dark, mode=team|solo, card=1 (warning card open),
-// pane=<right panel tab>, shot=1 (hide the mockup controls for screenshots).
+// pane=<right panel tab>, view=chat|home (Option C), shot=1 (hide the mockup
+// controls for screenshots).
 
 const Mock = (() => {
   const params = new URLSearchParams(location.search);
@@ -9,6 +10,7 @@ const Mock = (() => {
     mode: params.get("mode") === "solo" ? "solo" : "team",
     card: params.get("card") === "1",
     pane: params.get("pane"),
+    view: params.get("view") === "home" ? "home" : "chat",
     picked: null,
     shot: params.get("shot") === "1",
   };
@@ -75,7 +77,7 @@ const Mock = (() => {
   const heldMini = (p) =>
     `<span class="who" style="--c:${p.color}" title="${p.name} holds files this touches">${p.initials}</span>`;
   const heldChat = (c, label = c.title) =>
-    `<span class="held chat" style="--c:${c.color}">${label}</span>`;
+    `<span class="held by-chat" style="--c:${c.color}">${label}</span>`;
 
   // ---------- Pieces ----------
 
@@ -359,7 +361,7 @@ $ <span style="opacity:.6">▍</span></div>`;
 
   // ---------- Wiring ----------
 
-  const controls = (option) => {
+  const controls = (option, extra) => {
     const link = (patch, label, on) => {
       const next = new URLSearchParams(location.search);
       for (const [key, value] of Object.entries(patch)) {
@@ -377,16 +379,18 @@ $ <span style="opacity:.6">▍</span></div>`;
         ${link({ mode: "team" }, "Team", state.mode === "team")}
         ${link({ mode: "solo" }, "Solo", state.mode === "solo")}
         ${link({ card: state.card ? null : "1" }, state.card ? "Hide warning card" : "Show warning card", state.card)}
+        ${extra ? extra(link) : ""}
       </div>`;
   };
 
-  const mount = (option, render) => {
+  /** `extra(link)` adds option-specific links to the controls. */
+  const mount = (option, render, extra) => {
     const root = document.documentElement;
     const paint = () => {
       root.dataset.theme = state.theme;
       root.dataset.mode = state.mode;
       root.dataset.shot = state.shot ? "1" : "0";
-      document.body.innerHTML = render(state) + controls(option);
+      document.body.innerHTML = render(state) + controls(option, extra);
     };
     document.addEventListener("click", (event) => {
       const pick = event.target.closest("[data-pick]");

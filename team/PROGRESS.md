@@ -2,6 +2,38 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — Step 3: design proposal (options A, B, C, index, DESIGN_DIRECTION.md)
+
+**What changed**
+
+- `team/DESIGN_DIRECTION.md`: what we take from the reference and what we do differently; how the glass works on Windows 11 (Mica), macOS (vibrancy), Windows 10 / Linux / web / mobile (solid colors), and how the page switches; 3 lines per option; the pick: **C with B's presence chip**, and why.
+- Mockups (`team/mockups/`):
+  - Glass much stronger, as asked: a desktop picture with clear color fields, and lighter layers (`--chrome` 0.40, `--surface` 0.66, new `--panel` 0.50 for the right panel; dark 0.46 / 0.66 / 0.50). The wallpaper shows softly through the sidebar, rail and right panel; the chat column stays readable.
+  - The mockup switcher moved to the top-right corner, in a 50 px margin above the window, so it covers nothing. Screenshots hide it.
+  - Option B checked in light and dark, team and solo, with card and popover. Found and fixed: the chat chips (`.held.chat`) picked up the main column's `.chat` styles and lost their color (renamed `.held.by-chat`); the popover opened by default and hid the holder chips on the plan card (now closed by default, `pop=1` or the switcher opens it); the face stack overlapped too much.
+  - New: `option-c.html` (Team home / Today page, sidebar who-is-around block, warning card inside the agent's message), `index.html` (live previews of the three, links to every state, light/dark).
+  - Empty favicon on every page (the only console error before).
+
+**Files touched**
+
+- `team/DESIGN_DIRECTION.md` (new), `team/mockups/shared.css`, `shared.js`, `option-a.html`, `option-b.html`, `option-c.html` (new), `index.html` (new), `team/PROGRESS.md`. No app code.
+
+**How it was checked**
+
+- Playwright (headless Chromium, 1440×900), pages served by a `python3 -m http.server` on 127.0.0.1 started for this and stopped by its PID after (and its child Python process, checked by `/proc/<pid>/cwd`). Browser closed.
+- 34 screenshots in `test-screenshots`, folder `2026-10-07-design/` (hash in the next entry): A, B and C × light/dark × team/solo, each with and without the warning card (24); B's popover × 4; C's home × 4; the index light and dark. No console errors in the run. I looked at every picture (4 contact sheets); no pairing links or secrets can appear in them (static mockups, no app).
+- No tests: no code changed.
+
+**What's left**
+
+- The pick (section 5 of DESIGN_DIRECTION.md).
+- The glass on a real Windows 11 machine (does Mica fill the area under `titleBarOverlay`?) belongs to the Windows test plan.
+
+**Unsure about / notes**
+
+- The glass strength is a judgment call: in the dark theme the wallpaper colors are strong in the sidebar. Easy to tune with the three alpha values in `shared.css`.
+- `nativeTheme.prefersReducedTransparency` is named from memory; DESIGN_DIRECTION.md says to check it against Electron 44's docs.
+
 ## 2026-10-07 — A failed read of the team state keeps the last one, marked not fresh
 
 **What changed**
