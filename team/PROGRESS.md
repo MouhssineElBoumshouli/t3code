@@ -2,6 +2,52 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — Slices 1 and 2: the team state format and model, and the Git repo for it
+
+**What changed**
+
+- **Slice 1** (commit 55e678047), no I/O:
+  - `packages/contracts/src/teamState.ts` (new): format 1 of the state on `refs/t3-team/state`. `team.json` (`format`, `teamId`, `name`, `createdBy`, `createdAt`) and the writer file `writers/<login>/<environmentId>.json` (`format`, `login`, `displayName`, `environmentId`, `lastSyncAt`, `claims`, `tasks`, `notes`, `activity`). Claims have the optional `branch` field from STORAGE_PLAN.md 4.5. Constants: the ref name, the caps (200 claims, 7 days for released claims, 200 notes, 100 activity lines). One export line added next to the existing `team-layer:` line in `contracts/src/index.ts`.
+  - `apps/server/src/team/state/TeamStateModel.ts` (new): `parseTeamState` (tree files → `team.json` + writer files + warnings), `buildTeamView` (members, active claims, tasks after last writer wins, notes, activity, all as the existing contract types with the login as member id), `claimOverlaps`, `findLateOverlaps`, `compactWriterFile` (the caps), and one function per write: `addClaim`, `releasePaths`, `releaseThreadClaims`, `saveTask`, `addHandoff`, `saveAutomaticNote`, `addActivity`.
+- **Slice 2** (commit 781610fdf): `apps/server/src/team/state/TeamStateRepo.ts` (new). A bare repo per team (the caller passes `<T3 home>/team/<teamId>.git`) with `origin` set to the project's remote URL. `fetch` gets only the state ref at depth 1. `saveMine` writes one of this server's files to disk (no network). `read` gives the tree at the last fetched tip with this server's own files on top. `sync` fetches, puts this server's files into the remote tree (temporary index), commits on top of the remote tip and pushes with no `+` and no `--force`. A push refused as behind is redone, up to 5 attempts. Results: confirmed, or not confirmed with `unreachable`, `behind`, `refused` or `missing`.
+- Nothing is wired into the server. No running dev server behaves differently.
+
+**Files touched**
+
+- New: `packages/contracts/src/teamState.ts`, `apps/server/src/team/state/TeamStateModel.ts` and `.test.ts`, `apps/server/src/team/state/TeamStateRepo.ts` and `.test.ts`.
+- Changed: `packages/contracts/src/index.ts` (one export line, next to the existing team one), `team/PROGRESS.md`.
+
+**How it was checked**
+
+- `vp test run src/team/state/` in `apps/server`: 2 files, 15 tests passed (10 model, 5 repo).
+  - Model tests: two writers merge into one view; one person on two servers is one member with two writers; concurrent task edits give the same winner for three different file orders, including a tie on `updatedAt`; caps for claims, notes and activity, with active claims kept before released ones; a released claim is still there after 6 days and gone after 8; a broken writer file is skipped, while a newer one (format 2, unknown fields, one entry with an unknown task status) is read with only that entry skipped; a late overlap is found from both sides with the same key, not again on the next sync, and forgotten once released; the same person's other server counts as someone else for late overlaps; one automatic note per thread; folder release.
+  - Repo tests: origin is a local bare repo over `file://` (real Git protocol, no network) and each writer has its own state repo. Two writers syncing at once both land. A push refused because Sara's push landed between Yassine's fetch and push is redone (`attempts: 2`; the test slips Sara's sync in through a wrapped Git driver). With origin renamed away, the sync says `unreachable`, `read` still has the write, and after renaming origin back the next sync lands it. Without `create` a missing ref is reported, not created. A second sync with nothing new makes no commit. Paths outside the state tree are refused. Every test checks origin's reflog: each update's parent is the update before, and no push used `+`, `--force` or `-f`.
+  - Repo test file run 10 times in a row: 10 of 10 passed (the concurrent test did not flake).
+- Mutation checks, each restored afterwards (`cmp` with a backup): model: tie-break `>=` → `>` fails the task test; ignoring `reported` fails the late-overlap test; no 7-day cutoff fails the drop test. Repo: `--force` on the push fails 4 tests; no retry fails 2; `read` without this server's files fails the offline test. (My first try at the `--force` mutation used `sed`, which did not apply the change; redone with an exact replacement and the diff checked.)
+- Typecheck (`tsc --noEmit`, no dev server running): `packages/contracts` and `apps/server`, 0 errors.
+- Lint on the new files and `contracts/src/index.ts`: exit 0, no warnings. The formatter ran on both commits.
+- **Not done: the timing check against GitHub** (slice 2's "time a real sync once, on a scratch private repo"). There is no scratch repo yet, so I skipped it. The Q4 numbers in STORAGE_PLAN.md are still estimates from parts measured one at a time. None of your GitHub repos were touched.
+
+**What's left**
+
+- Slice 3: `TeamHost.ts` (login, `canPush`/`isPublic`, ETag check) with a fake process runner.
+- The GitHub timing check, once you have a private scratch repo.
+
+**Unsure about / notes**
+
+Choices the plan did not spell out (say if you disagree):
+
+- **Unknown fields:** readers ignore them. If a newer app wrote this server's own file and an older app then rewrites it, the unknown fields are lost. Writer file entries are decoded one at a time, so an entry the app does not understand (say a new task status) is skipped with a warning instead of hiding the whole file. A higher `format` number is read if its fields still decode.
+- **Claim cap:** if a server ever has more than 200 active claims, the oldest active ones are dropped. That follows "at most 200" literally.
+- **Field names:** a task's owner is stored as `owner` (a login). Claims, notes and activity lines have no member field; the writer is the member.
+- A writer file whose path and contents name different writers is skipped.
+- Members have no `joinedAt` in the model (sorted by login, with `lastSyncAt`). Slice 4 decides what `TeamMember.joinedAt` becomes.
+- `sync` creates the ref only with `create: true`, so only `t3 team init` (slice 6) can start a team; for a member a missing ref is reported as `missing`. The creator's `team.json` goes through the same "own files" path.
+- A push without access (HTTP 403) shows up as `unreachable`, not as its own reason. Slice 3's `canPush` will tell the two apart.
+- A push that loses the race for origin's ref lock (`[remote rejected] ... lock`) is retried like "behind". That comes from how Git reports it; I did not see it happen in the tests.
+- The commit author (name and email) is passed in by the caller; slice 4 picks it. `commit-tree` runs with `--no-gpg-sign`, and Git runs with `GIT_TERMINAL_PROMPT=0` and `LC_ALL=C` (so the "couldn't find remote ref" message can be matched).
+- The model repeats the activity texts and the release rules of `TeamService.ts`. The copy goes away when the SQLite service is parked after slice 5.
+
 ## 2026-10-07 — Part 0 finished, the five storage decisions, slice 0 (host mode parked)
 
 **What changed**
