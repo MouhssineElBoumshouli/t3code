@@ -15,6 +15,7 @@
 import type {
   EnvironmentId,
   Team,
+  TeamFeedSync,
   TeamActivity,
   TeamClaim,
   TeamClaimOverlap,
@@ -32,6 +33,8 @@ import type {
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
+import type * as PubSub from "effect/PubSub";
+import type * as Scope from "effect/Scope";
 
 import type { TeamLateOverlap } from "./state/TeamStateModel.ts";
 import type { TeamStateFetchResult, TeamStateSyncResult } from "./state/TeamStateRepo.ts";
@@ -177,6 +180,14 @@ export class TeamService extends Context.Service<
     readonly openSolo: (input: OpenSoloInput) => Effect.Effect<TeamMembership, TeamServiceError>;
     /** Whether the team is a solo team, kept on this computer. */
     readonly isSolo: (teamId: TeamId) => Effect.Effect<boolean>;
+    /** Solo, synced, offline (the last check failed) or not fresh (the last read failed). */
+    readonly syncState: (teamId: TeamId) => Effect.Effect<TeamFeedSync>;
+    /**
+     * Team ids, each time a team's lists or sync state may have changed (a
+     * write, a read, going offline or back). Subscribe before reading, so no
+     * change is missed.
+     */
+    readonly subscribeChanges: Effect.Effect<PubSub.Subscription<TeamId>, never, Scope.Scope>;
     readonly getTeam: (teamId: TeamId) => Effect.Effect<Option.Option<Team>>;
     /** Teams this server has opened, by name. */
     readonly listTeams: () => Effect.Effect<ReadonlyArray<Team>>;

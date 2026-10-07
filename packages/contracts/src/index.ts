@@ -47,3 +47,4 @@ export * from "./worktreeSetup.ts";
 // team-layer: team schemas (fork-only, see team/DESIGN.md).
 export * from "./team.ts";
 export * from "./teamState.ts";
+export * from "./teamFeed.ts";

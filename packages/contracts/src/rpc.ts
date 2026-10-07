@@ -282,6 +282,7 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import { TeamFeedEvent } from "./teamFeed.ts"; // team-layer
 
 export const WS_METHODS = {
   // Project registry methods
@@ -456,6 +457,8 @@ export const WS_METHODS = {
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+  // team-layer: the team feed (fork-only, see team/UI_PLAN.md slice 0).
+  subscribeTeamFeed: "subscribeTeamFeed",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -1413,6 +1416,14 @@ const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   stream: true,
 });
 
+// team-layer: the team feed (fork-only, see team/UI_PLAN.md slice 0).
+const WsSubscribeTeamFeedRpc = Rpc.make(WS_METHODS.subscribeTeamFeed, {
+  payload: Schema.Struct({}),
+  success: TeamFeedEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 const WsSubscribeBackgroundPolicyRpc = Rpc.make(WS_METHODS.subscribeBackgroundPolicy, {
   payload: Schema.Struct({}),
   success: BackgroundPolicySnapshot,
@@ -1568,6 +1579,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsSubscribeTeamFeedRpc, // team-layer
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,

@@ -10,8 +10,18 @@
  * Runs against a real server (`src/bin.ts` on a temp home), with a session
  * made the way a client gets one: a one-time pairing link with only
  * `orchestration:read`, exchanged at `/oauth/token`.
+ *
+ * Also checks the team feed (`subscribeTeamFeed`, team/UI_PLAN.md slice 0):
+ * readable with `orchestration:read`, refused to a session without it (one
+ * with only `relay:read`).
  */
-import { AuthOrchestrationReadScope, WS_METHODS, WsRpcGroup } from "@t3tools/contracts";
+import {
+  AuthOrchestrationReadScope,
+  AuthRelayReadScope,
+  type AuthEnvironmentScope,
+  WS_METHODS,
+  WsRpcGroup,
+} from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -92,10 +102,14 @@ const decodeTicket = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ ticket: Schema.String })),
 );
 
-/** A real server on a temp home, and a WebSocket URL for an `orchestration:read` session. */
-class ReadOnlySocket extends Context.Service<ReadOnlySocket, { readonly wsUrl: string }>()(
-  "t3/auth/ChatGptRpcScopes.test/ReadOnlySocket",
-) {}
+/**
+ * A real server on a temp home, and WebSocket URLs for an `orchestration:read`
+ * session and for a `relay:read` session (no `orchestration:read`).
+ */
+class ReadOnlySocket extends Context.Service<
+  ReadOnlySocket,
+  { readonly wsUrl: string; readonly withoutReadWsUrl: string }
+>()("t3/auth/ChatGptRpcScopes.test/ReadOnlySocket") {}
 
 const start = Effect.gen(function* () {
   const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-chatgpt-scopes-"));
@@ -161,39 +175,41 @@ const start = Effect.gen(function* () {
     { baseDir: Option.some(baseDir) },
     Option.some("Error"),
   );
-  const link = yield* Effect.gen(function* () {
-    const auth = yield* EnvironmentAuth.EnvironmentAuth;
-    return yield* auth.createPairingLink({
-      scopes: [AuthOrchestrationReadScope],
-      label: "ChatGPT RPC scope test",
+  const socketUrlFor = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
+    Effect.gen(function* () {
+      const link = yield* Effect.gen(function* () {
+        const auth = yield* EnvironmentAuth.EnvironmentAuth;
+        return yield* auth.createPairingLink({ scopes, label: "RPC scope test" });
+      }).pipe(
+        Effect.provide(
+          EnvironmentAuth.runtimeLayer.pipe(
+            Layer.provide(ServerConfig.layer(config)),
+            Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error")),
+          ),
+        ),
+      );
+      const exchanged = yield* post(
+        `${baseUrl}/oauth/token`,
+        {},
+        HttpBody.urlParams({
+          grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+          subject_token: link.credential,
+          subject_token_type: "urn:t3:params:oauth:token-type:environment-bootstrap",
+          requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
+        }),
+      );
+      assert.strictEqual(exchanged.status, 200, exchanged.text);
+      const token = (yield* decodeAccessToken(exchanged.text).pipe(Effect.orDie)).access_token;
+      const ticketResult = yield* post(`${baseUrl}/api/auth/websocket-ticket`, {
+        authorization: `Bearer ${token}`,
+      });
+      assert.strictEqual(ticketResult.status, 200, ticketResult.text);
+      const ticket = (yield* decodeTicket(ticketResult.text).pipe(Effect.orDie)).ticket;
+      return `ws://127.0.0.1:${port}/ws?wsTicket=${encodeURIComponent(ticket)}`;
     });
-  }).pipe(
-    Effect.provide(
-      EnvironmentAuth.runtimeLayer.pipe(
-        Layer.provide(ServerConfig.layer(config)),
-        Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error")),
-      ),
-    ),
-  );
-  const exchanged = yield* post(
-    `${baseUrl}/oauth/token`,
-    {},
-    HttpBody.urlParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
-      subject_token: link.credential,
-      subject_token_type: "urn:t3:params:oauth:token-type:environment-bootstrap",
-      requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
-    }),
-  );
-  assert.strictEqual(exchanged.status, 200, exchanged.text);
-  const token = (yield* decodeAccessToken(exchanged.text).pipe(Effect.orDie)).access_token;
-  const ticketResult = yield* post(`${baseUrl}/api/auth/websocket-ticket`, {
-    authorization: `Bearer ${token}`,
-  });
-  assert.strictEqual(ticketResult.status, 200, ticketResult.text);
-  const ticket = (yield* decodeTicket(ticketResult.text).pipe(Effect.orDie)).ticket;
   return ReadOnlySocket.of({
-    wsUrl: `ws://127.0.0.1:${port}/ws?wsTicket=${encodeURIComponent(ticket)}`,
+    wsUrl: yield* socketUrlFor([AuthOrchestrationReadScope]),
+    withoutReadWsUrl: yield* socketUrlFor([AuthRelayReadScope]),
   });
 });
 
@@ -269,6 +285,32 @@ it.layer(ReadOnlySocketLive, { timeout: STARTUP_TIMEOUT_MS + 30_000, excludeTest
         const { wsUrl } = yield* ReadOnlySocket;
         const exit = yield* callByName(wsUrl, WS_METHODS.serverGetConfig, {});
         assert.isTrue(Exit.isSuccess(exit), String(failureOf(exit)?._tag));
+      }),
+    );
+
+    // team-layer: the team feed is read-only, so orchestration:read is enough, and needed.
+    it.effect("subscribeTeamFeed gives an orchestration:read session the snapshot", () =>
+      Effect.gen(function* () {
+        const { wsUrl } = yield* ReadOnlySocket;
+        const exit = yield* callByName(wsUrl, WS_METHODS.subscribeTeamFeed, {});
+        assert.isTrue(Exit.isSuccess(exit), String(failureOf(exit)?._tag));
+        assert.deepEqual(
+          Exit.isSuccess(exit) ? exit.value : undefined,
+          Option.some({
+            _tag: "snapshot",
+            teams: [],
+          }),
+        );
+      }),
+    );
+
+    it.effect("subscribeTeamFeed refuses a session without orchestration:read", () =>
+      Effect.gen(function* () {
+        const { withoutReadWsUrl } = yield* ReadOnlySocket;
+        const exit = yield* callByName(withoutReadWsUrl, WS_METHODS.subscribeTeamFeed, {});
+        const failure = failureOf(exit);
+        assert.strictEqual(failure?._tag, "EnvironmentAuthorizationError");
+        assert.strictEqual(failure?.requiredScope, "orchestration:read");
       }),
     );
 

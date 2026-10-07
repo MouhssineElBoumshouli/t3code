@@ -2,6 +2,37 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — Team data in the client: the team feed (UI_PLAN.md slice 0)
+
+**What changed**
+
+- New read-only WebSocket subscription **`subscribeTeamFeed`** (contracts `teamFeed.ts`). First event: a snapshot of every team and solo project on the server that has a project there; then one team's view each time it changes, or "removed". Each view: name, solo or team, the server's projects in it with their folder relative to the team root (`pathPrefix`, so claims can be matched to a project's file tree), who this server writes as, members, active claims (with thread refs), open tasks (≤ 50), the 5 newest written handoffs (headline only, ≤ 5 files), and sync state (`solo`, `synced`, `offline`, `notFresh`; writes not shared yet; when last read while offline or not fresh).
+- **Cheap**: no polling from the browser. `GitTeamService` publishes a team id on every write, read and online/offline change (`TeamService.subscribeChanges`); `TeamFeed` (server) rebuilds that one team's view and sends it only if it differs from the last one sent. `readAt` is only sent while offline or not fresh, so a read that changed nothing pushes nothing. Polls that find nothing new never reload, so nothing is pushed while nothing changes.
+- **Authorization**: same pattern as the other reads: `orchestration:read` in `RPC_REQUIRED_SCOPES`, handler through `observeRpcStream`.
+- Client: `packages/client-runtime/src/state/teamFeed.ts` (subscription atom family that folds events into the list, `applyTeamFeedEvent` in contracts), `apps/web/src/state/teamFeed.ts` (`useTeamFeed(environmentId)`). Mobile can use the same atom.
+
+**Files touched**
+
+- New: `packages/contracts/src/teamFeed.ts` (+ test), `apps/server/src/team/TeamFeed.ts` (+ test), `packages/client-runtime/src/state/teamFeed.ts`, `apps/web/src/state/teamFeed.ts`.
+- `team-layer:` edits in upstream files: `packages/contracts/src/rpc.ts` (method, RPC, group), `packages/contracts/src/index.ts`, `apps/server/src/auth/RpcAuthorization.ts`, `apps/server/src/ws.ts` (one handler), `apps/server/src/server.ts` (layer), `apps/server/src/server.test.ts` (a mock), `packages/client-runtime/src/rpc/client.ts` (tag), `packages/client-runtime/package.json` (export).
+- `apps/server/src/team/TeamService.ts`, `state/GitTeamService.ts` (`syncState`, `subscribeChanges`, online tracking), `apps/server/src/auth/ChatGptRpcScopes.test.ts`.
+
+**How it was checked**
+
+- `apps/server`: `vp test run src/mcp/toolkits/team/ src/team/ src/cli/team.test.ts src/auth/ChatGptRpcScopes.test.ts src/server.test.ts`: 19 files, **374 passed** (server.test.ts run because its layers changed). `packages/contracts`: `teamFeed.test.ts` passed. `tsc --noEmit`: server, contracts, client-runtime, web, mobile: 0 errors. `vp lint` on the changed files: no errors (the warnings in `server.test.ts` were there before).
+- Scope test (real server, real pairing): an `orchestration:read` session subscribes and gets `{ snapshot, teams: [] }`; a session with only `relay:read` is refused with `EnvironmentAuthorizationError`, `requiredScope: orchestration:read`. Mutation: with the handler not going through the scope check, the refusal test fails.
+- Feed test (real Git team service): a solo project's snapshot (solo, "You", project, `solo` sync), then a claim pushes a view with the claim, then a handoff pushes a view with its headline; a team project in `packages/web` of a team repo shows `pathPrefix: "packages/web"`, the member, `synced`, and its claim.
+
+**What's left**
+
+- Step 4 (next entry): the markers and the presence chip use this.
+
+**Unsure about / notes**
+
+- That an unchanged view is not sent again is not proven by a test: views are built when a change is handled, so a test cannot tell "skipped" from "built later with the next change" without waiting. A mutation removing the check still passes.
+- Each subscriber builds its own views (one browser tab = one subscriber). Fine for a few clients; a shared broadcaster would be the next step if many connect.
+- The feed works out project → team per change (reads `.team/team.json` per project), as the team tools do. A few small file reads per change.
+
 ## 2026-10-07 — Quick Windows fixes: W2, W5, W8, W15
 
 **What changed**

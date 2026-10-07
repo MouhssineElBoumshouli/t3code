@@ -103,6 +103,10 @@
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
     },
+    "./state/teamFeed": {
+      "types": "./src/state/teamFeed.ts",
+      "default": "./src/state/teamFeed.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"

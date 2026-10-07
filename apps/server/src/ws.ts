@@ -180,6 +180,7 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import * as TeamFeed from "./team/TeamFeed.ts"; // team-layer
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -672,6 +673,8 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
+      // team-layer: the team feed (team/UI_PLAN.md slice 0).
+      const teamFeed = yield* TeamFeed.TeamFeed;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -3789,6 +3792,11 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "auth" },
           ),
+        // team-layer: read-only team feed; scope in RpcAuthorization (test: auth/ChatGptRpcScopes.test.ts).
+        [WS_METHODS.subscribeTeamFeed]: (_input) =>
+          observeRpcStream(WS_METHODS.subscribeTeamFeed, teamFeed.subscribe, {
+            "rpc.aggregate": "team",
+          }),
         [WS_METHODS.subscribeBackgroundPolicy]: (_input) =>
           observeRpcStream(
             WS_METHODS.subscribeBackgroundPolicy,

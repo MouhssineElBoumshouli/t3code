@@ -63,6 +63,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
@@ -257,6 +258,8 @@ interface TeamEntry {
   etag: string | null;
   /** The poller's fiber; stopped when the entry is replaced. */
   poller: Fiber.Fiber<never> | null;
+  /** The last check with the remote worked (or none was made yet). */
+  online: boolean;
 }
 
 export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeamServiceOptions) {
@@ -277,6 +280,16 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       effect.pipe(Effect.mapError((cause) => new TeamStorageError({ operation, cause })));
 
   const teams = new Map<TeamId, TeamEntry>();
+  /** Teams whose lists or sync state may have changed; the team feed listens. */
+  const changed = yield* PubSub.unbounded<TeamId>();
+  const notify = (entry: TeamEntry) => PubSub.publish(changed, entry.teamId).pipe(Effect.asVoid);
+  const setOnline = (entry: TeamEntry, online: boolean) =>
+    entry.online === online
+      ? Effect.void
+      : Effect.suspend(() => {
+          entry.online = online;
+          return notify(entry);
+        });
   // Opening a team twice at once must not make two entries.
   const registryLock = yield* Semaphore.make(1);
 
@@ -307,7 +320,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       );
       if (snapshot === null) {
         entry.readFailed = true;
-        return;
+        return yield* notify(entry);
       }
       entry.readFailed = false;
       entry.readAt = yield* nowIso;
@@ -333,6 +346,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         ];
         entry.reported = found.reported;
       }
+      yield* notify(entry);
     });
 
   /** This server's writer files in the team: every file with this server's environment. */
@@ -363,6 +377,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       };
       if (entry.view !== null)
         entry.view = Model.buildTeamView(entry.view.team, entry.parsed.writers);
+      yield* notify(entry);
       return next;
     });
 
@@ -380,6 +395,8 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         .pipe(Effect.tapError(() => Effect.sync(() => (entry.unshared = true))));
       // A write made during this sync schedules its own, which sets this again if it fails.
       entry.unshared = !result.confirmed;
+      if (result.confirmed) yield* setOnline(entry, true);
+      else if (result.reason === "unreachable") yield* setOnline(entry, false);
       yield* entry.lock.withPermits(1)(reload(entry));
       return result;
     });
@@ -480,6 +497,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
           ),
         );
         failures = outcome === "failed" ? failures + 1 : 0;
+        if (outcome !== "idle") yield* setOnline(entry, outcome !== "failed");
         if (options.onPoll !== undefined) yield* options.onPoll(entry.teamId, outcome);
       }
     });
@@ -516,6 +534,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         pollMode: location === null ? "lsRemote" : "etag",
         etag: null,
         poller: null,
+        online: true,
       };
       yield* reload(entry);
       if (remoteUrl !== null) entry.poller = yield* pollEntry(entry).pipe(Effect.forkIn(scope));
@@ -1140,6 +1159,25 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
     openTeam: (input) => open(input, false).pipe(Effect.map((result) => result.membership)),
     openSolo,
     isSolo: (teamId) => Effect.sync(() => teams.get(teamId)?.remoteUrl === null),
+    syncState: (teamId) =>
+      Effect.sync(() => {
+        const entry = teams.get(teamId);
+        const status =
+          entry === undefined || entry.remoteUrl === null
+            ? "solo"
+            : entry.readFailed
+              ? "notFresh"
+              : entry.online
+                ? "synced"
+                : "offline";
+        const stale = status === "offline" || status === "notFresh";
+        return {
+          status,
+          unshared: entry?.unshared ?? false,
+          readAt: stale ? (entry?.readAt ?? null) : null,
+        } as const;
+      }),
+    subscribeChanges: PubSub.subscribe(changed),
     ensureTeam: (input) => open(input, true),
     getTeam: (teamId) =>
       Effect.sync(() => {

@@ -100,6 +100,7 @@ import { TeamBriefingLive } from "./mcp/toolkits/team/briefing.ts";
 import { TeamAutoNotesLive } from "./team/TeamAutoNotes.ts";
 import { TeamClaimAutoReleaseLive } from "./team/TeamClaimAutoRelease.ts";
 import * as TeamWarmup from "./team/TeamWarmup.ts";
+import * as TeamFeed from "./team/TeamFeed.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -287,6 +288,8 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(TeamAutoNotesLive),
   // team-layer: open each project's team at start, so the first turn gets its briefing.
   Layer.provideMerge(TeamWarmup.layer),
+  // team-layer: the read-only team feed for clients (team/UI_PLAN.md slice 0).
+  Layer.provideMerge(TeamFeed.layer),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 
