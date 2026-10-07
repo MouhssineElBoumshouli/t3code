@@ -2,6 +2,36 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — Quick Windows fixes: W2, W5, W8, W15
+
+**What changed**
+
+- **W2**: Git calls that talk to `origin` (state repo fetch, push, `ls-remote`; `t3 team init`'s `ls-remote`) run with `GCM_INTERACTIVE=never`, so Git Credential Manager fails instead of opening a sign-in window from a background sync; the existing offline path takes over.
+- **W5**: `teamPathsOverlap` ignores case (`src/Auth/Login.ts` overlaps `src/auth/`), on every OS, since teammates may be on Windows or macOS. The stored spelling is kept.
+- **W8**: "same checkout as you" and the memory search's "written in your copy" compare working folders by their real path (links resolved), and on Windows without case or slash differences. New `apps/server/src/team/folders.ts` (`folderKey`, `realFolder`), also used for the solo team id.
+- **W15**: tests build `file://` URLs with `pathToFileURL` (`team/testing/teamState.ts`, `GitTeamService.test.ts`, `TeamStateRepo.test.ts`, `cli/team.test.ts`).
+
+**Files touched**
+
+- `packages/contracts/src/team.ts`, `apps/server/src/team/state/TeamStateRepo.ts`, `apps/server/src/cli/team.ts`, `apps/server/src/mcp/toolkits/team/handlers.ts`, `apps/server/src/team/folders.ts` (new), `apps/server/src/team/state/SoloTeam.ts` (uses it).
+- Tests: `apps/server/src/team/folders.test.ts` (new), `handlers.test.ts` (1 new), the four W15 files.
+- `team/WINDOWS_AND_SOLO.md` (each item marked fixed).
+
+**How it was checked**
+
+- `vp test run src/mcp/toolkits/team/ src/team/ src/cli/team.test.ts src/auth/ChatGptRpcScopes.test.ts`: 17 files, **166 passed**. `tsc --noEmit` in `apps/server` and `packages/contracts`: 0 errors. `vp lint` on the changed files: clean.
+- New handler test: thread B works in the project through a symlink and claims `src/Auth/Login.ts`; thread A claims `src/auth/login.ts` and gets one overlap, "same checkout as you". Mutation checks: without the lower case, no overlap (`expected []`); comparing folder strings, "their own copy". `folderKey` unit test: four Windows spellings of one folder give one key; Linux keeps case.
+- **Not run on Windows.** W2 has no test: whether GCM honours the variable can only be seen on Windows (WINDOWS_AND_SOLO.md plan step 6). W15 is only proven on Linux here: the URLs are the same as before on Linux; plan step 2 runs the team tests on a Windows runner.
+
+**What's left**
+
+- Steps 3 and 4 (next entries). From the audit: W3 (fewer Git processes per read), W10 (rename retry), W4, W6, W7.
+
+**Unsure about / notes**
+
+- W5 ignores case on Linux too: two files that differ only by case now count as overlapping. Rare, and a false warning is better than a missed clash.
+- W2: `gh auth setup-git` belongs to the sign-in step (VISION.md step 6).
+
 ## 2026-10-07 — Solo mode (WINDOWS_AND_SOLO.md S1, S5)
 
 **What changed**

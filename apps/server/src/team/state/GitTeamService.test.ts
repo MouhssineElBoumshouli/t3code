@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - synchronous renames to take origin offline.
 import * as NodeFS from "node:fs";
+import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -78,7 +79,7 @@ const bench = Effect.gen(function* () {
   git(root, "init", "--quiet", "--bare", origin);
   const checkout = path.join(root, "project");
   git(root, "init", "--quiet", checkout);
-  git(checkout, "remote", "add", "origin", `file://${origin}`);
+  git(checkout, "remote", "add", "origin", NodeURL.pathToFileURL(origin).href);
 
   /** Pushes to origin's state ref, as seen by a wrapped Git driver. */
   const pushes: Array<string> = [];

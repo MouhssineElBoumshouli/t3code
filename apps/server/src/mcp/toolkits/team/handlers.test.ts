@@ -413,6 +413,29 @@ describe("team toolkit", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect(
+    "tells one checkout from two by the real folder, and matches paths whatever their case",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* makeProjectFolder(true);
+        // Thread B opens the same checkout through a link (W8).
+        const link = `${root}-link`;
+        NodeFS.symlinkSync(root, link, "dir");
+        const { call } = yield* makeHarness({
+          workspaceRoot: root,
+          worktrees: { [THREAD_B]: link },
+        });
+        inTeam(yield* call("team_claim", { paths: ["src/Auth/Login.ts"] }, THREAD_B));
+        // W5: the same file in another case still overlaps.
+        const mine = inTeam(yield* call("team_claim", { paths: ["src/auth/login.ts"] }));
+        assert.deepEqual(
+          mine.overlaps.map((overlap) => [overlap.where, overlap.paths]),
+          [[CLAIM_WHERE.sameCheckout, ["src/Auth/Login.ts"]]],
+        );
+        NodeFS.rmSync(link);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("claims full and relative paths, reports overlaps, and releases", () =>
     Effect.gen(function* () {
       const root = yield* makeProjectFolder(true);

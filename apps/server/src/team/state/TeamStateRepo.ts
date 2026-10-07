@@ -32,6 +32,12 @@ const LOCAL_TIMEOUT_MS = 10_000;
 const MAX_FILE_BYTES = 16_000_000;
 /** Fail fast instead of waiting on a credential prompt nobody can answer; English messages to match on. */
 const GIT_ENV = { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" };
+/**
+ * Calls to `origin` also keep Git Credential Manager (shipped with Git for
+ * Windows) from opening a sign-in window from a background sync: a missing
+ * credential fails, and the offline path takes over (WINDOWS_AND_SOLO.md W2).
+ */
+const NETWORK_GIT_ENV = { ...GIT_ENV, GCM_INTERACTIVE: "never" };
 const MINE_DIRECTORY = "mine";
 
 export type TeamStateFetchResult =
@@ -138,7 +144,7 @@ export const make = Effect.fn("TeamStateRepo.make")(function* (options: TeamStat
         operation: `TeamStateRepo.${operation}`,
         cwd: directory,
         args,
-        env: GIT_ENV,
+        env: NETWORK_GIT_ENV,
         allowNonZeroExit: true,
         timeoutMs: timeoutMs ?? NETWORK_TIMEOUT_MS,
       })

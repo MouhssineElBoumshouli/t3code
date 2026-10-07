@@ -9,7 +9,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { folderKey, realFolder } from "../../../team/folders.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -96,6 +99,15 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const { resolve } = yield* makeTeamResolver;
+  const platform = yield* HostProcessPlatform;
+
+  /** A folder as the OS compares it: links resolved, and on Windows case and slashes ignored (W8). */
+  const folderKeyOf = (folder: string) =>
+    realFolder(folder).pipe(
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.map((real) => folderKey(real, platform)),
+    );
 
   /** Runs `run` for a team project, and answers with the not-in-team result otherwise. */
   const inTeam = <A, E, R>(run: (context: TeamContext) => Effect.Effect<A, E, R>) =>
@@ -155,6 +167,7 @@ const make = Effect.gen(function* () {
   /** Where each claiming thread's work is, looked up once per thread. */
   const makeWhereOf = (context: TeamContext) => {
     const known = new Map<string, string>();
+    let here: string | undefined;
     return (thread: TeamThreadRef) =>
       Effect.gen(function* () {
         const key = `${thread.environmentId}/${thread.threadId}`;
@@ -165,8 +178,11 @@ const make = Effect.gen(function* () {
           thread.environmentId === context.thread.environmentId
             ? yield* workingFolderOf(thread)
             : null;
+        here ??= yield* folderKeyOf(context.workingFolder);
         const where =
-          folder === context.workingFolder ? CLAIM_WHERE.sameCheckout : CLAIM_WHERE.ownCopy;
+          folder !== null && (yield* folderKeyOf(folder)) === here
+            ? CLAIM_WHERE.sameCheckout
+            : CLAIM_WHERE.ownCopy;
         known.set(key, where);
         return where;
       });
@@ -228,7 +244,15 @@ const make = Effect.gen(function* () {
     if (thread === undefined) return Effect.succeed(false);
     if (sameThread(context.thread, thread)) return Effect.succeed(true);
     if (thread.environmentId !== context.thread.environmentId) return Effect.succeed(false);
-    return workingFolderOf(thread).pipe(Effect.map((folder) => folder === context.workingFolder));
+    return workingFolderOf(thread).pipe(
+      Effect.flatMap((folder) =>
+        folder === null
+          ? Effect.succeed(false)
+          : Effect.all([folderKeyOf(folder), folderKeyOf(context.workingFolder)]).pipe(
+              Effect.map(([theirs, mine]) => theirs === mine),
+            ),
+      ),
+    );
   };
 
   return TeamToolkit.of({

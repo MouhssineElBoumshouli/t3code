@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - synchronous renames to take origin offline.
 import * as NodeFS from "node:fs";
+import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { TEAM_STATE_REF } from "@t3tools/contracts";
@@ -55,7 +56,7 @@ const bench = Effect.gen(function* () {
       };
       return yield* TeamStateRepo.make({
         directory: path.join(root, `${name}.git`),
-        remoteUrl: `file://${origin}`,
+        remoteUrl: NodeURL.pathToFileURL(origin).href,
       }).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, recording));
     });
   /** The files on origin's state ref. */

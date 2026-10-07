@@ -81,8 +81,8 @@ const teamStateLayer = (config: ServerConfig.ServerConfig["Service"]) =>
     Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
   );
 
-/** Fail fast instead of waiting on a credential prompt nobody can answer. */
-const GIT_ENV = { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" };
+/** Fail fast instead of waiting on a credential prompt nobody can answer, GCM's window included. */
+const GIT_ENV = { GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", GCM_INTERACTIVE: "never" };
 
 export const PUBLIC_REPO_REFUSAL =
   "This repo is public, so its team state would be public too: anyone could read your GitHub logins, task titles and notes, the files you work on, handoff notes and when you work. Nothing was written. Make the repo private (GitHub Free allows unlimited private repos with collaborators), or run t3 team init --public-ok to accept that.";

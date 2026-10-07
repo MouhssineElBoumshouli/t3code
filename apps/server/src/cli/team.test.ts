@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -416,7 +417,7 @@ describe("t3 team init on the remote", () => {
         /team\.json +team "Core" \(teamId [0-9a-f-]{36}\), created by Mouhssine/u,
       );
       assert.include(output, `${writer}  this T3 server's part`);
-      assert.include(output, `Created ${TEAM_STATE_REF} on file://${origin}.`);
+      assert.include(output, `Created ${TEAM_STATE_REF} on ${NodeURL.pathToFileURL(origin).href}.`);
 
       // One commit with team.json and the creator's writer file; the files are not committed.
       assert.equal(originRefs(origin), TEAM_STATE_REF);

@@ -195,10 +195,14 @@ export function normalizeTeamPath(path: string): string {
     .replace(/\/+$/u, "");
 }
 
-/** True when two claimed paths are the same, or one is a folder containing the other. */
+/**
+ * True when two claimed paths are the same, or one is a folder containing the
+ * other. Case is ignored: on Windows and macOS `src/Auth` and `src/auth` are
+ * one folder, and teammates may be on either (team/WINDOWS_AND_SOLO.md W5).
+ */
 export function teamPathsOverlap(left: string, right: string): boolean {
-  const a = normalizeTeamPath(left);
-  const b = normalizeTeamPath(right);
+  const a = normalizeTeamPath(left).toLowerCase();
+  const b = normalizeTeamPath(right).toLowerCase();
   if (a === "" || b === "") return true;
   return a === b || b.startsWith(`${a}/`) || a.startsWith(`${b}/`);
 }

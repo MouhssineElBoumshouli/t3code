@@ -6,6 +6,7 @@
  */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { EnvironmentId, TeamLogin } from "@t3tools/contracts";
@@ -49,7 +50,8 @@ export const fakeTeamHost = (
 export const makeTeamOrigin = (root: string) => {
   const origin = NodePath.join(root, "origin.git");
   git(root, "init", "--quiet", "--bare", origin);
-  return `file://${origin}`;
+  // Not `file://${origin}`: a Windows path would give `file://C:\...`, which Git does not read.
+  return NodeURL.pathToFileURL(origin).href;
 };
 
 /** Makes `folder` a Git repo, unless it is one, with `originUrl` as its `origin`. */
