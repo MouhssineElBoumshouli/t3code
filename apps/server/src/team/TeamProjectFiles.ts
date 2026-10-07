@@ -258,6 +258,21 @@ export const readTeamFile = Effect.fn("TeamProjectFiles.readTeamFile")(function*
 });
 
 /**
+ * The team a working folder belongs to: `.team/team.json` in the folder, else
+ * at the root of its Git repo. `teamRoot` is the folder that holds it.
+ */
+export const findTeamFile = Effect.fn("TeamProjectFiles.findTeamFile")(function* (
+  workingFolder: string,
+) {
+  const here = yield* readTeamFile(workingFolder);
+  if (Option.isSome(here)) return Option.some({ teamFile: here.value, teamRoot: workingFolder });
+  const repoRoot = yield* findRepoRoot(workingFolder);
+  if (Option.isNone(repoRoot) || repoRoot.value === workingFolder) return Option.none();
+  const atRoot = yield* readTeamFile(repoRoot.value);
+  return Option.map(atRoot, (teamFile) => ({ teamFile, teamRoot: repoRoot.value }));
+});
+
+/**
  * Creates the team's checked-in files in the repo that holds
  * `startDirectory`. Reads and checks everything first, then writes, so a
  * broken existing file stops the run before anything changes.

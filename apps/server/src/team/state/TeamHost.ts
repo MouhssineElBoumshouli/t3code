@@ -11,7 +11,9 @@
  * @module TeamHost
  */
 import { TEAM_STATE_REF, TeamLogin } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -25,6 +27,12 @@ import * as VcsProcess from "../../vcs/VcsProcess.ts";
 export const TEAM_LOGIN_OVERRIDE_ENV = "T3CODE_TEAM_LOGIN_OVERRIDE";
 
 const GH_TIMEOUT_MS = 15_000;
+/**
+ * A signed-in answer from `gh auth status` is reused this long (upstream's
+ * viewer cache time). `gh auth status` takes about half a second, and the
+ * first turn after a start must not spend it again for every team.
+ */
+export const TEAM_LOGIN_CACHE_TTL = Duration.minutes(10);
 /** No prompts and no update notices: nobody can answer them. */
 const GH_ENV = { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" };
 
@@ -200,6 +208,9 @@ export const make = Effect.fn("TeamHost.make")(function* (options: TeamHostOptio
         ),
       );
 
+  /** Signed-in answers by host. Other answers are not kept: signing in works at once. */
+  const loginCache = new Map<string, { readonly login: TeamHostLogin; readonly at: number }>();
+
   const login: TeamHost["Service"]["login"] = Effect.fn("TeamHost.login")(function* (repo) {
     if (override !== "" && options.devMode) {
       const parsed = decodeLogin(override);
@@ -216,6 +227,20 @@ export const make = Effect.fn("TeamHost.make")(function* (options: TeamHostOptio
         detail: `This project's remote is a folder on this computer, which has no GitHub account. Dev servers can set ${TEAM_LOGIN_OVERRIDE_ENV}.`,
       } as const;
     }
+    const now = yield* Clock.currentTimeMillis;
+    const cached = loginCache.get(repo.host);
+    if (cached !== undefined && now - cached.at < Duration.toMillis(TEAM_LOGIN_CACHE_TTL)) {
+      return cached.login;
+    }
+    const answer = yield* askLogin(repo);
+    if (answer.status === "signedIn") loginCache.set(repo.host, { login: answer, at: now });
+    else loginCache.delete(repo.host);
+    return answer;
+  });
+
+  const askLogin = Effect.fnUntraced(function* (
+    repo: TeamRepoLocation,
+  ): Effect.fn.Return<TeamHostLogin> {
     const result = yield* gh("login", [
       "auth",
       "status",

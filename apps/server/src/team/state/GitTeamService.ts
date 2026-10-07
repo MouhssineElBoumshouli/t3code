@@ -178,6 +178,12 @@ interface TeamEntry {
   repo: TeamStateRepo.TeamStateRepo;
   /** Serializes changes to this server's files and to the fields below. */
   readonly lock: Semaphore.Semaphore;
+  /**
+   * One open at a time: an open that comes while another runs (a turn during
+   * the startup warm-up) waits for it and reuses its answer, instead of
+   * asking the host again.
+   */
+  readonly openLock: Semaphore.Semaphore;
   parsed: Model.ParsedTeamState;
   /** Null until `team.json` is there. */
   view: Model.TeamStateView | null;
@@ -322,6 +328,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         location: TeamHost.parseTeamRemoteUrl(remoteUrl),
         repo,
         lock: yield* Semaphore.make(1),
+        openLock: yield* Semaphore.make(1),
         parsed: { team: null, writers: [], warnings: [] },
         view: null,
         me: null,
@@ -447,6 +454,19 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       const remoteUrl = yield* remoteUrlOf(input.checkout);
       if (remoteUrl === null) return result({ status: "noRemote" }, false);
       const entry = yield* entryFor(input.teamFile.teamId, remoteUrl);
+      return yield* entry.openLock.withPermits(1)(openEntry(entry, input, create));
+    });
+
+  const openEntry = (
+    entry: TeamEntry,
+    input: OpenTeamInput,
+    create: boolean,
+  ): Effect.Effect<
+    { readonly membership: TeamMembership; readonly created: boolean },
+    TeamServiceError
+  > =>
+    Effect.gen(function* () {
+      const result = (membership: TeamMembership, created: boolean) => ({ membership, created });
       const access = yield* checkAccess(entry);
       if (!access.ok) return result(access.membership, false);
 

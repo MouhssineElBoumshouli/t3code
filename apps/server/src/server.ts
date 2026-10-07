@@ -99,6 +99,7 @@ import * as GitTeamService from "./team/state/GitTeamService.ts";
 import { TeamBriefingLive } from "./mcp/toolkits/team/briefing.ts";
 import { TeamAutoNotesLive } from "./team/TeamAutoNotes.ts";
 import { TeamClaimAutoReleaseLive } from "./team/TeamClaimAutoRelease.ts";
+import * as TeamWarmup from "./team/TeamWarmup.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -284,6 +285,8 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(TeamClaimAutoReleaseLive),
   // team-layer: an automatic note per thread after each turn (team/DESIGN.md D7).
   Layer.provideMerge(TeamAutoNotesLive),
+  // team-layer: open each project's team at start, so the first turn gets its briefing.
+  Layer.provideMerge(TeamWarmup.layer),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 

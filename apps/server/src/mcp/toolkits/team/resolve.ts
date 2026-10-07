@@ -21,7 +21,7 @@ import type * as Path from "effect/Path";
 
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { TeamServiceError } from "../../../team/TeamErrors.ts";
-import { findRepoRoot, readTeamFile } from "../../../team/TeamProjectFiles.ts";
+import { findTeamFile as findTeamFileIn } from "../../../team/TeamProjectFiles.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import { type NotInTeamResult, TeamToolError, TeamToolFailedError } from "./tools.ts";
 
@@ -87,17 +87,8 @@ export const makeTeamResolver = Effect.gen(function* () {
   const lookupFailed = (operation: string) => (cause: unknown) =>
     new TeamToolFailedError({ operation, cause });
 
-  /** Finds `.team/team.json` in the working folder, else at the root of its Git repo. */
   const findTeamFile = (workingFolder: string) =>
-    Effect.gen(function* () {
-      const here = yield* readTeamFile(workingFolder);
-      if (Option.isSome(here))
-        return Option.some({ teamFile: here.value, teamRoot: workingFolder });
-      const repoRoot = yield* findRepoRoot(workingFolder);
-      if (Option.isNone(repoRoot) || repoRoot.value === workingFolder) return Option.none();
-      const atRoot = yield* readTeamFile(repoRoot.value);
-      return Option.map(atRoot, (teamFile) => ({ teamFile, teamRoot: repoRoot.value }));
-    }).pipe(
+    findTeamFileIn(workingFolder).pipe(
       Effect.mapError(
         (error) => new TeamToolError({ detail: `${error.filePath}: ${error.detail}` }),
       ),

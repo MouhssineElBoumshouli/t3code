@@ -2,6 +2,7 @@ import { VcsProcessSpawnError } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as VcsProcess from "../../vcs/VcsProcess.ts";
@@ -115,6 +116,34 @@ describe("TeamHost.login", () => {
         override: false,
       } as TeamHost.TeamHostLogin);
       assert.deepEqual(calls, [["auth", "status", "--json", "hosts", "--hostname", "github.com"]]);
+    }),
+  );
+
+  it.effect("asks gh once per host while signed in, and again after 10 minutes", () =>
+    Effect.gen(function* () {
+      let signedIn = true;
+      const { host, calls } = yield* hostWith(() =>
+        signedIn
+          ? { stdout: authStatus([account("Sara-Dev", { active: true })]) }
+          : { exitCode: 1, stdout: authStatus([]) },
+      );
+      assert.equal((yield* host.login(repo)).status, "signedIn");
+      assert.equal((yield* host.login(repo)).status, "signedIn");
+      assert.lengthOf(calls, 1);
+
+      // Signed out since: the cached answer stands until it is 10 minutes old.
+      signedIn = false;
+      yield* TestClock.adjust("9 minutes");
+      assert.equal((yield* host.login(repo)).status, "signedIn");
+      assert.lengthOf(calls, 1);
+      yield* TestClock.adjust("1 minute");
+      assert.equal((yield* host.login(repo)).status, "signedOut");
+      assert.lengthOf(calls, 2);
+
+      // A signed-out answer is not kept: signing in works on the next call.
+      signedIn = true;
+      assert.equal((yield* host.login(repo)).status, "signedIn");
+      assert.lengthOf(calls, 3);
     }),
   );
 
