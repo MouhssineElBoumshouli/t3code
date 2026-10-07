@@ -660,6 +660,59 @@ describe("team toolkit", () => {
     }),
   );
 
+  it.effect("lists other chats' newest handoff notes in team_status, first line only", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      const { call, teams } = yield* makeHarness({ workspaceRoot: root });
+      assert.notProperty(inTeam(yield* call("team_status", {})), "handoffs");
+
+      yield* call("team_handoff", { changed: "Oldest note." }, THREAD_B);
+      yield* TestClock.adjust("1 minute");
+      yield* call(
+        "team_handoff",
+        {
+          changed: `Search ${"word ".repeat(30).trim()}\nSecond line is left out.`,
+          left: "Paging.",
+        },
+        THREAD_B,
+      );
+      yield* TestClock.adjust("1 minute");
+      // Neither this chat's own note nor an automatic note is listed.
+      yield* call("team_handoff", { changed: "My own note." });
+      const [owner] = yield* teams.listMembers(TEAM_ID);
+      yield* teams.saveAutomaticNote({
+        teamId: TEAM_ID,
+        memberId: owner!.memberId,
+        thread: { environmentId: ENVIRONMENT_ID, threadId: THREAD_C },
+        files: ["src/a.ts"],
+        fileHashes: {},
+      });
+      yield* TestClock.adjust("1 minute");
+      yield* call("team_handoff", { changed: "Newest of mine." }, THREAD_C);
+      yield* TestClock.adjust("1 minute");
+      // Sara writes from her own server; ours sees it after a sync. No clock
+      // jumps after this: they would time out Git calls still running.
+      const sara = yield* teammate("Sara");
+      yield* sara.openTeam({ teamFile: TEAM_FILE, checkout: root });
+      yield* sara.writeHandoff({
+        teamId: TEAM_ID,
+        memberId: TeamMemberId.make("Sara"),
+        thread: { environmentId: EnvironmentId.make("Sara-server"), threadId: THREAD_C },
+        changed: "Avatar upload.",
+        files: [],
+      });
+      yield* sara.sync(TEAM_ID);
+      yield* teams.sync(TEAM_ID);
+
+      const status = inTeam(yield* call("team_status", {}));
+      assert.deepEqual(status.handoffs, [
+        "Sara, 1970-01-01 00:04 UTC: Avatar upload.",
+        `${ME}, 1970-01-01 00:03 UTC: Newest of mine.`,
+        `${ME}, 1970-01-01 00:01 UTC: Search ${"word ".repeat(TEAM_STATUS_LIMITS.handoffWords - 1).trim()}…`,
+      ]);
+    }),
+  );
+
   it.effect("caps the paths shown for one claim", () =>
     Effect.gen(function* () {
       const root = yield* makeProjectFolder(true);
@@ -969,6 +1022,38 @@ describe("team toolkit", () => {
           },
         ],
       );
+    }),
+  );
+
+  it.effect("finds written handoff notes when asked for handoffs by name", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      const { call, teams } = yield* makeHarness({ workspaceRoot: root });
+      yield* call("team_handoff", { changed: "Login form." }, THREAD_B);
+      yield* TestClock.adjust("1 minute");
+      yield* call("team_handoff", { changed: "Search page." }, THREAD_C);
+      const [owner] = yield* teams.listMembers(TEAM_ID);
+      yield* teams.saveAutomaticNote({
+        teamId: TEAM_ID,
+        memberId: owner!.memberId,
+        thread: { environmentId: ENVIRONMENT_ID, threadId: THREAD_A },
+        files: ["src/a.ts"],
+        fileHashes: {},
+      });
+
+      for (const query of ["handoff", "latest handoffs"]) {
+        const search = inTeam(yield* call("team_memory_search", { query }));
+        assert.deepEqual(
+          search.results.map(({ kind, says }) => [kind, says]),
+          [
+            ["handoff", "Search page."],
+            ["handoff", "Login form."],
+          ],
+        );
+      }
+      // Real words still rank first.
+      const login = inTeam(yield* call("team_memory_search", { query: "login handoff" }));
+      assert.equal(login.results[0]?.says, "Login form.");
     }),
   );
 

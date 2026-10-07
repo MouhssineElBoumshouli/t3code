@@ -157,6 +157,13 @@ export const rankMemory = (
 
 const timeLabel = (iso: string) => `${iso.slice(0, 16).replace("T", " ")} UTC`;
 
+/** "Sara, 2026-10-07 14:03 UTC: first line of what changed", for `team_status`. */
+export const handoffHeadline = (handoff: TeamHandoff, who: string, maxWords: number) =>
+  `${who}, ${timeLabel(handoff.createdAt)}: ${firstWords(handoff.changed.split(/\r?\n/u)[0]!, maxWords)}`;
+
+/** Agents look for notes by their name first, so a written note also matches these words. */
+const HANDOFF_WORDS = "handoff handoffs";
+
 export const handoffEntry = (handoff: TeamHandoff, who: string): MemoryEntry => {
   const text = [
     handoff.changed,
@@ -174,7 +181,9 @@ export const handoffEntry = (handoff: TeamHandoff, who: string): MemoryEntry => 
     files: handoff.files,
     commit: handoff.commit,
     fileHashes: handoff.fileHashes,
-    searchText: [text, who, ...handoff.files].join("\n"),
+    searchText: [text, who, ...handoff.files, ...(handoff.automatic ? [] : [HANDOFF_WORDS])].join(
+      "\n",
+    ),
     handoff,
   };
 };

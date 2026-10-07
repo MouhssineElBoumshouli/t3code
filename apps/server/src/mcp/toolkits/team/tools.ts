@@ -69,6 +69,8 @@ export const TeamStatusResult = Schema.Struct({
   yourClaims: Schema.Array(Schema.String),
   /** Teammates' claims that overlap yours, found since you claimed; each told once. */
   lateOverlaps: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** Other chats' newest written handoff notes, "who, when: first line", capped; absent when none. */
+  handoffs: Schema.optionalKey(Schema.Array(Schema.String)),
   recent: Schema.Array(Schema.String),
   /** How many older items were left out, when any were. */
   omitted: Schema.optionalKey(Schema.String),
@@ -127,7 +129,7 @@ const PathList = Schema.Array(Schema.String).annotate({
 
 const TeamStatusTool = Tool.make("team_status", {
   description:
-    "See your team: open tasks, who claimed which paths, what the rulebook says not to touch, and recent activity. Call before starting work.",
+    "See your team: open tasks, who claimed which paths, the newest handoff notes, what the rulebook says not to touch, and recent activity. Call before starting work.",
   success: Schema.Union([NotInTeamResult, TeamStatusResult]),
   failure: TeamToolFailure,
   dependencies,

@@ -17,6 +17,7 @@ import {
   checkFreshness,
   currentCommit,
   handoffEntry,
+  handoffHeadline,
   hashFiles,
   type MemoryEntry,
   queryTerms,
@@ -50,7 +51,14 @@ export const CLAIM_NOT_SHARED_MESSAGE =
   "Claimed on this computer, not shared yet: the team's remote could not be reached. Overlaps with teammates' newest claims are unknown. It is shared on the next successful sync.";
 
 /** Caps on `team_status`, which every team agent may call often. Oldest items go first. */
-export const TEAM_STATUS_LIMITS = { tasks: 8, claims: 10, pathsPerClaim: 5, activity: 5 };
+export const TEAM_STATUS_LIMITS = {
+  tasks: 8,
+  claims: 10,
+  pathsPerClaim: 5,
+  activity: 5,
+  handoffs: 3,
+  handoffWords: 20,
+};
 
 /**
  * Where another thread's claimed work is. In worktree mode it is in that
@@ -232,8 +240,23 @@ const make = Effect.gen(function* () {
           const activity = yield* teams
             .listActivity(teamId, { limit: TEAM_STATUS_LIMITS.activity })
             .pipe(Effect.mapError(fromService("status")));
+          const notes = yield* teams
+            .listHandoffs(teamId, { limit: TEAM_MEMORY_LIMITS.handoffs })
+            .pipe(Effect.mapError(fromService("status")));
           const doNotTouch = yield* readDoNotTouch(context).pipe(withFiles);
           const late = yield* lateOverlapsOf(context);
+
+          // Written notes from other chats; this chat knows its own.
+          const handoffs = notes
+            .filter((note) => !note.automatic && !sameThread(note.thread, context.thread))
+            .slice(0, TEAM_STATUS_LIMITS.handoffs)
+            .map((note) =>
+              handoffHeadline(
+                note,
+                names.get(note.memberId) ?? "Unknown member",
+                TEAM_STATUS_LIMITS.handoffWords,
+              ),
+            );
 
           const yourTask = tasks.findLast((task) => sameThread(task.thread, context.thread));
           const openTasks = tasks
@@ -274,6 +297,7 @@ const make = Effect.gen(function* () {
               ),
             ]),
             ...late,
+            ...(handoffs.length === 0 ? {} : { handoffs }),
             recent: activity.map((item) => item.summary),
             ...(omitted.length === 0 ? {} : { omitted: omitted.join(", ") }),
           } satisfies TeamStatusResult;
