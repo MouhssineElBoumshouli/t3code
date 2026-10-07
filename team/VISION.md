@@ -1,6 +1,6 @@
 # Team layer: vision and plan (v3)
 
-Status: v3, 2026-10-06, updated 2026-10-07 (steps 1 and 2 done, two new requirements in section 6). Written by Claude (chat) with Mouhssine. This replaces the "host server" direction in DESIGN.md section 7. M1 (team tools, briefing, memory, freshness) stays.
+Status: v3, 2026-10-06, updated 2026-10-07 (steps 1 and 2 done, two new requirements in section 6, design picked for step 3). Written by Claude (chat) with Mouhssine. This replaces the "host server" direction in DESIGN.md section 7. M1 (team tools, briefing, memory, freshness) stays.
 
 ## 1. What we are building
 
@@ -113,7 +113,7 @@ A claim with no activity for a few days gets a question to its owner: "Still wor
 
 1. **Storage swap.** Done 2026-10-07 (slices 0 to 7 of [STORAGE_PLAN.md](STORAGE_PLAN.md)). Replace the local team database with the GitHub state ref (`refs/t3-team/state`) behind the same team service, so M1's tools, briefing, memory search and freshness keep working. Park the host-mode code (M2.2, M2.3) instead of deleting it; keep the upstream security fix.
 2. **Two people, for real.** Done 2026-10-07 (slice 8, self-tested on GitHub with two dev servers). Two clones of one GitHub repo on one laptop, then two laptops. Claims, tasks, handoffs sync through `refs/t3-team/state`.
-3. **Visible.** Team screen, file markers, the warning card from 3.1. Design options in [DESIGN_DIRECTION.md](DESIGN_DIRECTION.md), waiting for a pick.
+3. **Visible.** Team screen, file markers, the warning card from 3.1. Picked 2026-10-07: Option C (a Team home page, "Today" when solo, and the warning card inside the agent's message) with Option B's presence chip in the tab bar ([DESIGN_DIRECTION.md](DESIGN_DIRECTION.md) section 5). Build order: [UI_PLAN.md](UI_PLAN.md).
 4. **Prevention.** Plan-first claim check (3.1) and pause-in-the-middle (3.2).
 5. **Merging help.** Background clash check and note-aware conflict fixing (3.4).
 6. **Installer.** Our own name, Windows installer, sign-in, "Make this a team project," joining.

@@ -2,6 +2,29 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — Design pick recorded; UI_PLAN.md
+
+**What changed**
+
+- Your pick (Option C with Option B's presence chip in the tab bar) recorded in `team/DESIGN_DIRECTION.md` (status line, section 5) and `team/VISION.md` (status, step 3).
+- `team/UI_PLAN.md` (new, one page): the build order in six slices (0 data in the client, 1 holder markers and the presence chip, 2 plan card, 3 inline warning card, 4 Team home / Today page, 5 glass), what each shows, and how it looks with a team and solo.
+
+**Files touched**
+
+- `team/DESIGN_DIRECTION.md`, `team/VISION.md`, `team/UI_PLAN.md`, `team/PROGRESS.md`. No code.
+
+**How it was checked**
+
+- Read back; `vp fmt` on the three files. No tests: no code changed.
+
+**What's left**
+
+- Slices 0 and 1 are steps 3 and 4 of this session (next entries).
+
+**Unsure about / notes**
+
+- T3 has no chat tabs; "the tab bar" for the presence chip means the chat header row, and "tabs" for markers means the right panel's open-file tabs. Said again where slice 1 is built.
+
 ## 2026-10-07 — Step 4: WINDOWS_AND_SOLO.md (research); design screenshots pushed
 
 **What changed**

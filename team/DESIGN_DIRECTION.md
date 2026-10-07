@@ -1,6 +1,6 @@
 # Design direction for the team layer (VISION.md step 3)
 
-Status: proposal, 2026-10-07. Waiting for a pick. Mockups are in [mockups/](mockups/) (open `mockups/index.html`); screenshots are on the `test-screenshots` branch, folder `2026-10-07-design/`.
+Status: picked 2026-10-07: **Option C (Team home) with Option B's presence chip in the tab bar** (section 5). Build order: [UI_PLAN.md](UI_PLAN.md). Mockups are in [mockups/](mockups/) (open `mockups/index.html`); screenshots are on the `test-screenshots` branch, folder `2026-10-07-design/`.
 
 Step 3 has to make three things visible: the team screen, the file markers, and the warning card from VISION.md 3.1. Each has to work with a team and solo (VISION.md 6.3), in light and dark, without slowing the app down.
 
@@ -58,9 +58,9 @@ Each option has a team and a solo version, and a warning card. Screenshots: `<op
 - Good at: room for the features that make people come back (Catch me up, Plan together, the solo "Today"); the card stays in the thread as a record of what was chosen; a page and an inline card both carry over to mobile.
 - Weak: the most new UI (a route and a page); the page is away from the chat, so people must go there; the sidebar block costs vertical space.
 
-## 5. What I would pick
+## 5. The pick
 
-**C, with B's presence chip added to the tab bar.**
+**C, with B's presence chip added to the tab bar.** Picked by Mouhssine on 2026-10-07, as recommended. Reasons:
 
 - VISION.md asks for "a team screen and a clear warning card" and for catch-up and planning together. Only C has a place for those; A and B would need a page later anyway.
 - The inline card is the right home for VISION.md 3.1 and 3.2: the agent stops in its message, the user picks, and the choice stays in the thread history, for the user, for a later "catch me up", and on mobile, where a sheet or a right panel does not fit.
@@ -68,4 +68,4 @@ Each option has a team and a solo version, and a warning card. Screenshots: `<op
 - B's chip ("YA SA · synced 8 s") costs one element in the tab bar and fixes C's weakness: you see who is around and whether the state is fresh without leaving the chat. It is also where "not fresh" (the failed-read case fixed today) can show.
 - The file markers (chips in the plan card, the file tree, the sidebar, the tabs) are the same in all three options, so they can be built first whatever the pick.
 
-Build order if C is picked: markers and the plan card; the inline warning card; the presence chip; the Team home / Today page; then the glass (section 3), last, since it is independent and needs the Windows 11 check.
+The build order, slice by slice, is in [UI_PLAN.md](UI_PLAN.md). The glass (section 3) comes last: it is independent and needs the Windows 11 check.
