@@ -2,6 +2,54 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — Slice 5: the switch to the Git team store; cold start self-test
+
+**What changed** (commit 5e7f7bb79)
+
+- **The switch:** `server.ts` provides `GitTeamService.layer` as `TeamService` (one `team-layer:` line, plus its import). State repos live in `<state dir>/team/<teamId>.git` (`~/.t3-dev/userdata/team/` for a dev home with `--home-dir`).
+- **`TeamService.ts` is the interface only**, shaped as STORAGE_PLAN.md 3.4: `openTeam` (membership with a reason) and `currentMember` replace `findMemberByEnvironment`; `ensureTeam` takes `{ teamFile, checkout }`; `claimPaths` returns `confirmed`; `takeLateOverlaps` and `sync` are new. `TeamMembership` and `OpenTeamInput` moved there from `GitTeamService.ts`.
+- **`TeamMember` in contracts:** `lastSeenAt` instead of `joinedAt`, no `environmentId`, `memberId` is the login (as agreed after slice 4).
+- **`resolve.ts`** opens the team from the checkout and gives the real reason when this server cannot use it: no origin, not signed in to GitHub, no access, no push access, no team state yet ("t3 team init starts it"), another team's state, or unreadable. A tool call or briefing never starts the state.
+- **Handlers:** `team_claim` says "Claimed on this computer, not shared yet … Overlaps with teammates' newest claims are unknown" when the push did not land (overlaps already known are still listed). `team_claim` and `team_status` carry `lateOverlaps` ("Since you claimed, Sara also claimed src. Tell the user before editing those."), each handed out once, only to the claiming thread.
+- **Parked** with `git mv` to `team/parked/sqlite-service/` (history kept; `git log --follow` reaches back past the move): the SQLite `TeamService.ts`, its test, `TeamMigrations.ts` and its test, `Migrations/001`–`004`. README updated.
+- **`t3 team`:** `init` writes `.team/` and `t3.json` only, and says the remote state is not started yet; `status` lists the teams a home has opened, from its local state repos (no network), with role and last seen.
+- **Tests on the new store:** a helper `apps/server/src/team/testing/teamState.ts` (local bare `origin` over `file://`, a fake host, `GitTeamService` as `TeamService`). `handlers.test.ts`, `briefing.test.ts`, `TeamAutoNotes.test.ts`, `TeamClaimAutoRelease.test.ts` and `cli/team.test.ts` use it; `memory.test.ts` needed no change.
+- **Seed script** (`apps/server/scripts/team-cold-start-seed.ts`) adapted: a local bare remote `<project>-remote.git` (marked, so a re-run rebuilds only its own), the state written by three `GitTeamService`s (you, Sara, Omar) as real servers would, the dev home's old copy of the team's state deleted. Prints the start command with `T3CODE_TEAM_LOGIN_OVERRIDE`. COLD_START_TEST.md setup updated.
+- Also: dropped a now-dead `catch` in `TeamClaimAutoRelease` (`listClaimedThreads` cannot fail any more).
+
+**Files touched**
+
+- New: `apps/server/src/team/testing/teamState.ts`; `team/parked/sqlite-service/…` (moved).
+- Changed (ours): `TeamService.ts`, `state/GitTeamService.ts` and its test, `mcp/toolkits/team/{resolve,handlers,tools,handlers.test,briefing.test}.ts`, `TeamAutoNotes.test.ts`, `TeamClaimAutoRelease.ts` and its test, `cli/team.ts` and its test, `scripts/team-cold-start-seed.ts`, `contracts/src/team.ts`, `team/COLD_START_TEST.md`, `team/parked/README.md`.
+- Upstream: `apps/server/src/server.ts`, the two `team-layer:` lines only.
+
+**How it was checked**
+
+- Typecheck, no dev server running: `packages/contracts` 0 errors; `apps/server` 0 errors.
+- `vp test run src/mcp/toolkits/team/ src/team/ src/cli/team.test.ts`: 14 files, 131 tests, passed 3 times (once before the self-test, twice after). `src/server.test.ts` and `src/auth/ChatGptRpcScopes.test.ts`: 208 passed.
+- New handler tests: the reason for no team state (every tool, and no ref appears on origin), signed out, no origin, another team's state; a claim with origin offline says not shared yet, keeps the claim, and lands after `sync`; a late overlap from a teammate's server is told once, only to the claiming thread, and is a normal overlap after.
+- Mutation checks, each restored (`cmp` with a backup): `team_status` without `lateOverlaps` fails 1 test; `team_claim` ignoring `confirmed` fails 1; `resolve` calling `ensureTeam` (starting the state) fails 3, in both handler and briefing tests.
+- Lint on the changed files: one warning, `server.ts:8` unused `ProviderDriverKind`, which is upstream code I did not touch. Formatter ran.
+- Seed run twice for real: 5 commits on the fresh remote's state ref, writer files for `mouhssine`, `Sara`, `Omar`; a remote folder it did not make is refused.
+- **Self-test, the cold start test** (`test-screenshots` ffe0efbf1, folder `2026-10-07-slice5/`, grades in its NOTES.md): dev server as `mouhssine`, Playwright, project added by hand (the setup dialog offered to import the t3code repo; I chose "Do not import"), new chat on Claude Sonnet 5.5, the five questions as written. **5 of 5 pass**, question 5 with full marks including `data/`. Tools: Q1 shell only (no team name given), Q2 `team_status`, Q3 read the decision file and `session.ts`, Q4 `git status` and `team_status`, Q5 none (reused Q4's status). The server made its state repo and pushed nothing. Dev server stopped by its PID; vp left its two children on the ports, so I stopped those too after checking their working folders were this checkout.
+
+**What's left**
+
+- Slice 6: `t3 team init` starts the state ref (preview, `--yes`, the public repo refusal with `--public-ok`, a clone joins instead of creating), `status` from the ref.
+- Slice 7: the poller. Until then a server sees teammates' changes only when it syncs for its own writes (or on the first open after a start).
+- Not done this round: the "automatic notes" part after the five questions in COLD_START_TEST.md.
+
+**Unsure about / notes**
+
+- **Migrations parked too.** STORAGE_PLAN.md 3.5 says migrations 1–4 are "left alone". Only the SQLite service ran them, so I parked the migrator and the migration files with it rather than keep code nothing calls. Existing dev databases keep their tables; nothing drops them. Say if you want them back in `src/`.
+- **`t3 team init` no longer registers anything** until slice 6: parking the SQLite service left it nothing to register in, and creating the ref here would skip slice 6's public repo refusal (decision 2). Its output says so. It still needs `--base-dir`, which slice 6 will use. The old "never registers a cloned repo" test went with it (host mode's rule).
+- **Repos without `gh` push access are not read-only yet:** plan 3.4 says "the tools answer read-only"; slice 4 made `noPushAccess` not a member, and slice 5 gives the reason. Read-only mode is not built.
+- **State folder:** `<state dir>/team` (`userdata/team`), not `<T3 home>/team` as the plan wrote: runtime state lives under userdata.
+- **Briefing timeout:** the briefing has 2 s. On a GitHub remote the first open runs `gh auth status`, `gh api repos/…` and a fetch (about 2 s together, from the Q4 timings), so the first turn after a start may get no briefing. Not seen here (local remote). Slice 7's poller, or opening teams at startup, would fix it.
+- **The seed's login default** is your user name (`mouhssine`), which the dev server must be told with `T3CODE_TEAM_LOGIN_OVERRIDE`; a local remote has no GitHub account.
+- `team-two-person-setup.ts` (host mode's two-person bench) still deletes `team_*` rows and runs `t3 team init --base-dir`; it no longer sets up a team. Slice 8 needs a new bench.
+- In the browser, Enter did not send question 1 and my first send of question 4 did not go out; I resent both. The chat has each question once.
+
 ## 2026-10-07 — GitHub timing check; slice 3 (TeamHost) and slice 4 (GitTeamService, not wired)
 
 **What changed**
