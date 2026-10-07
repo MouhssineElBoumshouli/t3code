@@ -39,6 +39,16 @@ export const makeTeamBriefingResolver = Effect.gen(function* () {
         });
       }),
       Effect.timeoutOption(BRIEFING_TIMEOUT),
+      Effect.tap((briefing) =>
+        Option.isNone(briefing)
+          ? Effect.logWarning(
+              `Team briefing skipped for this turn: the team lookup took longer than ${BRIEFING_TIMEOUT}.`,
+              { threadId },
+            )
+          : briefing.value === undefined
+            ? Effect.void
+            : Effect.logInfo("Team briefing added.", { threadId }),
+      ),
       Effect.map(Option.getOrUndefined),
       Effect.catch((cause) =>
         Effect.logWarning("Team briefing skipped for this turn.", { threadId, cause }).pipe(
