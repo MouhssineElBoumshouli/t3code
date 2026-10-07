@@ -450,7 +450,7 @@ describe("t3 team init on the remote", () => {
         NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-team-sara-")),
         "acme-app",
       );
-      git(NodePath.dirname(saraRepo), "clone", "--quiet", originUrl, saraRepo);
+      git(NodePath.dirname(saraRepo), "clone", "--quiet", "--branch", "main", originUrl, saraRepo);
       const saraEnvironment = EnvironmentId.make("sara-server");
       const { output, failure } = yield* initRemote(
         {
