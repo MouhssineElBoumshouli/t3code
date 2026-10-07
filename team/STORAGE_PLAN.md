@@ -1,6 +1,6 @@
 # Storage swap plan (VISION.md step 1)
 
-Status: plan, 2026-10-07. Research and planning only, no feature code. Written by Claude Code after reading [VISION.md](VISION.md) and the team code at commit b4a8a2152.
+Status: done, 2026-10-07. Slices 0 to 8 landed and were reviewed; VISION.md steps 1 (storage swap) and 2 (two people, for real) are done. The plan below is kept as the record of why. Originally research and planning only, no feature code. Written by Claude Code after reading [VISION.md](VISION.md) and the team code at commit b4a8a2152.
 
 Every fact below says how it was checked: **[code]** (read in this repo, with the file), **[measured]** (run on this laptop against GitHub on 2026-10-07), or **[docs]** (official docs, linked). Anything else is marked as my judgment.
 
