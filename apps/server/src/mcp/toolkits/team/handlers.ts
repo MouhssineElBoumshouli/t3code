@@ -286,7 +286,9 @@ const make = Effect.gen(function* () {
           ].filter((part) => part !== null);
 
           return {
-            team: context.teamFile.name,
+            team: context.solo
+              ? `${context.teamFile.name} (solo: kept on this computer)`
+              : context.teamFile.name,
             you: context.member.displayName,
             ...(freshness.fresh ? {} : { notFresh: notFreshMessage(freshness.readAt) }),
             ...(doNotTouch.length === 0 ? {} : { doNotTouch }),
@@ -360,12 +362,13 @@ const make = Effect.gen(function* () {
               ),
             ),
           );
+          const holders = context.solo ? "other chats of the user" : "teammates";
           const overlapText =
             shown.length === 0
               ? null
               : shown.some((overlap) => overlap.where === CLAIM_WHERE.ownCopy)
-                ? "teammates hold overlapping paths. Their changes are in their own copy and not merged yet, so you may not see them. Tell the user before editing those."
-                : "teammates hold overlapping paths. Tell the user before editing those.";
+                ? `${holders} hold overlapping paths. Their changes are in their own copy and not merged yet, so you may not see them. Tell the user before editing those.`
+                : `${holders} hold overlapping paths. Tell the user before editing those.`;
           return {
             claimed: claim.paths,
             released: [],

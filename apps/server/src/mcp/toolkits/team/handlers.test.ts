@@ -41,6 +41,7 @@ import {
   testTeamServiceLayer,
   useTeamOrigin,
 } from "../../../team/testing/teamState.ts";
+import { soloTeamIdOf } from "../../../team/state/SoloTeam.ts";
 import type * as TeamHost from "../../../team/state/TeamHost.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import {
@@ -276,26 +277,52 @@ describe("team toolkit", () => {
     }
   });
 
-  it.effect("answers every tool with a plain result in a project that is not in a team", () =>
-    Effect.gen(function* () {
-      const root = yield* makeProjectFolder(false);
-      const { call, teams } = yield* makeHarness({ workspaceRoot: root, startsTeam: false });
-      const results = [
-        yield* call("team_status", {}),
-        yield* call("team_claim", { paths: ["src/a.ts"] }),
-        yield* call("team_task", { title: "Anything" }),
-        yield* call("team_handoff", { changed: "Something." }),
-        yield* call("team_memory_search", { query: "login" }),
-      ];
-      for (const result of results) {
-        assert.deepEqual(result, {
-          inTeam: false,
-          message:
-            "This project is not in a team, so team tools do nothing here. Carry on without them.",
+  it.effect(
+    "works solo in a folder with no team, no Git and no sign-in: claims between chats, notes, search",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* makeProjectFolder(false);
+        const { call, teams } = yield* makeHarness({
+          workspaceRoot: root,
+          startsTeam: false,
+          host: fakeTeamHost(null),
         });
-      }
-      assert.isTrue(Option.isNone(yield* teams.getTeam(TEAM_ID)));
-    }),
+        const status = inTeam(yield* call("team_status", {}));
+        assert.equal(status.team, "Project (solo: kept on this computer)");
+        assert.equal(status.you, "You");
+
+        assert.equal(
+          inTeam(yield* call("team_claim", { paths: ["src/a.ts"] })).message,
+          "Claimed. No overlaps.",
+        );
+        const second = inTeam(yield* call("team_claim", { paths: ["src/a.ts"] }, THREAD_B));
+        assert.deepEqual(
+          second.overlaps.map((overlap) => [overlap.who, overlap.where, overlap.paths]),
+          [["You", CLAIM_WHERE.sameCheckout, ["src/a.ts"]]],
+        );
+        assert.equal(
+          second.message,
+          "Claimed, but other chats of the user hold overlapping paths. Tell the user before editing those.",
+        );
+
+        inTeam(
+          yield* call("team_handoff", { changed: "Added the login form.", files: ["src/a.ts"] }),
+        );
+        const found = inTeam(yield* call("team_memory_search", { query: "login" }, THREAD_B));
+        assert.deepEqual(
+          found.results.map((result) => result.who),
+          ["You"],
+        );
+        const later = inTeam(yield* call("team_status", {}, THREAD_C));
+        assert.equal(later.handoffs?.length, 1);
+
+        // Kept in T3 home: nothing in the project, nothing on a remote.
+        assert.deepEqual(NodeFS.readdirSync(root), []);
+        assert.equal(originStateRefs(), "");
+        const soloId = yield* soloTeamIdOf(root).pipe(Effect.provide(NodeServices.layer));
+        assert.isTrue(yield* teams.isSolo(soloId));
+        assert.isTrue(Option.isNone(yield* teams.getTeam(TEAM_ID)));
+      }),
   );
 
   // Only `t3 team init` starts the team state: a tool call never pushes it.

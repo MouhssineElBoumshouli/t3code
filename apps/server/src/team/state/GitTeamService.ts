@@ -20,6 +20,11 @@
  *   instead, so they are shared once the network is back. It backs off after
  *   failures and stops with the server.
  *
+ * - A project without `.team/team.json` gets a solo team (./SoloTeam.ts): the
+ *   same state repo with no remote, so no fetch, push or poller. When the
+ *   project becomes a team under the same id, its solo file is renamed to the
+ *   person's login and pushed with the team's first sync.
+ *
  * The server provides it as `TeamService` ({@link layer}); its state repos
  * live in `<T3 state dir>/team/<teamId>.git`.
  *
@@ -76,6 +81,7 @@ import {
 import {
   type ClaimPathsInput,
   type CreateTaskInput,
+  type OpenSoloInput,
   type OpenTeamInput,
   type ReleasePathsInput,
   type ReleaseThreadClaimsInput,
@@ -85,6 +91,7 @@ import {
   type UpdateTaskInput,
   type WriteHandoffInput,
 } from "../TeamService.ts";
+import * as SoloTeam from "./SoloTeam.ts";
 import * as TeamHost from "./TeamHost.ts";
 import * as Model from "./TeamStateModel.ts";
 import * as TeamStateRepo from "./TeamStateRepo.ts";
@@ -217,7 +224,8 @@ const toClaim = (teamId: TeamId, login: TeamLogin, claim: TeamStateClaim): TeamC
 /** One team this server has opened: its state repo and what was last read from it. */
 interface TeamEntry {
   readonly teamId: TeamId;
-  remoteUrl: string;
+  /** Null for a solo team: kept on this computer, never fetched or pushed. */
+  remoteUrl: string | null;
   location: TeamHost.TeamRepoLocation | null;
   repo: TeamStateRepo.TeamStateRepo;
   /** Serializes changes to this server's files and to the fields below. */
@@ -387,7 +395,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
   /** Shares this server's latest writes in {@link TEAM_SYNC_DELAY}, together with any that follow. */
   const scheduleSync = (entry: TeamEntry) =>
     Effect.gen(function* () {
-      if (entry.syncScheduled) return;
+      if (entry.remoteUrl === null || entry.syncScheduled) return;
       entry.syncScheduled = true;
       yield* Effect.sleep(TEAM_SYNC_DELAY).pipe(
         Effect.andThen(syncEntry(entry)),
@@ -476,7 +484,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       }
     });
 
-  const makeEntry = (teamId: TeamId, remoteUrl: string) =>
+  const makeEntry = (teamId: TeamId, remoteUrl: string | null) =>
     Effect.gen(function* () {
       const directory = yield* repoDirectory(teamId);
       const repo = yield* TeamStateRepo.make({ directory, remoteUrl }).pipe(
@@ -484,7 +492,8 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),
       );
-      const location = (options.locate ?? TeamHost.parseTeamRemoteUrl)(remoteUrl);
+      const location =
+        remoteUrl === null ? null : (options.locate ?? TeamHost.parseTeamRemoteUrl)(remoteUrl);
       const entry: TeamEntry = {
         teamId,
         remoteUrl,
@@ -502,13 +511,14 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         syncScheduled: false,
         // Writes a previous run could not push (offline when it stopped, say).
         // When Git cannot tell, a sync finds out.
-        unshared: yield* repo.pending.pipe(Effect.orElseSucceed(() => true)),
+        unshared:
+          remoteUrl !== null && (yield* repo.pending.pipe(Effect.orElseSucceed(() => true))),
         pollMode: location === null ? "lsRemote" : "etag",
         etag: null,
         poller: null,
       };
       yield* reload(entry);
-      entry.poller = yield* pollEntry(entry).pipe(Effect.forkIn(scope));
+      if (remoteUrl !== null) entry.poller = yield* pollEntry(entry).pipe(Effect.forkIn(scope));
       return entry;
     });
 
@@ -520,13 +530,17 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       if (!name.endsWith(".git")) continue;
       const teamId = TeamId.make(name.slice(0, -".git".length));
       const loaded = yield* Effect.gen(function* () {
+        // No origin: a solo team.
         const remoteUrl = yield* git
           .execute({
             operation: "GitTeamService.load",
             cwd: path.join(options.stateDirectory, name),
             args: ["config", "--get", "remote.origin.url"],
+            allowNonZeroExit: true,
           })
-          .pipe(Effect.map((result) => result.stdout.trim()));
+          .pipe(
+            Effect.map((result) => (result.exitCode === 0 ? optionalText(result.stdout) : null)),
+          );
         return yield* makeEntry(teamId, remoteUrl);
       }).pipe(Effect.option);
       if (Option.isSome(loaded)) teams.set(teamId, loaded.value);
@@ -548,7 +562,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       );
 
   /** The entry for the team, made or pointed at the checkout's remote. */
-  const entryFor = (teamId: TeamId, remoteUrl: string) =>
+  const entryFor = (teamId: TeamId, remoteUrl: string | null) =>
     registryLock.withPermits(1)(
       Effect.gen(function* () {
         const existing = teams.get(teamId);
@@ -578,10 +592,12 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       if (entry.me !== null && now - entry.me.checkedAt < Duration.toMillis(TEAM_MEMBERSHIP_TTL)) {
         return { ok: true, login: entry.me.login, checkedAt: entry.me.checkedAt } as const;
       }
+      // The solo login is never a GitHub login to go on as.
       const lastLogin =
         entry.me?.login ??
-        myFiles(entry).toSorted((a, b) => (a.file.lastSyncAt < b.file.lastSyncAt ? 1 : -1))[0]?.file
-          .login ??
+        myFiles(entry)
+          .filter((writer) => writer.file.login !== SoloTeam.SOLO_LOGIN)
+          .toSorted((a, b) => (a.file.lastSyncAt < b.file.lastSyncAt ? 1 : -1))[0]?.file.login ??
         null;
       // Not checked yet: the next call checks again.
       const unchecked = (login: TeamLogin) => ({ ok: true, login, checkedAt: 0 }) as const;
@@ -642,6 +658,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       const result = (membership: TeamMembership, created: boolean) => ({ membership, created });
       const access = yield* checkAccess(entry);
       if (!access.ok) return result(access.membership, false);
+      yield* entry.lock.withPermits(1)(adoptSoloFiles(entry, access.login));
 
       // The first open in this process, and every ensureTeam, reads the remote;
       // later opens use what syncs brought.
@@ -737,6 +754,109 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       return result({ status: "member", team: toTeam(entry.view), member }, created);
     });
 
+  /**
+   * A solo team that became a team: renames this server's solo writer file to
+   * the login, with the tasks it owned, and names the login as the team's
+   * creator. Call holding `entry.lock`; does nothing when there is no solo file.
+   */
+  const adoptSoloFiles = (entry: TeamEntry, login: TeamLogin) =>
+    Effect.gen(function* () {
+      const solo = myFile(entry, SoloTeam.SOLO_LOGIN);
+      if (solo === undefined) return;
+      const mine = myFile(entry, login);
+      const asLogin = (owner: TeamLogin | null) => (owner === SoloTeam.SOLO_LOGIN ? login : owner);
+      yield* saveMyFile(entry, {
+        ...solo,
+        ...mine,
+        login,
+        displayName: mine?.displayName ?? login,
+        claims: [...(mine?.claims ?? []), ...solo.claims],
+        tasks: [...(mine?.tasks ?? []), ...solo.tasks].map((task) => ({
+          ...task,
+          owner: asLogin(task.owner),
+        })),
+        notes: [...(mine?.notes ?? []), ...solo.notes],
+        activity: [...(mine?.activity ?? []), ...solo.activity],
+      });
+      const soloPath = Model.writerFilePath(SoloTeam.SOLO_LOGIN, environmentId);
+      yield* entry.repo.removeMine(soloPath);
+      const soloKey = Model.writerKey(SoloTeam.SOLO_LOGIN, environmentId);
+      entry.parsed = {
+        ...entry.parsed,
+        writers: entry.parsed.writers.filter((writer) => writer.key !== soloKey),
+      };
+      const team = entry.parsed.team;
+      if (team !== null && team.createdBy === SoloTeam.SOLO_LOGIN) {
+        yield* entry.repo.saveMine(
+          TEAM_STATE_TEAM_FILE,
+          Model.encodeTeamStateTeamFile({ ...team, createdBy: login }),
+        );
+      }
+      yield* reload(entry);
+    });
+
+  /**
+   * The solo team of a project folder (./SoloTeam.ts), started on first use.
+   * Once the folder became a team, a chat whose checkout has no
+   * `.team/team.json` yet (an older worktree) gets the team this server opened.
+   */
+  const openSolo = Effect.fn("GitTeamService.openSolo")(function* (input: OpenSoloInput) {
+    const teamId = yield* SoloTeam.soloTeamIdOf(input.projectRoot).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, path),
+    );
+    const existing = teams.get(teamId);
+    const entry = existing ?? (yield* entryFor(teamId, null));
+    if (entry.remoteUrl !== null) {
+      const member = entry.me === null ? null : memberOf(entry, entry.me.login);
+      return entry.view !== null && member !== null
+        ? ({ status: "member", team: toTeam(entry.view), member } as const)
+        : ({
+            status: "unavailable",
+            detail: "this folder became a team; open its team from a checkout with .team/team.json",
+          } as const);
+    }
+    return yield* entry.lock.withPermits(1)(
+      Effect.gen(function* () {
+        const now = yield* nowIso;
+        if (entry.parsed.team === null) {
+          yield* entry.repo.saveMine(
+            TEAM_STATE_TEAM_FILE,
+            Model.encodeTeamStateTeamFile({
+              format: TEAM_STATE_FORMAT,
+              teamId,
+              name: input.name.trim() || "Solo",
+              createdBy: SoloTeam.SOLO_LOGIN,
+              createdAt: now,
+            }),
+          );
+          yield* reload(entry);
+        }
+        if (myFile(entry, SoloTeam.SOLO_LOGIN) === undefined) {
+          yield* saveMyFile(
+            entry,
+            Model.emptyWriterFile({
+              login: SoloTeam.SOLO_LOGIN,
+              displayName: SoloTeam.SOLO_DISPLAY_NAME,
+              environmentId,
+              now,
+            }),
+          );
+        }
+        // Never checked with a host, so never checked again.
+        entry.me = { login: SoloTeam.SOLO_LOGIN, checkedAt: Number.POSITIVE_INFINITY };
+        const member = memberOf(entry, SoloTeam.SOLO_LOGIN);
+        if (entry.view === null || member === null) {
+          return yield* new TeamStorageError({
+            operation: "openSolo",
+            cause: new Error("The solo state could not be read."),
+          });
+        }
+        return { status: "member", team: toTeam(entry.view), member } as const;
+      }),
+    );
+  });
+
   const requireEntry = (teamId: TeamId) =>
     Effect.gen(function* () {
       const entry = teams.get(teamId);
@@ -787,7 +907,11 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
     );
 
     // The sync fetches first, so the overlaps below include claims pushed from elsewhere.
-    const synced = yield* syncEntry(entry, TEAM_CLAIM_NETWORK_TIMEOUT_MS);
+    // A solo team has only this server's claims, already in the view.
+    const confirmed =
+      entry.remoteUrl === null
+        ? true
+        : (yield* syncEntry(entry, TEAM_CLAIM_NETWORK_TIMEOUT_MS)).confirmed;
     const overlaps = Model.claimOverlaps(entry.view?.activeClaims ?? [], claim);
     // This result reports them; they are not late overlaps.
     const keys = new Set(
@@ -795,7 +919,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
     );
     entry.reported = new Set([...entry.reported, ...keys]);
     entry.late = entry.late.filter((overlap) => !keys.has(overlap.key));
-    return { claim, overlaps, confirmed: synced.confirmed };
+    return { claim, overlaps, confirmed };
   });
 
   const releasePaths = Effect.fn("GitTeamService.releasePaths")(function* (
@@ -1014,6 +1138,8 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
 
   return TeamService.of({
     openTeam: (input) => open(input, false).pipe(Effect.map((result) => result.membership)),
+    openSolo,
+    isSolo: (teamId) => Effect.sync(() => teams.get(teamId)?.remoteUrl === null),
     ensureTeam: (input) => open(input, true),
     getTeam: (teamId) =>
       Effect.sync(() => {
@@ -1107,12 +1233,15 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       Effect.gen(function* () {
         const entry = teams.get(teamId);
         if (entry === undefined) return yield* new TeamNotFoundError({ teamId });
+        if (entry.remoteUrl === null) return { status: "solo" } as const;
         return yield* refreshEntry(entry);
       }),
     sync: (teamId) =>
       Effect.gen(function* () {
         const entry = teams.get(teamId);
         if (entry === undefined) return yield* new TeamNotFoundError({ teamId });
+        if (entry.remoteUrl === null)
+          return { confirmed: false, reason: "solo", attempts: 0 } as const;
         return yield* syncEntry(entry);
       }),
   });

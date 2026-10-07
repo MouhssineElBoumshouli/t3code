@@ -4,8 +4,8 @@
  * resolves the thread's team the same way the team tools do.
  *
  * No briefing when the session has no `t3-code` MCP server (the agent could
- * not call the tools it names), when the project is not in a team, or when
- * this server is not a member. A failure or a slow lookup also means no
+ * not call the tools it names), or when the project is in a team this server
+ * cannot use. A project with no team gets the solo briefing. A failure or a slow lookup also means no
  * briefing: it must never hold up or break a turn.
  */
 import { TEAM_DIRECTORY_NAME, TEAM_RULEBOOK_FILE_NAME, type ThreadId } from "@t3tools/contracts";
@@ -14,7 +14,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { installTeamBriefingResolver, renderTeamBriefing } from "../../../team/TeamBriefing.ts";
+import {
+  installTeamBriefingResolver,
+  renderSoloBriefing,
+  renderTeamBriefing,
+} from "../../../team/TeamBriefing.ts";
 import * as McpProviderSession from "../../McpProviderSession.ts";
 import { makeTeamResolver } from "./resolve.ts";
 
@@ -30,6 +34,7 @@ export const makeTeamBriefingResolver = Effect.gen(function* () {
     return resolve({ environmentId: mcp.environmentId, threadId }).pipe(
       Effect.map((resolved) => {
         if (resolved._tag === "NotInTeam") return undefined;
+        if (resolved.context.solo) return renderSoloBriefing();
         const { teamFile, member, teamRoot, workingFolder } = resolved.context;
         const rulebook = path.join(teamRoot, TEAM_DIRECTORY_NAME, TEAM_RULEBOOK_FILE_NAME);
         return renderTeamBriefing({

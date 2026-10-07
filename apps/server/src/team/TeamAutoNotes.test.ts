@@ -231,10 +231,15 @@ describe("TeamAutoNotes", () => {
       initRepo(plainRoot, { "src/x.ts": "x\n" });
       const harness = yield* makeHarness({ workspaceRoot: root, plainRoot });
 
-      // Skipped: a mid-turn placeholder, a turn with no files, and a project not in a team.
+      // Skipped: a mid-turn placeholder and a turn with no files.
       yield* harness.publish(turnDiff(THREAD_A, ["src/login.ts"], "missing"));
       yield* harness.publish(turnDiff(THREAD_A, []));
+      // A checkout with no team file: the note goes to the solo team, not the team.
       yield* harness.publish(turnDiff(THREAD_PLAIN, ["src/x.ts"]));
+      const plain = yield* harness.nextSaved;
+      assert.equal(plain.thread.threadId, THREAD_PLAIN);
+      assert.notEqual(plain.teamId, TEAM_ID);
+      assert.deepEqual(plain.files, ["src/x.ts"]);
 
       writeFile(root, "src/login.ts", "v2\n");
       writeFile(root, "src/form.ts", "form\n");

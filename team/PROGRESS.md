@@ -2,6 +2,41 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — Solo mode (WINDOWS_AND_SOLO.md S1, S5)
+
+**What changed**
+
+- A project with no `.team/team.json` now gets a **solo team**: the team tools, the briefing, automatic notes and memory search work in any project folder, with no GitHub remote and no gh sign-in. Claims between your own chats report overlaps ("other chats of the user hold overlapping paths").
+- Its state is a state repo in T3 home (`<state dir>/team/solo-<hash>.git`) with **no origin**: no poller, no fetch, no push. Nothing is written into the project. The id is a hash of the project folder (links resolved; on Windows lower case and `\`), so every chat of the project, worktrees included, shares it.
+- The person shows as "You" (writer login `me`). The solo briefing (`<project_memory>`, about 100 tokens) has no team name and no rulebook line.
+- **Solo to team keeps the notes**: `t3 team init` in that folder (or its repo root) gives the new team the solo id; when the team opens, the solo writer file is renamed to the GitHub login (claims, tasks with their owner, notes, activity), `team.json`'s `createdBy` becomes the login, and the first push carries it all. A chat in an older worktree without `.team/team.json` then gets the team, not a new solo state.
+- `t3 team status` lists solo teams as "solo, on this computer only".
+- New `TeamService` methods: `openSolo`, `isSolo`; `refresh`/`sync` answer `solo` for a solo team.
+
+**Files touched**
+
+- New: `apps/server/src/team/state/SoloTeam.ts`.
+- `apps/server/src/team/state/GitTeamService.ts`, `TeamStateRepo.ts` (no origin when the remote is null; `removeMine`), `apps/server/src/team/TeamService.ts`, `TeamBriefing.ts`, `TeamProjectFiles.ts` (`teamId` option), `apps/server/src/mcp/toolkits/team/resolve.ts`, `briefing.ts`, `handlers.ts`, `apps/server/src/cli/team.ts`.
+- Tests: `GitTeamService.test.ts` (2 new), `handlers.test.ts` (the old "not in a team" test became the solo test), `briefing.test.ts`, `TeamBriefing.test.ts` (solo budget), `TeamAutoNotes.test.ts` (a checkout without a team file now gets a solo note), `cli/team.test.ts` (1 new).
+- `team/WINDOWS_AND_SOLO.md` (S1, S5 fixed; how solo mode works).
+
+**How it was checked**
+
+- `vp test run src/mcp/toolkits/team/ src/team/ src/cli/team.test.ts src/auth/ChatGptRpcScopes.test.ts`: 16 files, **163 passed** (159 + 4 new). `tsc --noEmit` in `apps/server`: 0 errors. `vp lint` on the changed folders: clean.
+- New tests: a plain folder (not Git, signed out) gets claims with overlaps between two chats, a handoff, search, and `team_status` handoffs, with nothing written in the folder and nothing on origin; a solo team survives a restart; a solo team with a claim, a task and a note becomes a team as `Mouhssine`, and origin holds only `team.json` and `writers/Mouhssine/...`; a teammate then sees the note; `t3 team init` in a folder used solo reuses its id and pushes its note.
+- Mutation checks: without the rename on open, the conversion test fails (`[ 'Mouhssine', 'me' ]` members); with a sync on solo claims, the solo test fails.
+
+**What's left**
+
+- Steps 2 to 4 of this session (next entries).
+
+**Unsure about / notes**
+
+- That no poller runs for a solo team is from the code (`makeEntry` forks it only with a remote), not a test: proving "nothing happened" after moving the test clock would need a wait, since the poller runs real Git.
+- Every project now gets the solo briefing and automatic notes, as asked. That costs about 100 tokens per first turn and one small state repo per project in T3 home, made on the first turn.
+- A team project you cannot use right now (signed out, no remote) still says why and does not fall back to solo: mixing its notes into a solo state would split them.
+- Moving a project folder starts a fresh solo state; the old one stays in T3 home.
+
 ## 2026-10-07 — Design pick recorded; UI_PLAN.md
 
 **What changed**

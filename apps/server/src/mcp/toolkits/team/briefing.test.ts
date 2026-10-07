@@ -24,7 +24,11 @@ import * as Path from "effect/Path";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type * as TeamHost from "../../../team/state/TeamHost.ts";
-import { readTeamBriefing, renderTeamBriefing } from "../../../team/TeamBriefing.ts";
+import {
+  readTeamBriefing,
+  renderSoloBriefing,
+  renderTeamBriefing,
+} from "../../../team/TeamBriefing.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import { git } from "../../../team/testing/gitRepo.ts";
 import {
@@ -186,11 +190,13 @@ const EXPECTED = renderTeamBriefing({
 describe("team briefing resolver", () => {
   afterEach(() => McpProviderSession.clearAllMcpProviderSessions());
 
-  it.effect("gives no briefing when the project is not in a team", () =>
+  it.effect("gives the solo briefing when the project is not in a team", () =>
     Effect.gen(function* () {
       attachMcp();
       const root = yield* makeFolder({ team: false });
-      assert.isUndefined(yield* briefingIn(root));
+      const briefing = yield* briefingIn(root, null, { startsTeam: false });
+      assert.equal(briefing, renderSoloBriefing());
+      assert.notInclude(briefing ?? "", "rulebook");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

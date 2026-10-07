@@ -281,6 +281,8 @@ export const initTeamProject = Effect.fn("TeamProjectFiles.initTeamProject")(fun
   readonly startDirectory: string;
   /** Used only when the team is created. Default: the repo folder name. */
   readonly name?: string | undefined;
+  /** Used only when the team is created, e.g. the folder's solo team id. Default: a new one. */
+  readonly teamId?: TeamId | undefined;
   /**
    * Runs after every check and before any write. `created` is true when this
    * run makes `.team/team.json`, false when the repo already had one.
@@ -322,7 +324,7 @@ export const initTeamProject = Effect.fn("TeamProjectFiles.initTeamProject")(fun
   const teamFile = Option.isSome(existingTeam)
     ? existingTeam.value
     : TeamFile.make({
-        teamId: TeamId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
+        teamId: input.teamId ?? TeamId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
         name: requestedName && requestedName.length > 0 ? requestedName : path.basename(repoRoot),
       });
 

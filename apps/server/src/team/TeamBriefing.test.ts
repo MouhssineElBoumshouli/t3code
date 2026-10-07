@@ -8,6 +8,7 @@ import {
   TEAM_BRIEFING_TOKEN_BUDGET,
   installTeamBriefingResolver,
   readTeamBriefing,
+  renderSoloBriefing,
   renderTeamBriefing,
 } from "./TeamBriefing.ts";
 import { TEST_TEAM_BRIEFING } from "./testing/teamBriefing.ts";
@@ -67,6 +68,11 @@ describe("renderTeamBriefing", () => {
     });
     const tokens = estimateTokens(briefing);
     assert.isAtMost(tokens, TEAM_BRIEFING_TOKEN_BUDGET, `briefing is about ${tokens} tokens`);
+  });
+
+  it(`keeps the solo briefing within ${TEAM_BRIEFING_TOKEN_BUDGET} tokens`, () => {
+    const tokens = estimateTokens(renderSoloBriefing());
+    assert.isAtMost(tokens, TEAM_BRIEFING_TOKEN_BUDGET, `solo briefing is about ${tokens} tokens`);
   });
 
   it("keeps names on one line, cut, and free of tag characters", () => {

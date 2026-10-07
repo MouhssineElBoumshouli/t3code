@@ -33,6 +33,7 @@ import * as VcsProcess from "../../vcs/VcsProcess.ts";
 import { git } from "../testing/gitRepo.ts";
 import type { TeamMembership } from "../TeamService.ts";
 import * as GitTeamService from "./GitTeamService.ts";
+import { soloTeamIdOf } from "./SoloTeam.ts";
 import * as TeamHost from "./TeamHost.ts";
 
 const TestLayer = GitVcsDriver.layer.pipe(
@@ -1327,5 +1328,155 @@ describe("GitTeamService poller", () => {
       assert.equal(yield* Queue.take(restartedPolls), "idle");
       assert.lengthOf(restartedHost.state.checks, 0);
     }).pipe(Effect.provide(TestLayer)),
+  );
+});
+
+describe("GitTeamService solo (no team file)", () => {
+  it.effect(
+    "keeps a solo team on this computer: claims between its threads, no network, kept after a restart",
+    () =>
+      Effect.gen(function* () {
+        const b = yield* bench;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        // Not a Git repo, nobody signed in.
+        const folder = path.join(b.root, "notes-app");
+        yield* fs.makeDirectory(folder);
+        const soloServer = () =>
+          b.server({
+            name: "owner",
+            environmentId: ownerEnvironment,
+            host: fakeHost({ status: "signedOut", detail: "Not signed in." }),
+          });
+        const teams = yield* soloServer();
+        const opened = yield* teams.openSolo({ projectRoot: folder, name: "Notes app" });
+        const me = memberOf(opened);
+        assert.equal(me.displayName, "You");
+        const teamId =
+          opened.status === "member" ? opened.team.teamId : assert.fail("not a member");
+        assert.equal(teamId, yield* soloTeamIdOf(folder));
+        assert.isTrue(yield* teams.isSolo(teamId));
+
+        yield* teams.claimPaths({
+          teamId,
+          memberId: me.memberId,
+          thread: threadA,
+          paths: ["src/a.ts"],
+        });
+        const second = yield* teams.claimPaths({
+          teamId,
+          memberId: me.memberId,
+          thread: threadB,
+          paths: ["src/a.ts"],
+        });
+        assert.isTrue(second.confirmed);
+        assert.deepEqual(
+          second.overlaps.map((overlap) => overlap.claim.thread.threadId),
+          [threadA.threadId],
+        );
+        yield* teams.writeHandoff({
+          teamId,
+          memberId: me.memberId,
+          thread: threadA,
+          changed: "Added the form.",
+          files: ["src/a.ts"],
+        });
+        assert.deepEqual(yield* teams.refresh(teamId), { status: "solo" });
+
+        // The claims did not fetch or push (a team's claim syncs before it answers).
+        assert.equal(b.countCalls("owner:fetch") + b.countCalls("owner:push"), 0);
+        assert.deepEqual(yield* fs.readDirectory(folder), [], "nothing written in the project");
+
+        const restarted = yield* soloServer();
+        assert.isTrue(yield* restarted.isSolo(teamId));
+        assert.deepEqual(yield* restarted.listClaimedThreads(ownerEnvironment), [
+          threadA.threadId,
+          threadB.threadId,
+        ]);
+        memberOf(yield* restarted.openSolo({ projectRoot: `${folder}/`, name: "Other name" }));
+        assert.equal(Option.getOrThrow(yield* restarted.getTeam(teamId)).name, "Notes app");
+        assert.lengthOf(yield* restarted.listHandoffs(teamId), 1);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "becomes a team under the same id, notes, tasks and claims kept, as the GitHub login",
+    () =>
+      Effect.gen(function* () {
+        const b = yield* bench;
+        const teams = yield* b.ownerServer();
+        const opened = yield* teams.openSolo({ projectRoot: b.checkout, name: "project" });
+        const me = memberOf(opened);
+        const teamId =
+          opened.status === "member" ? opened.team.teamId : assert.fail("not a member");
+        yield* teams.claimPaths({
+          teamId,
+          memberId: me.memberId,
+          thread: threadA,
+          paths: ["src/a.ts"],
+        });
+        yield* teams.createTask({
+          teamId,
+          actorMemberId: me.memberId,
+          title: "Login form",
+          ownerMemberId: me.memberId,
+          thread: threadA,
+        });
+        yield* teams.writeHandoff({
+          teamId,
+          memberId: me.memberId,
+          thread: threadA,
+          changed: "Added the form.",
+          files: ["src/a.ts"],
+        });
+
+        const started = yield* teams.ensureTeam({
+          teamFile: TeamFile.make({ teamId, name: "Core" }),
+          checkout: b.checkout,
+        });
+        assert.isTrue(started.created);
+        assert.equal(memberOf(started.membership).memberId, "Mouhssine");
+        assert.isFalse(yield* teams.isSolo(teamId));
+        assert.deepEqual(
+          (yield* teams.listMembers(teamId)).map((member) => member.memberId),
+          ["Mouhssine"],
+        );
+        assert.deepEqual(
+          (yield* teams.listActiveClaims(teamId)).map((claim) => [
+            claim.memberId,
+            [...claim.paths],
+          ]),
+          [["Mouhssine", ["src/a.ts"]]],
+        );
+        assert.deepEqual(
+          (yield* teams.listTasks(teamId)).map((task) => [task.title, task.ownerMemberId]),
+          [["Login form", "Mouhssine"]],
+        );
+        assert.deepEqual(
+          (yield* teams.listHandoffs(teamId)).map((note) => [note.memberId, note.changed]),
+          [["Mouhssine", "Added the form."]],
+        );
+        // On origin: the login's writer file only, and the login as creator.
+        assert.include(b.originFile("team.json"), '"createdBy": "Mouhssine"');
+        assert.deepEqual(
+          git(b.root, "--git-dir", "origin.git", "ls-tree", "-r", "--name-only", TEAM_STATE_REF)
+            .split("\n")
+            .filter((line) => line.length > 0),
+          ["team.json", `writers/Mouhssine/${ownerEnvironment}.json`],
+        );
+
+        // A teammate sees the notes made solo.
+        const friendTeams = yield* b.friendServer();
+        memberOf(
+          yield* friendTeams.openTeam({
+            teamFile: TeamFile.make({ teamId, name: "Core" }),
+            checkout: b.checkout,
+          }),
+        );
+        assert.deepEqual(
+          (yield* friendTeams.listHandoffs(teamId)).map((note) => note.memberId),
+          ["Mouhssine"],
+        );
+      }).pipe(Effect.provide(TestLayer)),
   );
 });

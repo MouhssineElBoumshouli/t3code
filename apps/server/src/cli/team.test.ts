@@ -429,6 +429,38 @@ describe("t3 team init on the remote", () => {
     }),
   );
 
+  it.effect("keeps a folder's solo notes when it becomes a team", () =>
+    Effect.gen(function* () {
+      const { repo, origin } = makeRemoteRepo();
+      const stateDirectory = NodePath.join(makeHome(), "team");
+      // Used solo first: a note kept in T3 home, nothing in the repo.
+      const solo = yield* Effect.gen(function* () {
+        const teams = yield* TeamService.TeamService;
+        const opened = yield* teams.openSolo({ projectRoot: repo, name: "acme-app" });
+        if (opened.status !== "member") return assert.fail("not a member");
+        yield* teams.writeHandoff({
+          teamId: opened.team.teamId,
+          memberId: opened.member.memberId,
+          thread: { environmentId: ENVIRONMENT_ID, threadId: ThreadId.make("thread-a") },
+          changed: "Added the login form.",
+          files: [],
+        });
+        return opened.team.teamId;
+      }).pipe(
+        Effect.provide(testTeamServiceLayer({ environmentId: ENVIRONMENT_ID, stateDirectory })),
+      );
+      assert.isFalse(exists(repo, ".team"));
+
+      const { output, failure } = yield* initRemote({ startDirectory: repo, stateDirectory });
+      assert.isUndefined(failure);
+      assert.equal(readTeam(repo).teamId, solo);
+      assert.include(output, "This folder was used solo");
+      const writer = `writers/${TEST_TEAM_LOGIN}/${ENVIRONMENT_ID}.json`;
+      assert.deepEqual(originStateFiles(origin), ["team.json", writer]);
+      assert.include(git(origin, "show", `${TEAM_STATE_REF}:${writer}`), "Added the login form.");
+    }),
+  );
+
   it.effect("leaves the remote alone when the answer is no", () =>
     Effect.gen(function* () {
       const { repo, origin } = makeRemoteRepo();

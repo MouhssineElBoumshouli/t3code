@@ -55,6 +55,22 @@ export function renderTeamBriefing(input: TeamBriefingInput): string {
   ].join("\n");
 }
 
+/**
+ * The briefing of a project with no team (team/state/SoloTeam.ts): the same
+ * tools, between the person's own chats, kept on this computer. No rulebook.
+ */
+export function renderSoloBriefing(): string {
+  return [
+    "<project_memory>",
+    "T3 keeps notes for this project between the user's chats, on this computer only.",
+    "Before editing files, call team_status (what other chats hold, recent notes), then team_claim the paths you will touch.",
+    "If it reports overlaps with another chat, tell the user before editing those files.",
+    "Write a team_handoff only after editing files or if the user stops work partway; keep claims unless the user drops it.",
+    "To find earlier work, use team_memory_search. Code is the truth; notes can be out of date.",
+    "</project_memory>",
+  ].join("\n");
+}
+
 /** Resolves a thread's briefing. Never fails; `undefined` means no briefing. */
 export type TeamBriefingResolver = (threadId: ThreadId) => Effect.Effect<string | undefined>;
 

@@ -76,8 +76,8 @@ export interface TeamStateSnapshot {
 export interface TeamStateRepoOptions {
   /** The bare repo, `<T3 home>/team/<teamId>.git`. Made when missing. */
   readonly directory: string;
-  /** The project's remote URL. */
-  readonly remoteUrl: string;
+  /** The project's remote URL; null for a solo team, which has no remote (./SoloTeam.ts). */
+  readonly remoteUrl: string | null;
 }
 
 export interface TeamStateSyncInput {
@@ -149,7 +149,9 @@ export const make = Effect.fn("TeamStateRepo.make")(function* (options: TeamStat
     yield* local("init", ["init", "--bare", "--quiet"]);
   }
   yield* fs.makeDirectory(mineRoot, { recursive: true }).pipe(storage("init"));
-  yield* local("init", ["config", "remote.origin.url", options.remoteUrl]);
+  if (options.remoteUrl !== null) {
+    yield* local("init", ["config", "remote.origin.url", options.remoteUrl]);
+  }
 
   /**
    * The state ref's commit, or "" when there is none. A Git call that fails
@@ -420,6 +422,20 @@ export const make = Effect.fn("TeamStateRepo.make")(function* (options: TeamStat
           yield* fs.writeFileString(temporary, contents);
           yield* fs.rename(temporary, target);
         }).pipe(storage("saveMine")),
+      ),
+
+    /** Removes one of this server's files locally (a solo file renamed when its team opens). */
+    removeMine: (file: string) =>
+      saveLock.withPermits(1)(
+        Effect.gen(function* () {
+          if (!isSafeTreePath(file)) {
+            return yield* new TeamStorageError({
+              operation: "removeMine",
+              cause: new Error(`Not a state tree path: ${file}`),
+            });
+          }
+          yield* fs.remove(path.join(mineRoot, ...file.split("/")), { force: true });
+        }).pipe(storage("removeMine")),
       ),
 
     /** Makes the remote hold this server's files. Never forces. */

@@ -2,7 +2,8 @@
  * `t3 team` commands (fork-only, see team/DESIGN.md and team/STORAGE_PLAN.md).
  *
  * `t3 team init` writes the team's checked-in files into the current repo and
- * never commits them. It then starts the team's shared state on the
+ * never commits them. A folder used solo before keeps its notes: the team
+ * takes the solo team's id, so its state carries over (team/state/SoloTeam.ts). It then starts the team's shared state on the
  * project's remote, the hidden ref `refs/t3-team/state`: it shows what it will
  * create and creates it after `--yes` or a prompt. In a clone whose remote
  * already holds the team's state, it joins instead. On a public repo it
@@ -35,9 +36,11 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { expandHomePath } from "../os-jank.ts";
 import * as GitTeamService from "../team/state/GitTeamService.ts";
+import * as SoloTeam from "../team/state/SoloTeam.ts";
 import * as TeamHost from "../team/state/TeamHost.ts";
 import { writerFilePath } from "../team/state/TeamStateModel.ts";
 import {
+  findRepoRoot,
   initTeamProject,
   TeamProjectRegisterError,
   type TeamProjectInitResult,
@@ -151,6 +154,20 @@ export interface TeamInitInput {
 export const runTeamInit = Effect.fn("runTeamInit")(function* (input: TeamInitInput) {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const host = yield* TeamHost.TeamHost;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  /** The solo team this folder (or its repo root) was used as, if any. */
+  const soloTeamOf = Effect.gen(function* () {
+    const repoRoot = yield* findRepoRoot(input.startDirectory);
+    const folders = [input.startDirectory, ...Option.toArray(repoRoot)];
+    for (const folder of folders) {
+      const teamId = yield* SoloTeam.soloTeamIdOf(folder);
+      if (yield* fs.exists(path.join(input.stateDirectory, `${teamId}.git`))) return teamId;
+    }
+    return undefined;
+  }).pipe(Effect.orElseSucceed(() => undefined));
+  const soloTeamId = yield* soloTeamOf;
 
   const localOnly = (reason: string): RemotePlan => ({ _tag: "localOnly", reason });
 
@@ -230,6 +247,7 @@ export const runTeamInit = Effect.fn("runTeamInit")(function* (input: TeamInitIn
   const result = yield* initTeamProject({
     startDirectory: input.startDirectory,
     name: input.name,
+    teamId: soloTeamId,
     register: ({ repoRoot, created }) =>
       planRemote(repoRoot, created).pipe(
         Effect.map((planned) => {
@@ -239,6 +257,11 @@ export const runTeamInit = Effect.fn("runTeamInit")(function* (input: TeamInitIn
   });
   yield* Console.log(formatTeamInitResult(result));
   yield* Console.log("");
+  if (soloTeamId !== undefined && result.teamFile.teamId === soloTeamId) {
+    yield* Console.log(
+      "This folder was used solo: its notes, tasks and claims become this team's.",
+    );
+  }
 
   if (plan._tag === "localOnly") {
     yield* Console.log(
@@ -397,6 +420,16 @@ const teamStatusCommand = Command.make("status", { baseDir: baseDirFlag }).pipe(
         const lines = [`Teams the T3 home at ${config.baseDir} has opened:`];
         for (const team of opened) {
           const fetched = yield* teams.refresh(team.teamId);
+          if (fetched.status === "solo") {
+            const claims = yield* teams.listActiveClaims(team.teamId);
+            lines.push(
+              "",
+              `  ${team.name} (solo, on this computer only), started ${team.createdAt}`,
+              claims.length === 0 ? "    claims: none" : "    claims:",
+              ...claims.map((claim) => `      ${formatClaim(claim)}`),
+            );
+            continue;
+          }
           const members = yield* teams.listMembers(team.teamId);
           const claims = yield* teams.listActiveClaims(team.teamId);
           lines.push(

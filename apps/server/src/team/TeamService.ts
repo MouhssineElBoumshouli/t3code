@@ -6,6 +6,8 @@
  * The one implementation is `GitTeamService` (./state/GitTeamService.ts): the
  * state lives on the hidden ref `refs/t3-team/state` of the project's own Git
  * remote, one writer file per (GitHub login, T3 server) (team/STORAGE_PLAN.md).
+ * A project without a team gets a solo team, kept on this computer
+ * (./state/SoloTeam.ts); the same reads and writes work on it.
  * The SQLite service it replaced is parked in team/parked/sqlite-service/.
  *
  * @module TeamService
@@ -59,6 +61,20 @@ export interface OpenTeamInput {
   /** A checkout of the project; its `origin` remote holds the team state. */
   readonly checkout: string;
 }
+
+export interface OpenSoloInput {
+  /** The project's folder; its solo team id comes from it. */
+  readonly projectRoot: string;
+  /** Used when the solo team is started, e.g. the project's title. */
+  readonly name: string;
+}
+
+/** `refresh` on a solo team: nothing to fetch. */
+export type TeamRefreshResult = TeamStateFetchResult | { readonly status: "solo" };
+/** `sync` on a solo team: nothing to push. */
+export type TeamSyncResult =
+  | TeamStateSyncResult
+  | { readonly confirmed: false; readonly reason: "solo"; readonly attempts: 0 };
 
 export interface ClaimPathsInput {
   readonly teamId: TeamId;
@@ -154,6 +170,13 @@ export class TeamService extends Context.Service<
       { readonly membership: TeamMembership; readonly created: boolean },
       TeamServiceError
     >;
+    /**
+     * The solo team of a project folder with no `.team/team.json`, started on
+     * first use. Always `member` (as "You") unless the folder became a team.
+     */
+    readonly openSolo: (input: OpenSoloInput) => Effect.Effect<TeamMembership, TeamServiceError>;
+    /** Whether the team is a solo team, kept on this computer. */
+    readonly isSolo: (teamId: TeamId) => Effect.Effect<boolean>;
     readonly getTeam: (teamId: TeamId) => Effect.Effect<Option.Option<Team>>;
     /** Teams this server has opened, by name. */
     readonly listTeams: () => Effect.Effect<ReadonlyArray<Team>>;
@@ -251,10 +274,10 @@ export class TeamService extends Context.Service<
     /** Fetches the others' files now, without pushing this server's. */
     readonly refresh: (
       teamId: TeamId,
-    ) => Effect.Effect<TeamStateFetchResult, TeamNotFoundError | TeamStorageError>;
+    ) => Effect.Effect<TeamRefreshResult, TeamNotFoundError | TeamStorageError>;
     /** Pushes this server's files and fetches the others' now. */
     readonly sync: (
       teamId: TeamId,
-    ) => Effect.Effect<TeamStateSyncResult, TeamNotFoundError | TeamStorageError>;
+    ) => Effect.Effect<TeamSyncResult, TeamNotFoundError | TeamStorageError>;
   }
 >()("t3/team/TeamService") {}

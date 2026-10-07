@@ -6,6 +6,10 @@
  * The team state lives on the project's remote (team/STORAGE_PLAN.md), so
  * opening the team asks the Git host whether this person may use it. It never
  * starts the team state: only `t3 team init` does.
+ *
+ * A project with no `.team/team.json` gets its solo team, kept on this
+ * computer (team/state/SoloTeam.ts): the same tools, between the person's own
+ * chats. Its root is the thread's working folder.
  */
 import type {
   EnvironmentId,
@@ -61,6 +65,8 @@ export const notInTeamReason = (
 
 export interface TeamContext {
   readonly teamFile: TeamFile;
+  /** A solo team: every claim and note is one of this person's own chats. */
+  readonly solo: boolean;
   readonly member: TeamMember;
   readonly thread: TeamThreadRef;
   readonly teamRoot: string;
@@ -110,8 +116,22 @@ export const makeTeamResolver = Effect.gen(function* () {
         return yield* new TeamToolError({ detail: "This thread's project was not found." });
       }
       const workingFolder = thread.value.worktreePath ?? project.value.workspaceRoot;
+      const threadRef = { environmentId: scope.environmentId, threadId: scope.threadId };
       const found = yield* findTeamFile(workingFolder);
-      if (Option.isNone(found)) return notInTeam(NOT_IN_TEAM);
+      if (Option.isNone(found)) {
+        const solo = yield* teams
+          .openSolo({ projectRoot: project.value.workspaceRoot, name: project.value.title })
+          .pipe(Effect.mapError(fromService("lookup")));
+        if (solo.status !== "member") return notInTeam(NOT_IN_TEAM);
+        return inTeamWith({
+          teamFile: { teamId: solo.team.teamId, name: solo.team.name },
+          solo: yield* teams.isSolo(solo.team.teamId),
+          member: solo.member,
+          thread: threadRef,
+          teamRoot: workingFolder,
+          workingFolder,
+        });
+      }
       const { teamFile, teamRoot } = found.value;
 
       const membership = yield* teams
@@ -120,8 +140,9 @@ export const makeTeamResolver = Effect.gen(function* () {
       if (membership.status !== "member") return notInTeam(notInTeamReason(teamFile, membership));
       return inTeamWith({
         teamFile,
+        solo: false,
         member: membership.member,
-        thread: { environmentId: scope.environmentId, threadId: scope.threadId },
+        thread: threadRef,
         teamRoot,
         workingFolder,
       });
