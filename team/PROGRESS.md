@@ -2,6 +2,62 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-07 — GitHub timing check; slice 3 (TeamHost) and slice 4 (GitTeamService, not wired)
+
+**What changed**
+
+- **Timing check** (commit c4bc85cc6): the real `TeamStateRepo` with two writers against the private scratch repo `t3-team-scratch`, cloned to `~/code/t3-team-scratch`. Numbers in STORAGE_PLAN.md Q4, in a table next to the estimates. In short: a claim's sync 2.55–3.04 s (median 2.7 s, estimate about 3 s); a teammate's depth-1 fetch 0.99–1.21 s (estimate 0.7 s); ETag check 0.45–0.64 s, and every `304` left `X-Ratelimit-Used` unchanged; claim to teammate 4.2–4.7 s plus the wait for their next 15 s check, so about 12 s on average and 19 s at worst (estimates 10 s and 18 s). 6 of 6 same-moment races: both pushes landed, the later one on its 2nd attempt. The ref's history was linear (17 commits, 16 with one parent). The ref was deleted afterwards; the scratch repo has only `main` again.
+- **Slice 3** (commit 1fe6fac5e): `apps/server/src/team/state/TeamHost.ts`. A `TeamHost` service with three calls, GitHub through `gh` (run by upstream's `VcsProcess`):
+  - `login`: `gh auth status --json hosts --hostname <host>`, parsed with upstream's `parseGitHubAuthStatus`. Only the **active** account counts (it is the one gh and Git pushes use); if it does not work, the answer is "signed out", even when another account works.
+  - `repoAccess`: `gh api repos/<o>/<r>` → push permission and whether the repo is public; a 404 is "not found" (also what GitHub says without access).
+  - `refChanged`: `gh api -i` with `If-None-Match`; reads 200/304/404 from the status line, because gh exits 1 on a `304`.
+  - `T3CODE_TEAM_LOGIN_OVERRIDE` is used only in dev mode (the server has a dev URL); otherwise a warning is logged and the gh login is used.
+  - `parseTeamRemoteUrl` (HTTPS, `ssh://`, `git@host:o/r`); local paths and `file://` give null. Also a `layer` (env + `ServerConfig`), unused until slice 5.
+- **Slice 4** (commit 366275d91): `apps/server/src/team/state/GitTeamService.ts`, built on the model, the repo and TeamHost. `make({ environmentId, stateDirectory })` returns the service; nothing provides it to the server yet.
+  - Same reads and writes as `TeamService` (claims, releases, tasks, handoffs, automatic notes, activity, claimed threads), with the 3.4 changes: `openTeam({ teamFile, checkout })` returns a membership with a reason (`member`, `noRemote`, `signedOut`, `noAccess`, `noPushAccess`, `noTeamState`, `otherTeam`, `unavailable`); `currentMember(teamId)` replaces `findMemberByEnvironment`; `ensureTeam({ teamFile, checkout })` has no owner input and starts the state ref when the remote has none. Joining is opening: the first open writes this server's writer file with a `member.joined` activity line.
+  - `claimPaths` syncs at once (fetch, then push, 3 s per network call) and computes overlaps after that fetch; it returns `confirmed: false` when the push did not land. Other writes are pushed together 2 s later (STORAGE_PLAN.md 4.9). Every sync finds late overlaps; `takeLateOverlaps(teamId, thread)` hands each out once. `sync(teamId)` pushes and fetches now (slice 7's poller will call it).
+  - Teams opened before a restart are found again from the state repos in `<T3 home>/team/`, with no network, so `listClaimedThreads` and `releaseThreadClaims` work at startup.
+  - TeamHost changed a little in this commit: `login(null)` for a remote on this computer (a folder or `file://`), where only the dev override can name the person. Slice 5's self-test uses a local bare remote.
+- **`TeamMember.joinedAt` becomes `lastSeenAt`** (the newest `lastSyncAt` of the person's writer files; each save sets it). Why: nothing reads `joinedAt` (only the SQLite service writes it); the Git state cannot give it reliably (`--depth=1` fetches have no history, the `member.joined` activity line drops out after 100 lines, and adding a field nobody reads is not worth a format change); and what the team needs is "when was this person last online", for STORAGE_PLAN.md 4.4's "probably free" claims. Members are sorted by login. In slice 4 this is `GitTeamMember` in `GitTeamService.ts`; slice 5 moves it into `contracts/team.ts` as `TeamMember` (also dropping `environmentId`), when the SQLite service is parked.
+
+**Files touched**
+
+- New: `apps/server/src/team/state/TeamHost.ts` and `.test.ts`, `apps/server/src/team/state/GitTeamService.ts` and `.test.ts`.
+- Changed: `team/STORAGE_PLAN.md` (Q4 table, one line in slice 2), `team/PROGRESS.md`.
+- Not changed: `TeamService.ts`, `contracts/team.ts`, `server.ts` and every other upstream file. No running dev server behaves differently.
+
+**How it was checked**
+
+- `vp test run src/team/state/` in `apps/server`: 4 files, 42 tests passed (10 model, 5 repo, 10 TeamHost, 17 GitTeamService). `GitTeamService.test.ts` run 5 times in a row: 5 of 5 passed.
+  - TeamHost (fake `VcsProcess`): remote URL forms; the active account wins over an inactive one; a broken active sign-in is "signed out"; no account; gh not installed; unreadable output; the override in dev, ignored outside dev, refused when it is not a login, and the only way in for a local remote; push access and visibility (with and without `visibility`, without `permissions`); 404 vs other failures; `--hostname` off github.com; ETag sent, 200/304/404 read from the status line (304 with exit code 1), rate limit 403, garbled body, offline.
+  - GitTeamService: a local bare `origin` over `file://`, one state folder per server, a fake TeamHost. The 11 behaviour tests of `TeamService.test.ts`, adapted (the friend is a second server with its own login, not a second environment row). New: a claim fetches first (the friend's unseen claim shows in the overlaps, and is not reported again as late; the friend hears of it once as a late overlap); two claims made with origin offline are `confirmed: false` with no overlaps, kept locally, then both sides hear of the overlap once, with the same key, and not again after another sync; two writes close together are one commit, pushed only after the clock moves 2 s (waits on the push, no sleep); a teammate's task edit wins on both servers when both clocks agree; a restarted service with origin offline finds its team and claims and releases them; the membership reasons (no team state, no remote, signed out, no access, no push access, another team, an unsafe team id).
+- Mutation checks, each restored afterwards (`cmp` with a backup):
+  - TeamHost: using any signed-in account instead of the active one fails 1 test; the override outside dev mode fails 1; deciding 304 by exit code fails 2.
+  - GitTeamService: a claim that does not sync first fails 3; keeping a claim's own overlaps as late fails 1; never queueing late overlaps fails 2; syncing each write at once fails the batching test; no "newer than the version it edits" guard fails the task test; ignoring push access fails the membership test. Two of my first mutations were wrong (one crashed every test, one still forked the sync so nothing changed); I redid both, and the results above are from the redone ones.
+- Live check of TeamHost against the real gh (not a test file): login `MouhssineElBoumshouli`; scratch repo `found, canPush: true, isPublic: false`; a missing repo `notFound`; with `main` pushed as a temporary `refs/t3-team/state` on the scratch repo: `current` with an ETag, then `unchanged` with that ETag; ref deleted afterwards.
+- Typecheck (`tsc --noEmit` in `apps/server`, no dev server running): 0 errors. `packages/contracts` not changed, so not run.
+- Lint on `apps/server/src/team/state/`: no warnings. The formatter ran on all three commits.
+
+**What's left**
+
+- Slice 5: the switch. `server.ts` provides GitTeamService as `TeamService`; `TeamService.ts`'s interface and `contracts` `TeamMember` follow 3.4; `resolve.ts` calls `openTeam` and gives the new reasons; handlers show late overlaps and "not shared yet"; the other team suites run on the new store; park the SQLite service; self-test with the cold start test on a local bare remote.
+
+**Unsure about / notes**
+
+Choices the plan did not spell out (say if you disagree):
+
+- **Offline membership:** when gh cannot answer (offline, gh missing, or signed out), a server that has written in the team before goes on as that login, and checks again on the next call. Only a clear "no" (no access, no push access) takes membership away. So signing out of gh does not stop the tools; the pushes fail instead and claims say "not shared yet". A passing check is kept 10 minutes; a failing one is not kept.
+- **Remote:** only the checkout's `origin`. A checkout without `origin` gets `noRemote`.
+- **Display name** is the login; the commit author is `<login> <login@users.noreply.github.com>`.
+- **`lastSyncAt`** keeps its format 1 name but is set on every save, not on every sync, so a sync with nothing new pushes nothing. A server that writes nothing for days looks offline; slice 7 may need a daily touch for 4.4.
+- **Task edits:** a new version is at least 1 ms newer than the version it edits, so a teammate whose clock runs ahead cannot make an edit lose on every reader.
+- **Late overlaps already reported** are kept in memory only. After a restart, an overlap reported before can be reported once more.
+- **A contested claim** can take longer than 3 s: each network call has 3 s, and a push refused as behind is redone up to 5 times.
+- **Creating a team** whose first push failed: `team.json` stays in this server's files and the next `ensureTeam` retries the push. Opening (not creating) such a team works on this computer only.
+- `normalizeClaimPaths`, `keepHashesOf` and `optionalText` are copied from `TeamService.ts`, like the model copied its texts. The copies go when the SQLite service is parked.
+- **Timing check:** three runs; my terminal cut off the first run's summary, so the table uses the other two (10 rounds, 6 races). The rounds of the first run I saw were in the same range.
+- **Your other repos:** in the live TeamHost check I also called `repoAccess` on your public fork `t3code` (one read-only `GET repos/MouhssineElBoumshouli/t3code`, which gave `canPush: true, isPublic: true`). Nothing was written there. All pushes went to `t3-team-scratch` only.
+
 ## 2026-10-07 — Slices 1 and 2: the team state format and model, and the Git repo for it
 
 **What changed**
