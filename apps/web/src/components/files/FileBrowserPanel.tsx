@@ -3,7 +3,7 @@ import type {
   ContextMenuItem as TreeContextMenuItem,
   ContextMenuOpenContext as TreeContextMenuOpenContext,
 } from "@pierre/trees";
-import type { EnvironmentId, ProjectEntry } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectEntry, ScopedThreadRef } from "@t3tools/contracts";
 import { FileTree, useFileTree, useFileTreeSearch, useFileTreeSelector } from "@pierre/trees/react";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "lucide-react";
@@ -27,6 +27,11 @@ import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "./fileTree
 import { buildFileTreePathUpdates } from "./fileTreePathReconciliation";
 import { useDirectoryEntries } from "./useDirectoryEntries";
 import { useProjectPathSearch } from "~/state/queries";
+// team-layer: holder marks in the tree (team/UI_PLAN.md slice 1).
+import {
+  TEAM_TREE_DECORATION_CSS,
+  useTeamTreeDecoration,
+} from "~/components/team/useTeamTreeDecoration";
 
 interface FileBrowserPanelProps {
   environmentId: EnvironmentId;
@@ -39,6 +44,8 @@ interface FileBrowserPanelProps {
   onOpenFile: (relativePath: string) => void;
   onRefreshSelectedFile?: () => void;
   workspaceMutationId: string | null;
+  /** team-layer: the thread the tree is seen from, for holder marks. */
+  teamThreadRef?: ScopedThreadRef | null;
 }
 
 function treePath(entry: ProjectEntry): string {
@@ -103,6 +110,7 @@ export default function FileBrowserPanel({
   onOpenFile,
   onRefreshSelectedFile,
   workspaceMutationId,
+  teamThreadRef = null,
 }: FileBrowserPanelProps) {
   const { resolvedTheme } = useTheme();
   const composerRef = useComposerHandleContext();
@@ -246,7 +254,17 @@ export default function FileBrowserPanel({
       }),
     [],
   );
+  // team-layer: re-render rows when the marks change; the tree reads them from a ref.
+  const teamDecoration = useTeamTreeDecoration({
+    environmentId,
+    threadRef: teamThreadRef,
+    onChange: () => {
+      const tree = treeModelRef.current;
+      tree?.setComposition(tree.getComposition());
+    },
+  });
   const { model } = useFileTree({
+    renderRowDecoration: ({ item }) => teamDecoration.current(item.path),
     composition: {
       contextMenu: {
         triggerMode: "right-click",
@@ -284,7 +302,7 @@ export default function FileBrowserPanel({
     paths: [],
     search: false,
     onSearchChange: (value) => setQuery(value ?? ""),
-    unsafeCSS: PIERRE_TREE_UNSAFE_CSS,
+    unsafeCSS: PIERRE_TREE_UNSAFE_CSS + TEAM_TREE_DECORATION_CSS, // team-layer
   });
   const search = useFileTreeSearch(model);
   const allDirectoriesExpanded = useFileTreeSelector(model, (currentModel) =>

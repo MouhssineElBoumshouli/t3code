@@ -103,6 +103,10 @@
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
     },
+    "./state/teamMarkers": {
+      "types": "./src/state/teamMarkers.ts",
+      "default": "./src/state/teamMarkers.ts"
+    },
     "./state/teamFeed": {
       "types": "./src/state/teamFeed.ts",
       "default": "./src/state/teamFeed.ts"

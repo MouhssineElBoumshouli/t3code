@@ -11,6 +11,7 @@ import type {
   PreviewSessionSnapshot,
   ProjectId,
   PullRequestState,
+  ScopedThreadRef,
 } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
@@ -61,6 +62,7 @@ import {
 import { useBrowserDefaults } from "~/browser/browserDefaults";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { PanelTabCloseButton } from "~/components/ui/panel-tab-close-button";
+import { TeamFileMarks } from "~/components/team/TeamHolderMarks"; // team-layer
 import { faviconUrlForOrigin } from "~/lib/favicon";
 import { useTheme } from "~/hooks/useTheme";
 import { useDeviceState } from "~/state/device";
@@ -134,6 +136,8 @@ interface RightPanelTabsProps {
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
+  /** team-layer: the thread whose file tabs get holder marks (team/UI_PLAN.md slice 1). */
+  teamThreadRef?: ScopedThreadRef | null;
   children: ReactNode;
 }
 
@@ -1239,6 +1243,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                             onClick={() => props.onActivate(surface)}
                           >
                             <span className="truncate">{title}</span>
+                            {/* team-layer: who else holds this file */}
+                            {surface.kind === "file" &&
+                            surface.attachment === undefined &&
+                            props.teamThreadRef ? (
+                              <TeamFileMarks
+                                threadRef={props.teamThreadRef}
+                                relativePath={surface.relativePath}
+                              />
+                            ) : null}
                           </button>
                         }
                       />

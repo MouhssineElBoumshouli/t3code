@@ -2,6 +2,40 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-08 — First visible slice: holder marks and the presence chip (UI_PLAN.md slice 1)
+
+**What changed**
+
+- **Holder marks** in three places, from the team feed: the **file tree** (a short pill in the tree's decoration lane: a teammate's initials, or "+1 chat"), the **sidebar thread rows** (the holders' faces, or another chat's color square), and the right panel's **open-file tabs**. One chip everywhere: a person's initials in a stable hue, or a chat's color square. Each mark has an accessible label "Also held by …".
+- Rules (`packages/client-runtime/src/state/teamMarkers.ts`, shared so mobile can reuse them): a teammate's claim marks every file and folder it covers (a parent folder is not marked for one claim inside it); the person's own chats mark a file only when two or more of them hold it, so **solo shows nothing until two chats collide**; a thread is marked when its claims overlap a teammate's or another of the person's chats. Claim paths are mapped into a project that is a folder of the repo (`pathPrefix`); case is ignored.
+- **Presence chip** (Option B) in the chat header: teammates' faces and "synced" / "sharing…" / "offline" / "not fresh" with a dot; a click opens a popover: the team, a sentence about sync, each teammate (seen when, tasks in progress, held paths) and the latest handoffs. **Solo shows no chip.** A team with no teammates yet says so in the popover.
+- **Performance**: nothing in the composer or message list. The feed is one subscription per environment; marks recompute only when the feed changes (memos keyed by ids, not ref objects); the tree builds once and reads the marks from a ref, re-rendering its rows only when they change; no animation, times are worded when drawn and never tick.
+
+**Files touched**
+
+- New: `apps/web/src/components/team/TeamHolderMarks.tsx`, `TeamPresenceChip.tsx`, `useTeamTreeDecoration.ts`; `packages/client-runtime/src/state/teamMarkers.ts` (+ test); `packages/client-runtime/package.json` (export).
+- `team-layer:` edits in upstream files: `components/files/FileBrowserPanel.tsx` (decoration + CSS), `files/FilePreviewPanel.tsx` (passes the thread), `RightPanelTabs.tsx` (tab mark), `ChatView.tsx` (passes the thread, 2 places), `Sidebar.tsx` (row mark, both row styles), `chat/ChatHeader.tsx` (chip).
+
+**How it was checked**
+
+- `packages/client-runtime`: `teamMarkers.test.ts` 5 passed (teammate folder claim marks files under it and not the parent; solo needs two chats; viewing chat excluded; repo-folder projects; thread overlaps; initials). `apps/web`: the existing tests of the touched components, `RightPanelTabs.test.tsx`, `ChatHeader.test.ts`, `FilePreviewPanel.test.ts`, `Sidebar.logic.test.ts`: 212 passed. `tsc --noEmit` web: 0 errors. `vp lint` on the changed files: no errors (one React Compiler warning in `FileBrowserPanel.tsx` was there before).
+- **Self-test in the real app** (Playwright, headless, 1440×900), dev server `vp run dev --home-dir ~/.t3-dev` with `T3CODE_TEAM_LOGIN_OVERRIDE=mouhssine` (needed for a local-folder origin), stopped by its task after. Round projects: `~/code/solo-demo1` (plain Git repo, no remote) and `~/code/team-demo6` with origin `~/code/team-demo6-remote.git`. The team was started and a teammate `yassine-a` (claim `src/auth/`, task "Login page", a handoff) was written from a scratch script through the real `GitTeamService` while the server was stopped.
+  - Solo: two Codex chats in solo-demo1, told to claim `src/notes/editor.ts` and `src/notes/`. The second chat's `team_claim` reported the overlap with the other chat. State landed in `~/.t3-dev/userdata/team/solo-….git` (writer "me", "You"); `git status` in solo-demo1 stayed clean. Seen: each sidebar row shows the other chat's color square; the tree marks `editor.ts` "+1 chat" and not `list.ts`; the `editor.ts` tab has the square; no presence chip. (`solo-light.png`, `solo-dark.png`)
+  - Team: a Codex chat in team-demo6 (worktree) told to claim `src/auth/login.ts`; it reported the overlap with yassine-a's `src/auth` claim, "not merged yet". Seen: the header chip "YA · synced"; the popover with yassine-a, "Login page", "holds src/auth" and the handoff; the tree marks `auth/`, `login.ts`, `LoginForm.tsx` YA and not `search/`; the tab and the sidebar row show YA. (`team-light.png`, `team-light-popover.png`, `team-dark.png`, `team-dark-popover.png`)
+  - Screenshots: `test-screenshots` branch, folder `2026-10-07-ui-slice1/` with NOTES.md. I looked at every picture; none shows a pairing link or token.
+
+**What's left**
+
+- Slice 2 (plan card), 3 (inline warning card), 4 (Team home / Today), 5 (glass). Mobile markers on the thread list (the rules are in client-runtime already).
+- Hover tooltips on the marks do not open where the mark sits inside another tooltip trigger (the sidebar row, the tab title); the names are only in the accessible labels there. Fix: fold "Also held by …" into those outer tooltips.
+- A chat's own color is not shown on its own row, so "which chat is green" is only in the label. The plan card / Today page can show chat colors with titles.
+
+**Unsure about / notes**
+
+- **Side effect on the GitHub scratch repo**: the login override applies to every team the dev server opens, so the warm-up joined `t3-team-scratch` as `mouhssine` and pushed `writers/mouhssine/<dev env>.json` to its hidden state ref. It is the test repo and only the state ref, but it now lists a member "mouhssine" next to "MouhssineElBoumshouli". I did not rewrite the remote (our design never force-pushes). To remove it, delete that writer file from the ref by hand, or leave it. Next rounds: use a separate dev home for local-origin tests, or make the override apply only to remotes with no Git host.
+- No measured performance numbers; the claims above are from how the code is built (no work in the typing path, one subscription, memoized), not a profile.
+- The console showed one React error ("key prop spread into JSX" in `ChatView`), present without these changes' code paths (upstream).
+
 ## 2026-10-07 — Team data in the client: the team feed (UI_PLAN.md slice 0)
 
 **What changed**

@@ -42,6 +42,7 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { TeamPresenceChip } from "../team/TeamPresenceChip"; // team-layer
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -498,6 +499,11 @@ export const ChatHeader = memo(function ChatHeader({
           "[[data-panel-animations=true]_&]:motion-safe:transition-[padding-right] [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-out",
         )}
       >
+        {/* team-layer: teammates and sync state (team/UI_PLAN.md slice 1); nothing when solo. */}
+        <TeamPresenceChip
+          environmentId={activeThreadEnvironmentId}
+          projectId={activeProject?.id ?? null}
+        />
         <Menu open={actionsCollapsed && actionsOpen} onOpenChange={setActionsOpen}>
           <MenuTrigger
             className={

@@ -10262,6 +10262,7 @@ export default function ChatView(props: ChatViewProps) {
           open={rightPanelOpen}
           maximized={rightPanelMaximized}
           surfaces={renderedRightPanelSurfaces}
+          teamThreadRef={activeThreadRef} // team-layer: holder marks on file tabs
           environmentId={activeThreadRef.environmentId}
           activeSurfaceId={renderedRightPanelSurface?.id ?? null}
           pendingSurfaceIds={pendingFileSurfaceIds}
@@ -10319,6 +10320,7 @@ export default function ChatView(props: ChatViewProps) {
               ) : null
             }
             surfaces={renderedRightPanelSurfaces}
+            teamThreadRef={activeThreadRef} // team-layer: holder marks on file tabs
             environmentId={activeThreadRef.environmentId}
             activeSurfaceId={renderedRightPanelSurface?.id ?? null}
             pendingSurfaceIds={pendingFileSurfaceIds}
