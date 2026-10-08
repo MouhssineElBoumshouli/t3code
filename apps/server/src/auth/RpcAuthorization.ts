@@ -176,6 +176,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeBackgroundPolicy]: AuthOrchestrationReadScope,
   // team-layer: read-only, like the other reads (test: auth/ChatGptRpcScopes.test.ts).
   [WS_METHODS.subscribeTeamFeed]: AuthOrchestrationReadScope,
+  // team-layer: answering the warning card steers the agent, like sending a message.
+  [WS_METHODS.teamChoose]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

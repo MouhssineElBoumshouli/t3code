@@ -966,6 +966,29 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
     return changed;
   });
 
+  const recordActivity = Effect.fn("GitTeamService.recordActivity")(function* (
+    input: Parameters<TeamService["Service"]["recordActivity"]>[0],
+  ) {
+    const { entry } = yield* requireEntry(input.teamId);
+    const activityId = TeamActivityId.make(yield* newId);
+    yield* entry.lock.withPermits(1)(
+      Effect.gen(function* () {
+        const { file } = yield* requireMe(input.teamId, input.memberId);
+        yield* saveMyFile(
+          entry,
+          Model.addActivity(file, {
+            activityId,
+            kind: input.kind,
+            summary: input.summary,
+            thread: input.thread,
+            createdAt: yield* nowIso,
+          }),
+        );
+      }),
+    );
+    yield* scheduleSync(entry);
+  });
+
   const releaseThreadClaims = Effect.fn("GitTeamService.releaseThreadClaims")(function* (
     input: ReleaseThreadClaimsInput,
   ) {
@@ -1248,6 +1271,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
             .slice(0, listOptions?.limit ?? DEFAULT_LIST_LIMIT),
         ),
       ),
+    recordActivity,
     listActivity: (teamId, listOptions) =>
       view(teamId).pipe(
         Effect.map((found) => found.activity.slice(0, listOptions?.limit ?? DEFAULT_LIST_LIMIT)),

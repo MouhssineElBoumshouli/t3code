@@ -251,6 +251,10 @@
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"
     },
+    "./work-log/team-cards": {
+      "types": "./src/work-log/teamCards.ts",
+      "default": "./src/work-log/teamCards.ts"
+    },
     "./work-log/user-input": {
       "types": "./src/work-log/userInput.ts",
       "default": "./src/work-log/userInput.ts"

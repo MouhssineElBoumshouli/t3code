@@ -13,16 +13,22 @@ import {
   TeamMemberId,
   ThreadId,
   TurnId,
+  TEAM_CHOICE_ACTIVITY_KIND,
+  type TeamChoiceActivityPayload,
   type OrchestrationCommand,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -33,6 +39,7 @@ import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { TEAM_RULEBOOK_TEMPLATE } from "../../../team/TeamProjectFiles.ts";
+import * as TeamChoices from "../../../team/TeamChoices.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../../../vcs/VcsProcess.ts";
@@ -96,7 +103,11 @@ function makeProject(workspaceRoot: string): OrchestrationProjectShell {
   };
 }
 
-function makeThread(id: ThreadId, worktreePath: string | null): OrchestrationThreadShell {
+function makeThread(
+  id: ThreadId,
+  worktreePath: string | null,
+  providerName: string | null = null,
+): OrchestrationThreadShell {
   return {
     id,
     projectId: PROJECT_ID,
@@ -120,7 +131,18 @@ function makeThread(id: ThreadId, worktreePath: string | null): OrchestrationThr
     archivedAt: null,
     settledOverride: null,
     settledAt: null,
-    session: null,
+    session:
+      providerName === null
+        ? null
+        : {
+            threadId: id,
+            status: "running",
+            providerName,
+            runtimeMode: "full-access",
+            activeTurnId: RUNNING_TURN,
+            lastError: null,
+            updatedAt: "2026-09-01T00:00:00.000Z",
+          },
     latestUserMessageAt: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
@@ -152,6 +174,8 @@ interface HarnessOptions {
   readonly startsTeam?: boolean;
   /** Default: {@link ME}, signed in with push access. */
   readonly host?: TeamHost.TeamHost["Service"];
+  /** The running session's driver, which sets how long a plan is held. Default none. */
+  readonly providerName?: string;
 }
 
 const RealGitLayer = GitVcsDriver.layer.pipe(
@@ -163,6 +187,8 @@ const RealGitLayer = GitVcsDriver.layer.pipe(
 const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: HarnessOptions) {
   const gitCalls = yield* Ref.make<ReadonlyArray<GitVcsDriver.ExecuteGitInput>>([]);
   const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+  /** Each warning card, as it is added: the held call is waiting by then. */
+  const cards = yield* Queue.unbounded<TeamChoiceActivityPayload>();
   const fs = yield* FileSystem.FileSystem;
   // The team service always runs real Git: its state is a Git repo.
   const teamLayer = testTeamServiceLayer({
@@ -177,15 +203,36 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
         Effect.succeed(
           threadId === THREAD_A || threadId === THREAD_B || threadId === THREAD_C
             ? Option.some(
-                makeThread(threadId, options.worktrees?.[threadId] ?? options.worktreePath ?? null),
+                makeThread(
+                  threadId,
+                  options.worktrees?.[threadId] ?? options.worktreePath ?? null,
+                  options.providerName ?? null,
+                ),
               )
             : Option.none(),
         ),
       getProjectShellById: () => Effect.succeed(Option.some(makeProject(options.workspaceRoot))),
+      // The activities this test dispatched, as the projection would store them.
+      listActivitiesByKind: (kind) =>
+        Ref.get(dispatched).pipe(
+          Effect.map((commands) =>
+            commands.flatMap((command) =>
+              command.type === "thread.activity.append" && command.activity.kind === kind
+                ? [command.activity]
+                : [],
+            ),
+          ),
+        ),
     }),
     Layer.mock(OrchestrationEngineService)({
       dispatch: (command) =>
         Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+          Effect.andThen(
+            command.type === "thread.activity.append" &&
+              command.activity.kind === TEAM_CHOICE_ACTIVITY_KIND
+              ? Queue.offer(cards, command.activity.payload as TeamChoiceActivityPayload)
+              : Effect.void,
+          ),
           Effect.as({ sequence: 1 }),
         ),
     }),
@@ -214,7 +261,7 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
       }),
     }),
   ).pipe(Layer.provideMerge(NodeServices.layer));
-  const context = yield* Layer.build(dependencies);
+  const context = yield* Layer.build(TeamChoices.layer.pipe(Layer.provideMerge(dependencies)));
   const toolkit = yield* TeamToolkit.pipe(
     Effect.provide(TeamToolkitHandlersLive),
     Effect.provide(context),
@@ -247,7 +294,8 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
     });
     assert.equal(started.membership.status, "member");
   }
-  return { call, teams, gitCalls, dispatched };
+  const choices = yield* TeamChoices.TeamChoices.pipe(Effect.provide(context));
+  return { call, teams, gitCalls, dispatched, cards, choices };
 }, Effect.provide(NodeServices.layer));
 
 /**
@@ -941,110 +989,245 @@ describe("team toolkit", () => {
     }),
   );
 
-  it.effect("plans files: claims them and adds the plan card with each file's holders", () =>
-    Effect.gen(function* () {
-      const root = yield* makeProjectFolder(true);
-      const { call, dispatched } = yield* makeHarness({ workspaceRoot: root });
-      // Another of my chats holds the notes; Sara (a teammate) holds src/auth/.
-      inTeam(yield* call("team_claim", { paths: ["src/notes.ts"] }, THREAD_B));
-      const sara = yield* teammate("Sara");
-      yield* sara.openTeam({ teamFile: TEAM_FILE, checkout: root });
-      const saraThread = { environmentId: EnvironmentId.make("Sara-server"), threadId: THREAD_C };
-      yield* sara.claimPaths({
-        teamId: TEAM_ID,
-        memberId: TeamMemberId.make("Sara"),
-        thread: saraThread,
-        paths: ["src/auth/"],
-      });
+  it.effect(
+    "plans files: claims them, adds the plan card, and holds the call on the warning card until the user chooses",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* makeProjectFolder(true);
+        const { call, dispatched, cards, choices, teams } = yield* makeHarness({
+          workspaceRoot: root,
+        });
+        // Another of my chats holds the notes; Sara (a teammate) holds src/auth/.
+        inTeam(yield* call("team_claim", { paths: ["src/notes.ts"] }, THREAD_B));
+        const sara = yield* teammate("Sara");
+        yield* sara.openTeam({ teamFile: TEAM_FILE, checkout: root });
+        const saraThread = { environmentId: EnvironmentId.make("Sara-server"), threadId: THREAD_C };
+        yield* sara.claimPaths({
+          teamId: TEAM_ID,
+          memberId: TeamMemberId.make("Sara"),
+          thread: saraThread,
+          paths: ["src/auth/"],
+        });
 
-      const plan = inTeam(
-        yield* call("team_plan", {
+        const planning = yield* call("team_plan", {
           files: [`${root}/src/auth/login.ts`, "src/notes.ts", "src/search.ts"],
           note: "login page",
-        }),
-      );
-      assert.deepEqual(plan.planned, ["src/auth/login.ts", "src/notes.ts", "src/search.ts"]);
-      assert.deepEqual(
-        plan.overlaps
-          .map(({ who, paths }) => ({ who, paths }))
-          .toSorted((a, b) => a.who.localeCompare(b.who)),
-        [
-          { who: ME, paths: ["src/notes.ts"] },
-          { who: "Sara", paths: ["src/auth"] },
-        ],
-      );
-      assert.equal(
-        plan.message,
-        "Planned and claimed 3 files; the user sees the plan. But teammates hold overlapping paths. Their changes are in their own copy and not merged yet, so you may not see them. Tell the user before editing those.",
-      );
-      // The plan is a claim like any other: the next chat sees it.
-      const status = inTeam(yield* call("team_status", {}, THREAD_B));
-      assert.isTrue(status.claims.some((claim) => claim.paths.includes("src/search.ts")));
+        }).pipe(Effect.forkChild);
+        const card = yield* Queue.take(cards);
 
-      const commands = yield* Ref.get(dispatched);
-      assert.lengthOf(commands, 1);
-      const command = commands[0]!;
-      assert.equal(command.type, "thread.activity.append");
-      if (command.type !== "thread.activity.append") return;
-      assert.equal(command.threadId, THREAD_A);
-      assert.equal(command.activity.kind, "team.plan");
-      assert.equal(command.activity.summary, "3 files planned, checked against claims");
-      assert.equal(command.activity.turnId, RUNNING_TURN);
-      assert.deepEqual(command.activity.payload, {
-        solo: false,
-        shared: true,
-        files: [
-          {
-            path: "src/auth/login.ts",
-            holders: [{ kind: "member", memberId: "Sara", name: "Sara" }],
-          },
-          {
-            path: "src/notes.ts",
-            holders: [
-              { kind: "chat", thread: { environmentId: ENVIRONMENT_ID, threadId: THREAD_B } },
-            ],
-          },
-          { path: "src/search.ts", holders: [] },
-        ],
-      });
-
-      const empty = yield* call("team_plan", { files: [] }).pipe(Effect.flip);
-      assert.equal(empty.message, "Pass the files you expect to change.");
-    }),
-  );
-
-  it.effect("plans files solo: other chats are the holders", () =>
-    Effect.gen(function* () {
-      const root = yield* makeProjectFolder(false);
-      const { call, dispatched } = yield* makeHarness({
-        workspaceRoot: root,
-        startsTeam: false,
-        host: fakeTeamHost(null),
-      });
-      inTeam(yield* call("team_plan", { files: ["src/a.ts"] }, THREAD_B));
-      const plan = inTeam(yield* call("team_plan", { files: ["src/a.ts", "src/b.ts"] }));
-      assert.include(plan.message, "other chats of the user hold overlapping paths");
-      const payloads = (yield* Ref.get(dispatched)).map((command) =>
-        command.type === "thread.activity.append" ? command.activity.payload : null,
-      );
-      assert.deepEqual(payloads, [
-        { solo: true, shared: true, files: [{ path: "src/a.ts", holders: [] }] },
-        {
-          solo: true,
+        // The plan card first, then the warning card with only the held files.
+        const appended = (yield* Ref.get(dispatched)).flatMap((command) =>
+          command.type === "thread.activity.append" ? [command.activity] : [],
+        );
+        assert.deepEqual(
+          appended.map((activity) => [activity.kind, activity.summary, activity.turnId]),
+          [
+            ["team.plan", "3 files planned, checked against claims", RUNNING_TURN],
+            ["team.choice", "2 planned files are held: your choice", RUNNING_TURN],
+          ],
+        );
+        assert.deepEqual(appended[0]!.payload, {
+          solo: false,
           shared: true,
           files: [
             {
-              path: "src/a.ts",
+              path: "src/auth/login.ts",
+              holders: [{ kind: "member", memberId: "Sara", name: "Sara" }],
+            },
+            {
+              path: "src/notes.ts",
               holders: [
                 { kind: "chat", thread: { environmentId: ENVIRONMENT_ID, threadId: THREAD_B } },
               ],
             },
-            { path: "src/b.ts", holders: [] },
+            { path: "src/search.ts", holders: [] },
           ],
-        },
-      ]);
-    }),
+        });
+        assert.equal(card.threadId, THREAD_A);
+        assert.isFalse(card.solo);
+        assert.deepEqual(
+          card.files.map((file) => file.path),
+          ["src/auth/login.ts", "src/notes.ts"],
+        );
+        // The plan is a claim like any other, held ones included: the holder learns early.
+        const before = inTeam(yield* call("team_status", {}, THREAD_B));
+        assert.isTrue(before.claims.some((claim) => claim.paths.includes("src/auth/login.ts")));
+
+        // A click on another chat's card, or the same card twice, is refused.
+        const wrongThread = yield* choices
+          .choose({ threadId: THREAD_B, choiceId: card.choiceId, choice: "goAnyway" })
+          .pipe(Effect.flip);
+        assert.equal(wrongThread.message, "This warning card was not found.");
+        assert.deepEqual(
+          yield* choices.choose({
+            threadId: THREAD_A,
+            choiceId: card.choiceId,
+            choice: "anotherWay",
+          }),
+          { delivery: "held" },
+        );
+        const twice = yield* choices
+          .choose({ threadId: THREAD_A, choiceId: card.choiceId, choice: "goAnyway" })
+          .pipe(Effect.flip);
+        assert.equal(twice.message, "This card was already answered.");
+
+        const plan = inTeam(yield* Fiber.join(planning));
+        assert.deepEqual(plan.planned, ["src/auth/login.ts", "src/notes.ts", "src/search.ts"]);
+        assert.equal(plan.choice, "anotherWay");
+        assert.equal(
+          plan.message,
+          "User chose: find another way. Do the task without changing `src/auth/login.ts`, `src/notes.ts`; your claims on them are released. Call team_plan again with your new plan before editing.",
+        );
+        // "Find another way" released the held files and kept the free one.
+        const mine = (yield* teams.listActiveClaims(TEAM_ID))
+          .filter((claim) => claim.thread.threadId === THREAD_A)
+          .flatMap((claim) => claim.paths);
+        assert.deepEqual(mine, ["src/search.ts"]);
+        // The choice stays on the card; no turn was started.
+        const commands = yield* Ref.get(dispatched);
+        assert.isFalse(commands.some((command) => command.type === "thread.turn.start"));
+        const made = commands.at(-1)!;
+        assert.equal(made.type, "thread.activity.append");
+        if (made.type !== "thread.activity.append") return;
+        assert.equal(made.activity.kind, "team.choice.made");
+        assert.deepEqual(made.activity.payload, {
+          choiceId: card.choiceId,
+          choice: "anotherWay",
+          delivery: "held",
+        });
+
+        const empty = yield* call("team_plan", { files: [] }).pipe(Effect.flip);
+        assert.equal(empty.message, "Pass the files you expect to change.");
+      }),
   );
+
+  it.effect(
+    "plans files solo: another chat is the holder; go anyway is told and not asked again",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* makeProjectFolder(false);
+        const { call, cards, choices, teams, dispatched } = yield* makeHarness({
+          workspaceRoot: root,
+          startsTeam: false,
+          host: fakeTeamHost(null),
+        });
+        const first = inTeam(yield* call("team_plan", { files: ["src/a.ts"] }, THREAD_B));
+        assert.equal(
+          first.message,
+          "Planned and claimed 1 file; the user sees the plan. No overlaps.",
+        );
+        assert.notProperty(first, "choice");
+
+        const planning = yield* call("team_plan", { files: ["src/a.ts", "src/b.ts"] }).pipe(
+          Effect.forkChild,
+        );
+        const card = yield* Queue.take(cards);
+        assert.isTrue(card.solo);
+        assert.deepEqual(card.files, [
+          {
+            path: "src/a.ts",
+            holders: [
+              { kind: "chat", thread: { environmentId: ENVIRONMENT_ID, threadId: THREAD_B } },
+            ],
+          },
+        ]);
+        yield* choices.choose({ threadId: THREAD_A, choiceId: card.choiceId, choice: "goAnyway" });
+        const plan = inTeam(yield* Fiber.join(planning));
+        assert.equal(plan.choice, "goAnyway");
+        assert.equal(
+          plan.message,
+          "User chose: go anyway. You may edit `src/a.ts`; another chat will see that you went ahead. Mention these files in your team_handoff.",
+        );
+        const solo = (yield* teams.listTeams())[0]!;
+        const activity = yield* teams.listActivity(solo.teamId, { limit: 1 });
+        assert.deepEqual(
+          activity.map((line) => [line.kind, line.summary]),
+          [["overlap.accepted", "You went ahead on src/a.ts, held by another chat."]],
+        );
+
+        // Planning the same file again in this chat does not ask again.
+        const again = inTeam(yield* call("team_plan", { files: ["src/a.ts"] }));
+        assert.notProperty(again, "choice");
+        assert.equal(
+          again.message,
+          "Planned and claimed 1 file; the user sees the plan. The user already chose to go ahead on the files others hold.",
+        );
+        const choiceCards = (yield* Ref.get(dispatched)).filter(
+          (command) =>
+            command.type === "thread.activity.append" && command.activity.kind === "team.choice",
+        );
+        assert.lengthOf(choiceCards, 1);
+      }),
+  );
+
+  it.effect(
+    "at the provider's cap tells the agent to end its turn; the click then starts a turn with the choice",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* makeProjectFolder(false);
+        const { call, cards, choices, dispatched } = yield* makeHarness({
+          workspaceRoot: root,
+          startsTeam: false,
+          host: fakeTeamHost(null),
+          providerName: "codex",
+        });
+        inTeam(yield* call("team_plan", { files: ["src/a.ts"] }, THREAD_B));
+        const holds = yield* choices.subscribeHolds;
+        const planning = yield* call("team_plan", { files: ["src/a.ts"] }).pipe(Effect.forkChild);
+        const card = yield* Queue.take(cards);
+        assert.equal(yield* PubSub.take(holds), card.choiceId);
+        // Codex waits up to 55 minutes (CodexAdapter raises its tool timeout to an hour).
+        yield* TestClock.adjust(Duration.minutes(54));
+        assert.isUndefined(planning.pollUnsafe());
+        yield* TestClock.adjust(Duration.minutes(1));
+        const plan = inTeam(yield* Fiber.join(planning));
+        assert.equal(plan.choice, "notYet");
+        assert.equal(
+          plan.message,
+          "Paused: `src/a.ts` is held by another chat, and the user has not chosen yet. Do not edit it. End your turn now; the user's choice comes as the next message.",
+        );
+
+        // Planning again before the user chose holds on the same card, not a new one.
+        const replanning = yield* call("team_plan", { files: ["src/a.ts"] }).pipe(Effect.forkChild);
+        assert.equal(yield* PubSub.take(holds), card.choiceId);
+        yield* TestClock.adjust(Duration.minutes(55));
+        assert.equal(inTeam(yield* Fiber.join(replanning)).choice, "notYet");
+        assert.equal(yield* Queue.size(cards), 0);
+
+        assert.deepEqual(
+          yield* choices.choose({
+            threadId: THREAD_A,
+            choiceId: card.choiceId,
+            choice: "goAnyway",
+          }),
+          { delivery: "turn" },
+        );
+        const commands = yield* Ref.get(dispatched);
+        const turn = commands.find((command) => command.type === "thread.turn.start");
+        assert.isDefined(turn);
+        if (turn?.type !== "thread.turn.start") return;
+        assert.equal(turn.threadId, THREAD_A);
+        assert.equal(
+          turn.message.text,
+          "Go anyway: you may edit `src/a.ts`; another chat will see that you went ahead. Continue the task, and mention these files in your team_handoff.",
+        );
+        const made = commands.at(-1)!;
+        if (made.type !== "thread.activity.append") return assert.fail("expected the record");
+        assert.deepEqual(made.activity.payload, {
+          choiceId: card.choiceId,
+          choice: "goAnyway",
+          delivery: "turn",
+        });
+      }),
+  );
+
+  it("holds each provider's call only as long as it waits", () => {
+    assert.equal(Duration.toMillis(TeamChoices.holdCap("claudeAgent")), 24 * 60 * 60 * 1000);
+    assert.equal(Duration.toMillis(TeamChoices.holdCap("codex")), 55 * 60 * 1000);
+    for (const driver of ["cursor", "grok", "opencode", "antigravity"]) {
+      assert.equal(Duration.toMillis(TeamChoices.holdCap(driver)), 45 * 1000, driver);
+    }
+  });
 
   it("tells agents to keep claims when done and release only dropped work", () => {
     const claim = TeamToolkit.tools.team_claim.description ?? "";

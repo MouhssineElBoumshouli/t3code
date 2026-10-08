@@ -3402,9 +3402,9 @@ describe("deriveMessagesTimelineRows", () => {
       // A payload that is not a plan stays an ordinary row.
       activity(4, "team.plan", { files: "nope" }),
     ]);
-    expect(workEntries.map((entry) => entry.teamPlan)).toEqual([
+    expect(workEntries.map((entry) => entry.teamCard)).toEqual([
       undefined,
-      plan,
+      { kind: "plan", plan },
       undefined,
       undefined,
     ]);
@@ -3420,6 +3420,58 @@ describe("deriveMessagesTimelineRows", () => {
     expect(collapsed.map((row) => row.kind)).toEqual(["turn-fold", "work"]);
     const planRow = collapsed.find((row) => row.kind === "work");
     expect(planRow?.kind === "work" ? planRow.groupedEntries : null).toEqual([workEntries[1]]);
+  });
+
+  // team-layer: the warning card (team/PREVENTION_PLAN.md, slice 3a)
+  it("folds the user's choice into the warning card, which keeps its own row after the turn", () => {
+    const turnId = TurnId.make("choice-turn");
+    const time = (second: number) => new Date(Date.UTC(2026, 9, 8, 0, 0, second)).toISOString();
+    const card = {
+      choiceId: "team-choice:1",
+      threadId: "thread-1",
+      solo: true,
+      files: [
+        {
+          path: "src/a.ts",
+          holders: [{ kind: "chat", thread: { environmentId: "env-1", threadId: "thread-2" } }],
+        },
+      ],
+    };
+    const activity = (second: number, kind: string, payload: unknown) => ({
+      id: EventId.make(`activity-${second}`),
+      tone: kind.startsWith("team.") ? ("info" as const) : ("tool" as const),
+      kind,
+      summary: kind,
+      payload,
+      turnId,
+      createdAt: time(second),
+    });
+    const open = activity(2, "team.choice", card);
+    const tools = [
+      activity(1, "tool.completed", { itemType: "command_execution", detail: "git status" }),
+      activity(3, "tool.completed", { itemType: "command_execution", detail: "git diff" }),
+    ];
+    const waiting = deriveWorkLogEntries([...tools, open]);
+    expect(waiting.map((entry) => entry.teamCard?.kind)).toEqual([undefined, "choice", undefined]);
+    const made = { choiceId: "team-choice:1", choice: "anotherWay", delivery: "held" };
+    const chosen = deriveWorkLogEntries([...tools, open, activity(4, "team.choice.made", made)]);
+    // The choice's own activity is folded into the card, at the card's place.
+    expect(chosen.map((entry) => entry.teamCard)).toEqual([
+      undefined,
+      { kind: "choice", card: { ...card, made } },
+      undefined,
+    ]);
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: deriveTimelineEntries([], [], chosen),
+      latestTurn: { turnId, state: "completed", startedAt: time(0), completedAt: time(5) },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+    expect(rows.map((row) => row.kind)).toEqual(["turn-fold", "work"]);
+    const cardRow = rows.find((row) => row.kind === "work");
+    expect(cardRow?.kind === "work" ? cardRow.groupedEntries : null).toEqual([chosen[1]]);
   });
 
   it("keeps user input in its own row through tool grouping and turn folding", () => {

@@ -24,6 +24,7 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { folderKey, realFolder } from "../../../team/folders.ts";
+import * as TeamChoices from "../../../team/TeamChoices.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -114,6 +115,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const { resolve } = yield* makeTeamResolver;
   const platform = yield* HostProcessPlatform;
+  const choices = yield* TeamChoices.TeamChoices;
 
   /** A folder as the OS compares it: links resolved, and on Windows case and slashes ignored (W8). */
   const folderKeyOf = (folder: string) =>
@@ -466,21 +468,34 @@ const make = Effect.gen(function* () {
           }
           const { claim, overlaps, names, shown, confirmed, overlapText } =
             yield* claimAndSummarize(context, paths, input.note);
-          yield* appendPlanActivity(context, {
-            solo: context.solo,
-            files: planFiles(context, claim.paths, overlaps, names),
-            shared: confirmed,
-          });
+          const files = planFiles(context, claim.paths, overlaps, names);
+          yield* appendPlanActivity(context, { solo: context.solo, files, shared: confirmed });
           const planned = `Planned and claimed ${claim.paths.length} ${claim.paths.length === 1 ? "file" : "files"}; the user sees the plan.`;
-          return {
+          const result = {
             planned: claim.paths,
             overlaps: shown,
             ...(yield* lateOverlapsOf(context)),
+          };
+          // Slice 3a: a held file stops the agent until the user picks a choice on the card.
+          // Files the user already chose "Go anyway" for in this chat do not ask again.
+          const wentAhead = yield* choices.wentAhead(context.thread.threadId);
+          const held = files.filter((file) => file.holders.length > 0 && !wentAhead.has(file.path));
+          if (held.length > 0) {
+            const { providerInstanceId } = yield* McpInvocationContext.McpInvocationContext;
+            const outcome = yield* choices.ask({ context, files: held, providerInstanceId });
+            return {
+              ...result,
+              choice: outcome._tag === "Chosen" ? outcome.choice : "notYet",
+              message: `${confirmed ? "" : `${CLAIM_NOT_SHARED_MESSAGE} `}${outcome.instruction}`,
+            } satisfies TeamPlanResult;
+          }
+          return {
+            ...result,
             message: !confirmed
               ? `${CLAIM_NOT_SHARED_MESSAGE}${overlapText === null ? "" : ` Already known: ${overlapText}`}`
               : overlapText === null
                 ? `${planned} No overlaps.`
-                : `${planned} But ${overlapText}`,
+                : `${planned} The user already chose to go ahead on the files others hold.`,
           } satisfies TeamPlanResult;
         }),
       ),

@@ -101,6 +101,7 @@ import { TeamAutoNotesLive } from "./team/TeamAutoNotes.ts";
 import { TeamClaimAutoReleaseLive } from "./team/TeamClaimAutoRelease.ts";
 import * as TeamWarmup from "./team/TeamWarmup.ts";
 import * as TeamFeed from "./team/TeamFeed.ts";
+import * as TeamChoices from "./team/TeamChoices.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -290,6 +291,8 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(TeamWarmup.layer),
   // team-layer: the read-only team feed for clients (team/UI_PLAN.md slice 0).
   Layer.provideMerge(TeamFeed.layer),
+  // team-layer: the warning card's hold, shared by the team tools and the WebSocket click.
+  Layer.provideMerge(TeamChoices.layer),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 

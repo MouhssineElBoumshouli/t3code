@@ -153,8 +153,9 @@ import {
   SnapShotAttachmentDetails,
 } from "./SnapShotAttachmentDetails";
 import { ProposedPlanCard } from "./ProposedPlanCard";
-// team-layer: the plan card (team/UI_PLAN.md slice 2)
-import type { TeamPlanActivityPayload } from "@t3tools/contracts";
+// team-layer: the plan card and the warning card (team/UI_PLAN.md slices 2 and 3)
+import type { TeamCard } from "@t3tools/client-runtime/work-log/team-cards";
+import { TeamChoiceCard } from "../team/TeamChoiceCard";
 import { TeamPlanCard } from "../team/TeamPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { useAtomValue } from "@effect/atom-react";
@@ -1723,11 +1724,11 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       }
       data-message-role={row.kind === "message" ? row.message.role : undefined}
     >
-      {/* team-layer: the plan card (team/UI_PLAN.md slice 2) */}
-      {row.kind === "work" && row.groupedEntries[0]?.teamPlan ? (
-        <TeamPlanTimelineRow plan={row.groupedEntries[0].teamPlan} />
+      {/* team-layer: the plan card and the warning card (team/UI_PLAN.md slices 2 and 3) */}
+      {row.kind === "work" && row.groupedEntries[0]?.teamCard ? (
+        <TeamCardTimelineRow card={row.groupedEntries[0].teamCard} />
       ) : null}
-      {row.kind === "work" && !row.groupedEntries[0]?.teamPlan ? (
+      {row.kind === "work" && !row.groupedEntries[0]?.teamCard ? (
         <WorkGroupSection
           anchorKey={row.id}
           groupedEntries={row.groupedEntries}
@@ -1757,12 +1758,20 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
   );
 });
 
-// team-layer: the plan card (team/UI_PLAN.md slice 2)
-function TeamPlanTimelineRow({ plan }: { plan: TeamPlanActivityPayload }) {
+// team-layer: the plan card and the warning card (team/UI_PLAN.md slices 2 and 3)
+function TeamCardTimelineRow({ card }: { card: TeamCard }) {
   const ctx = use(TimelineRowCtx);
   return (
     <div className="min-w-0 px-1 py-0.5">
-      <TeamPlanCard plan={plan} resolvedTheme={ctx.resolvedTheme} />
+      {card.kind === "plan" ? (
+        <TeamPlanCard plan={card.plan} resolvedTheme={ctx.resolvedTheme} />
+      ) : (
+        <TeamChoiceCard
+          card={card.card}
+          environmentId={ctx.activeThreadEnvironmentId}
+          resolvedTheme={ctx.resolvedTheme}
+        />
+      )}
     </div>
   );
 }

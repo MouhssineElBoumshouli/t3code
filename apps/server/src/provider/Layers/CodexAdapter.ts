@@ -2334,6 +2334,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
                   "-c",
                   'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+                  // team-layer: team_plan holds the call while the user picks on the warning card (default 60 s).
+                  "-c",
+                  "mcp_servers.t3-code.tool_timeout_sec=3600",
                 ],
                 mcpCapabilities: mcpSession.capabilities,
               }

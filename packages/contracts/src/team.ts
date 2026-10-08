@@ -160,6 +160,8 @@ export const TeamActivityKind = Schema.Literals([
   "task.updated",
   "handoff.written",
   "member.joined",
+  // team-layer slice 3a: someone went ahead on files another holds ("Go anyway").
+  "overlap.accepted",
 ]);
 export type TeamActivityKind = typeof TeamActivityKind.Type;
 

@@ -17,6 +17,7 @@ import type {
   Team,
   TeamFeedSync,
   TeamActivity,
+  TeamActivityKind,
   TeamClaim,
   TeamClaimOverlap,
   TeamFile,
@@ -262,6 +263,14 @@ export class TeamService extends Context.Service<
       teamId: TeamId,
       options?: { readonly thread?: TeamThreadRef; readonly limit?: number },
     ) => Effect.Effect<ReadonlyArray<TeamHandoff>, TeamServiceError>;
+    /** Adds one line to the team's activity, as this member (the warning card's "Go anyway"). */
+    readonly recordActivity: (input: {
+      readonly teamId: TeamId;
+      readonly memberId: TeamMemberId;
+      readonly thread: TeamThreadRef;
+      readonly kind: TeamActivityKind;
+      readonly summary: string;
+    }) => Effect.Effect<void, TeamServiceError>;
     /** Newest first. */
     readonly listActivity: (
       teamId: TeamId,

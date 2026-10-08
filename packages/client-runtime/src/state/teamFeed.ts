@@ -8,7 +8,10 @@ import * as Stream from "effect/Stream";
 import type { Atom } from "effect/unstable/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { createEnvironmentRpcSubscriptionAtomFamily } from "./runtime.ts";
+import {
+  createEnvironmentRpcCommand,
+  createEnvironmentRpcSubscriptionAtomFamily,
+} from "./runtime.ts";
 
 const NO_TEAMS: ReadonlyArray<TeamFeedTeam> = [];
 
@@ -20,6 +23,11 @@ export function createTeamFeedAtoms<R, E>(runtime: Atom.AtomRuntime<EnvironmentR
       tag: WS_METHODS.subscribeTeamFeed,
       // The scan's seed is not a state the server sent; the first value is the snapshot.
       transform: (stream) => stream.pipe(Stream.scan(NO_TEAMS, applyTeamFeedEvent), Stream.drop(1)),
+    }),
+    /** The user's choice on a warning card (team/PREVENTION_PLAN.md, slice 3a). */
+    choose: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:team:choose",
+      tag: WS_METHODS.teamChoose,
     }),
   };
 }

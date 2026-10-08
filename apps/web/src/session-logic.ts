@@ -3,8 +3,12 @@ import {
   type PendingApproval,
 } from "@t3tools/client-runtime/pending-requests";
 import { UserInputAttachmentAnswerPayload } from "@t3tools/contracts";
-import { TEAM_PLAN_ACTIVITY_KIND, TeamPlanActivityPayload } from "@t3tools/contracts"; // team-layer
 import { foldUserInputActivities } from "@t3tools/client-runtime/work-log/user-input";
+import {
+  foldTeamChoiceActivities,
+  type TeamCard,
+  teamCardOf,
+} from "@t3tools/client-runtime/work-log/team-cards"; // team-layer
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
@@ -56,8 +60,8 @@ export {
 
 export interface WorkLogEntry {
   questionAnswer?: UserInputAttachmentAnswerPayload;
-  /** team-layer: the plan card's files and holders (team/UI_PLAN.md slice 2). */
-  teamPlan?: TeamPlanActivityPayload;
+  /** team-layer: the plan card or the warning card (team/UI_PLAN.md slices 2 and 3). */
+  teamCard?: TeamCard;
   id: string;
   createdAt: string;
   turnId?: TurnId | null;
@@ -470,7 +474,8 @@ export function deriveWorkLogEntries(
     }
   }
   const entries: DerivedWorkLogEntry[] = [];
-  for (const activity of foldUserInputActivities(ordered)) {
+  for (const activity of foldUserInputActivities(foldTeamChoiceActivities(ordered))) {
+    // team-layer
     if (
       isWorktreeSetupActivity(activity.kind) &&
       (activity.tone !== "error" || activity.kind === "worktree-setup")
@@ -541,7 +546,6 @@ function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): bool
 }
 
 const decodeQuestionAttachmentAnswer = Schema.decodeUnknownOption(UserInputAttachmentAnswerPayload);
-const decodeTeamPlan = Schema.decodeUnknownOption(TeamPlanActivityPayload); // team-layer
 
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
   const cachedEntry = derivedWorkLogEntryByActivity.get(activity);
@@ -598,11 +602,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const answer = decodeQuestionAttachmentAnswer(payload);
     if (Option.isSome(answer)) entry.questionAnswer = answer.value;
   }
-  // team-layer: the plan card (team/UI_PLAN.md slice 2)
-  if (activity.kind === TEAM_PLAN_ACTIVITY_KIND) {
-    const plan = decodeTeamPlan(payload);
-    if (Option.isSome(plan)) entry.teamPlan = plan.value;
-  }
+  // team-layer: the plan card and the warning card (team/UI_PLAN.md slices 2 and 3)
+  const teamCard = teamCardOf(activity);
+  if (teamCard !== undefined) entry.teamCard = teamCard;
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
   const viewedImagePath = asTrimmedString(asRecord(payload?.data)?.imagePath);
