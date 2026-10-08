@@ -33,6 +33,7 @@ import {
   type TeamChooseResult,
   type TeamPlanFile,
   type ThreadId,
+  type TurnId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -140,6 +141,8 @@ export const notYetInstruction = (files: ReadonlyArray<TeamPlanFile>) => {
 
 interface Waiter {
   readonly threadId: ThreadId;
+  /** The turn that made the call. Once it stops, nothing reads the call's answer. */
+  readonly turnId: TurnId | null;
   /** The click's choice, or none when the cap passes first. */
   readonly deferred: Deferred.Deferred<Option.Option<TeamChoice>>;
 }
@@ -210,6 +213,15 @@ export const make = Effect.gen(function* () {
       });
     });
 
+  const runningTurn = (threadId: ThreadId) =>
+    snapshots.getThreadShellById(threadId).pipe(
+      Effect.map((thread) => {
+        const turn = Option.getOrUndefined(thread)?.latestTurn;
+        return turn?.state === "running" ? turn.turnId : null;
+      }),
+      Effect.orElseSucceed(() => null),
+    );
+
   /** The session's driver; a built-in instance is named after its driver when there is none yet. */
   const capFor = (threadId: ThreadId, instanceId: ProviderInstanceId) =>
     snapshots.getThreadShellById(threadId).pipe(
@@ -242,6 +254,7 @@ export const make = Effect.gen(function* () {
       const cap = yield* capFor(threadId, input.providerInstanceId);
       const waiter: Waiter = {
         threadId,
+        turnId: yield* runningTurn(threadId),
         deferred: yield* Deferred.make<Option.Option<TeamChoice>>(),
       };
       // Registered before the card shows, so a click always finds this call.
@@ -367,11 +380,15 @@ export const make = Effect.gen(function* () {
         yield* sideEffect(input.choice, input.threadId, card.files).pipe(
           Effect.catchCause(failed("The choice could not be saved to the team.")),
         );
-        // A call whose cap just passed is done already: then a turn carries the choice.
+        // A call whose cap just passed is done already, and one whose turn was stopped
+        // is still waiting but nobody reads its answer (Codex does not cancel it): then
+        // a turn carries the choice. The stopped one is freed with "not yet".
+        const running = yield* runningTurn(input.threadId);
         let delivery: "held" | "turn" = "turn";
         for (const waiter of waiting.get(input.choiceId) ?? []) {
-          if (yield* Deferred.succeed(waiter.deferred, Option.some(input.choice)))
-            delivery = "held";
+          const live = running !== null && (waiter.turnId ?? running) === running;
+          const answer = live ? Option.some(input.choice) : Option.none();
+          if ((yield* Deferred.succeed(waiter.deferred, answer)) && live) delivery = "held";
         }
         if (delivery === "turn") {
           yield* startTurn(

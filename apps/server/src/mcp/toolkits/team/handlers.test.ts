@@ -107,6 +107,7 @@ function makeThread(
   id: ThreadId,
   worktreePath: string | null,
   providerName: string | null = null,
+  turnState: "running" | "interrupted" = "running",
 ): OrchestrationThreadShell {
   return {
     id,
@@ -120,10 +121,10 @@ function makeThread(
     pullRequests: [],
     latestTurn: {
       turnId: RUNNING_TURN,
-      state: "running",
+      state: turnState,
       requestedAt: "2026-09-01T00:00:00.000Z",
       startedAt: "2026-09-01T00:00:00.000Z",
-      completedAt: null,
+      completedAt: turnState === "running" ? null : "2026-09-01T00:01:00.000Z",
       assistantMessageId: null,
     },
     createdAt: "2026-09-01T00:00:00.000Z",
@@ -189,6 +190,8 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
   const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
   /** Each warning card, as it is added: the held call is waiting by then. */
   const cards = yield* Queue.unbounded<TeamChoiceActivityPayload>();
+  /** Threads whose turn the user stopped. */
+  const stopped = yield* Ref.make<ReadonlySet<ThreadId>>(new Set());
   const fs = yield* FileSystem.FileSystem;
   // The team service always runs real Git: its state is a Git repo.
   const teamLayer = testTeamServiceLayer({
@@ -200,16 +203,19 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
     teamLayer,
     Layer.mock(ProjectionSnapshotQuery)({
       getThreadShellById: (threadId) =>
-        Effect.succeed(
-          threadId === THREAD_A || threadId === THREAD_B || threadId === THREAD_C
-            ? Option.some(
-                makeThread(
-                  threadId,
-                  options.worktrees?.[threadId] ?? options.worktreePath ?? null,
-                  options.providerName ?? null,
-                ),
-              )
-            : Option.none(),
+        Ref.get(stopped).pipe(
+          Effect.map((stoppedThreads) =>
+            threadId === THREAD_A || threadId === THREAD_B || threadId === THREAD_C
+              ? Option.some(
+                  makeThread(
+                    threadId,
+                    options.worktrees?.[threadId] ?? options.worktreePath ?? null,
+                    options.providerName ?? null,
+                    stoppedThreads.has(threadId) ? "interrupted" : "running",
+                  ),
+                )
+              : Option.none(),
+          ),
         ),
       getProjectShellById: () => Effect.succeed(Option.some(makeProject(options.workspaceRoot))),
       // The activities this test dispatched, as the projection would store them.
@@ -295,7 +301,9 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
     assert.equal(started.membership.status, "member");
   }
   const choices = yield* TeamChoices.TeamChoices.pipe(Effect.provide(context));
-  return { call, teams, gitCalls, dispatched, cards, choices };
+  const stopTurn = (threadId: ThreadId) =>
+    Ref.update(stopped, (threads) => new Set([...threads, threadId]));
+  return { call, teams, gitCalls, dispatched, cards, choices, stopTurn };
 }, Effect.provide(NodeServices.layer));
 
 /**
@@ -1218,6 +1226,40 @@ describe("team toolkit", () => {
           choice: "goAnyway",
           delivery: "turn",
         });
+      }),
+  );
+
+  it.effect(
+    "starts a turn with the choice when the user stopped the turn whose call is still held",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* makeProjectFolder(false);
+        const { call, cards, choices, dispatched, stopTurn } = yield* makeHarness({
+          workspaceRoot: root,
+          startsTeam: false,
+          host: fakeTeamHost(null),
+          providerName: "codex",
+        });
+        inTeam(yield* call("team_plan", { files: ["src/a.ts"] }, THREAD_B));
+        const planning = yield* call("team_plan", { files: ["src/a.ts"] }).pipe(Effect.forkChild);
+        const card = yield* Queue.take(cards);
+        // Stop: Codex ends the turn but never cancels the call, so it is still held.
+        yield* stopTurn(THREAD_A);
+        assert.deepEqual(
+          yield* choices.choose({
+            threadId: THREAD_A,
+            choiceId: card.choiceId,
+            choice: "goAnyway",
+          }),
+          { delivery: "turn" },
+        );
+        // The dead call is freed, and the choice goes to the new turn instead.
+        assert.equal(inTeam(yield* Fiber.join(planning)).choice, "notYet");
+        const turn = (yield* Ref.get(dispatched)).find(
+          (command) => command.type === "thread.turn.start",
+        );
+        if (turn?.type !== "thread.turn.start") return assert.fail("expected a new turn");
+        assert.match(turn.message.text, /^Go anyway: you may edit `src\/a.ts`/);
       }),
   );
 
