@@ -5,8 +5,12 @@
  *
  * No briefing when the session has no `t3-code` MCP server (the agent could
  * not call the tools it names), or when the project is in a team this server
- * cannot use. A project with no team gets the solo briefing. A failure or a slow lookup also means no
- * briefing: it must never hold up or break a turn.
+ * cannot use. A project with no team gets the solo briefing.
+ *
+ * A failure or a slow lookup must never hold up or break a turn: it reuses the
+ * thread's last briefing (none if it never had one). Dropping it for one turn
+ * would change the cached prompt prefix (OpenCode's system text, Codex's
+ * context entry) for that turn and the next (team/VISION.md 6.5).
  */
 import { TEAM_DIRECTORY_NAME, TEAM_RULEBOOK_FILE_NAME, type ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -27,6 +31,9 @@ const BRIEFING_TIMEOUT = "2 seconds";
 export const makeTeamBriefingResolver = Effect.gen(function* () {
   const { resolve } = yield* makeTeamResolver;
   const path = yield* Path.Path;
+  /** The last briefing each thread got; only "not in a team" removes it. */
+  const lastBriefing = new Map<ThreadId, string>();
+  const reuseLast = (threadId: ThreadId) => Effect.sync(() => lastBriefing.get(threadId));
 
   return (threadId: ThreadId): Effect.Effect<string | undefined> => {
     const mcp = McpProviderSession.readMcpProviderSession(threadId);
@@ -44,26 +51,31 @@ export const makeTeamBriefingResolver = Effect.gen(function* () {
         });
       }),
       Effect.timeoutOption(BRIEFING_TIMEOUT),
-      Effect.tap((briefing) =>
-        Option.isNone(briefing)
-          ? Effect.logWarning(
-              `Team briefing skipped for this turn: the team lookup took longer than ${BRIEFING_TIMEOUT}.`,
-              { threadId },
-            )
-          : briefing.value === undefined
-            ? Effect.void
-            : Effect.logInfo("Team briefing added.", { threadId }),
-      ),
-      Effect.map(Option.getOrUndefined),
+      Effect.flatMap((briefing) => {
+        if (Option.isNone(briefing)) {
+          return Effect.logWarning(
+            `Team briefing reused for this turn: the team lookup took longer than ${BRIEFING_TIMEOUT}.`,
+            { threadId },
+          ).pipe(Effect.andThen(reuseLast(threadId)));
+        }
+        if (briefing.value === undefined) {
+          lastBriefing.delete(threadId);
+          return Effect.succeed(undefined);
+        }
+        lastBriefing.set(threadId, briefing.value);
+        return Effect.logInfo("Team briefing added.", { threadId }).pipe(Effect.as(briefing.value));
+      }),
       Effect.catch((cause) =>
-        Effect.logWarning("Team briefing skipped for this turn.", { threadId, cause }).pipe(
-          Effect.as(undefined),
-        ),
+        Effect.logWarning("Team briefing reused for this turn: the lookup failed.", {
+          threadId,
+          cause,
+        }).pipe(Effect.andThen(reuseLast(threadId))),
       ),
       Effect.catchDefect((defect) =>
-        Effect.logWarning("Team briefing skipped for this turn.", { threadId, defect }).pipe(
-          Effect.as(undefined),
-        ),
+        Effect.logWarning("Team briefing reused for this turn: the lookup failed.", {
+          threadId,
+          defect,
+        }).pipe(Effect.andThen(reuseLast(threadId))),
       ),
     );
   };

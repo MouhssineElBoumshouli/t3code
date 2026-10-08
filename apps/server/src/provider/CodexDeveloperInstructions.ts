@@ -188,7 +188,7 @@ export interface CodexRuntimeInfo {
   readonly model: string;
   readonly modelName?: string | undefined;
   readonly reasoningEffort: string;
-  /** team-layer: forwarded to buildRuntimeInstructions. */
+  /** team-layer: the team briefing, sent as its own `t3_code_team` entry. */
   readonly teamContext?: string | undefined;
 }
 
@@ -218,12 +218,16 @@ export function buildCodexAdditionalContext(
   toolsAvailable: boolean | T3CodeToolAvailability = true,
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
   const tools = toolInstructions(toolsAvailable);
+  const { teamContext, ...runtimeInfo } = runtime; // team-layer
   // Separate keys keep each value under Codex's per-entry token cap.
   return {
     t3_code_runtime: {
       kind: "application",
-      value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),
+      value: buildRuntimeInstructions({ harness: "Codex", ...runtimeInfo }),
     },
     ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),
+    // team-layer: its own key, so a model or effort change does not resend the
+    // briefing (team/VISION.md 6.5).
+    ...(teamContext ? { t3_code_team: { kind: "application", value: teamContext } } : {}),
   };
 }

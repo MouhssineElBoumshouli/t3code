@@ -291,6 +291,33 @@ describe("team briefing resolver", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  // A turn without it would change the cached prompt prefix (team/VISION.md 6.5).
+  it.effect("reuses the thread's last briefing when a lookup fails; not in a team drops it", () =>
+    Effect.gen(function* () {
+      attachMcp();
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* makeFolder({ team: true });
+      const teamJson = path.join(root, ".team", "team.json");
+      const [first, broken, notInTeam, brokenAfter] = yield* Effect.gen(function* () {
+        const resolver = yield* makeTeamBriefingResolver;
+        const first = yield* resolver(THREAD_ID);
+        yield* fs.writeFileString(teamJson, "{ not json");
+        const broken = yield* resolver(THREAD_ID);
+        // A team this server cannot use: the team's id is not on the remote.
+        yield* fs.writeFileString(teamJson, `{ "teamId": "team-elsewhere", "name": "Other" }`);
+        const notInTeam = yield* resolver(THREAD_ID);
+        yield* fs.writeFileString(teamJson, "{ not json");
+        const brokenAfter = yield* resolver(THREAD_ID);
+        return [first, broken, notInTeam, brokenAfter] as const;
+      }).pipe(Effect.provide(makeDependencies(root)));
+      assert.strictEqual(first, EXPECTED);
+      assert.strictEqual(broken, EXPECTED);
+      assert.isUndefined(notInTeam);
+      assert.isUndefined(brokenAfter);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("serves adapters through readTeamBriefing while the layer is up", () =>
     Effect.gen(function* () {
       attachMcp();

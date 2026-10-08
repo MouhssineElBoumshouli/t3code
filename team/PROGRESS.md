@@ -13,6 +13,13 @@ Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 - Checked: `vp test run src/team/openTeamChoices.test.ts src/orchestration/Layers/ProjectionPipeline.test.ts` 37 passed; mutation (count left out of the pipeline) fails the test. Web: `teamChoiceTimeline.test.ts` + `MessagesTimeline.logic.test.ts` 123 passed. `tsc --noEmit` server and web: 0 errors. Lint: only old warnings in `MessagesTimeline.tsx`.
 - Not changed: manual settle (the decider's own pending check) does not know cards, so a user can settle a thread with an open card; the card then still counts. The mobile thread screen's own live row was not checked. Threads whose card opened before this build are counted at their next summary refresh.
 
+**Step 2: token fixes 1 and 2 (VISION.md 6.5)**
+
+- Fix 1: the briefing resolver keeps each thread's last briefing and reuses it when the lookup takes over 2 s or fails; only "not in a team" (and no `t3-code` MCP server) removes it. So the cached prompt prefix no longer changes for one turn (`mcp/toolkits/team/briefing.ts`, fork file).
+- Fix 2: Codex gets the briefing as its own `additionalContext` entry, `t3_code_team`, instead of inside `t3_code_runtime`, so switching model or effort no longer resends it (`team-layer:` edit in `provider/CodexDeveloperInstructions.ts`; `CodexSessionRuntime` unchanged, it already passes `teamContext`). After compaction both entries are injected again, as before.
+- Checked: `vp test run src/mcp/toolkits/team/briefing.test.ts src/provider/Layers/CodexTeamBriefing.test.ts src/provider/Layers/CodexSessionRuntime.test.ts`: 62 passed. New test: briefing, then a broken team file (reused), then a team this server cannot use (none), then broken again (none). Two mutations (no reuse; no removal) each fail it. `tsc` server 0 errors; lint clean.
+- Unsure: a team whose state is "unavailable" (e.g. offline fetch) resolves as "not in a team", so it drops the briefing, as before. The 2 s timeout itself was not exercised (it needs a slow git); the failure path shares the reuse code.
+
 ## 2026-10-08 — Live check: agents call team_plan on their own; 3a self-test live; two bugs fixed; token research
 
 **What changed**

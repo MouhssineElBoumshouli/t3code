@@ -51,11 +51,16 @@ describe("Codex team briefing", () => {
     }),
   );
 
-  it.effect("adds the briefing to the runtime entry of the turn context", () =>
+  // Its own entry: Codex resends an entry when its value changes, and the
+  // runtime entry changes with the model and effort (team/VISION.md 6.5).
+  it.effect("adds the briefing as its own entry of the turn context", () =>
     Effect.gen(function* () {
       const params = yield* turnParams(TEST_TEAM_BRIEFING);
-      const runtime = params.additionalContext?.t3_code_runtime?.value;
-      assert.isTrue(runtime?.endsWith(`\n\n${TEST_TEAM_BRIEFING}`));
+      assert.strictEqual(params.additionalContext?.t3_code_team?.value, TEST_TEAM_BRIEFING);
+      assert.deepStrictEqual(
+        params.additionalContext?.t3_code_runtime,
+        (yield* turnParams(undefined)).additionalContext?.t3_code_runtime,
+      );
     }),
   );
 
@@ -112,8 +117,8 @@ describe("Codex team briefing", () => {
       const texts = (inject.params.items as ReadonlyArray<{ content: [{ text: string }] }>).map(
         (item) => item.content[0].text,
       );
-      assert.lengthOf(texts, 1);
-      assert.isTrue(texts[0]?.endsWith(`\n\n${TEST_TEAM_BRIEFING}</t3_code_runtime>`));
+      assert.lengthOf(texts, 2);
+      assert.include(texts, `<t3_code_team>${TEST_TEAM_BRIEFING}</t3_code_team>`);
 
       yield* runtime.close;
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
