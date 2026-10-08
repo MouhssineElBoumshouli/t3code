@@ -48,7 +48,12 @@ function ChatName(props: { readonly holder: Extract<TeamHolder, { kind: "chat" }
     environmentId: props.holder.environmentId,
     threadId: props.holder.threadId,
   });
-  return <>your chat "{shell?.title ?? "another chat"}"</>;
+  // An archived or unknown chat has no title to quote.
+  return shell === undefined || shell === null ? (
+    <>another of your chats</>
+  ) : (
+    <>your chat "{shell.title}"</>
+  );
 }
 
 const holderKey = (holder: TeamHolder) =>
