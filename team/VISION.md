@@ -158,6 +158,33 @@ Research only, nothing built. Each point: what we have in the code today, how us
 4. Never worse than plain Claude Code or Codex.
 5. **Works perfectly as a native Windows app**, not only in WSL: paths, git and `gh`, shells, line endings and the installer all hold up on plain Windows. Audit and test plan: [WINDOWS_AND_SOLO.md](WINDOWS_AND_SOLO.md).
 
+### 6.5 Token use (research, 2026-10-08)
+
+Research only. Numbers are estimates (characters / 4, or / 3 for JSON), measured on our text and on the tool results of the 2026-10-08 live runs; no provider tokenizer was run.
+
+**What the team layer adds**
+
+| Part                   | Size                                                                                                                                                               | When                                                                                                                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Briefing               | about 120 tokens (team, usual names), 150 at most (longest names); solo about 126                                                                                  | Claude: once, in the system prompt. Codex: once, as a developer message. OpenCode: in each request's system addendum (same text). Cursor, Grok, Antigravity: **appended to every user message**. |
+| 6 tool definitions     | 750 to 1,000 (name, description, input schema; no output schema is sent, since every result is a union)                                                            | Codex and the ACP agents: in the tool list of every request. Claude Code defers MCP tools: only the names (about 60) until it loads a tool with ToolSearch.                                      |
+| A typical editing task | `team_status` 230 to 800 (grows with the team, capped lists), `team_plan` 200 to 330, `team_handoff` about 80 back plus 100 to 200 output tokens for its arguments | Once per task, then in history. Questions with no edit call nothing. Claude adds 1 to 3 small failed calls: it calls a deferred tool with `{}` before loading it.                                |
+
+So, per message: about 120 to 150 tokens of briefing (cached for Claude, Codex and OpenCode; repeated in history for Cursor, Grok and Antigravity) plus the tool list (cached). Per editing task: about 700 to 1,600 input tokens and 150 to 300 output tokens.
+
+**Does anything change per turn inside the cached part?** The text itself does not: names, rulebook path and solo text are fixed per thread, and live state comes only through tool results. One case does: the briefing lookup is skipped for a turn when it takes over 2 s or fails (`mcp/toolkits/team/briefing.ts`). Then OpenCode's system addendum changes and the whole cached prefix is missed for that request and the next one, Codex resends its `t3_code_runtime` entry twice (without, then with the briefing), and a Claude session that starts in that moment has no briefing at all. Fix: keep the last briefing per thread and reuse it when the lookup is slow or fails; only "not in a team" removes it. Smaller: on Codex the briefing shares the `t3_code_runtime` entry with model and effort, so switching model or effort resends it too; its own `additionalContext` key would not.
+
+**Cheapest cuts that keep quality**, cheapest first:
+
+1. Reuse the last briefing on a slow lookup (above). A few lines; fixes the only cache break.
+2. Its own Codex key for the briefing. A few lines.
+3. Briefing only on the first message of a Cursor, Grok or Antigravity session, and again after a resume. Saves about 130 tokens per message there. Risk: if an agent compacts its history without telling us, the briefing is gone until the next session.
+4. Shorter results: `team_status` and `team_plan` return JSON objects with a key on every value, `null` fields and empty lists. One line per claim ("Sara: src/pins/search.ts, src/api/routes.ts, task tag filters, her copy, not merged") and no empty fields would cut them by about a third.
+5. Check whether Codex or Claude Code shows the model both copies of each result: our MCP server sends the JSON as text and again as `structuredContent`. If one of them does, results cost double, and dropping `structuredContent` (we declare no output schema) halves them.
+6. One call instead of two per task: let `team_plan` also return what `team_status` gives for the planned files (handoff notes on them, "Do not touch" hits), and brief the agent to call `team_status` only to look around. Saves 230 to 800 tokens and a round trip per task, but needs a live check that agents still read the team's state.
+
+Not worth cutting: the tool descriptions (already under 40 words) and the tool count (Claude loads them on demand; for the others 6 tools are about 1,000 cached tokens).
+
 ## 7. Order of work
 
 1. **Storage swap.** Done 2026-10-07 (slices 0 to 7 of [STORAGE_PLAN.md](STORAGE_PLAN.md)). Replace the local team database with the GitHub state ref (`refs/t3-team/state`) behind the same team service, so M1's tools, briefing, memory search and freshness keep working. Park the host-mode code (M2.2, M2.3) instead of deleting it; keep the upstream security fix.

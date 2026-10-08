@@ -2,7 +2,7 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
-## 2026-10-08 — Live check: agents call team_plan on their own; 3a self-test live; one bug fixed
+## 2026-10-08 — Live check: agents call team_plan on their own; 3a self-test live; two bugs fixed; token research
 
 **What changed**
 
@@ -23,6 +23,8 @@ Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
 - **Briefing fix** (both briefings): "Before any edit, even a small one, call team_status, then team_plan the files you will change." and "Follow team_plan's answer; it may wait for the user." (replaces "if it reports overlaps, tell the user": team_plan now holds instead). The solo one opens with why: "Other chats of this user may be changing this project too." Team briefing still about 148 tokens with the longest names (budget 150); solo down from about 133 to 126. Tool descriptions unchanged. Three runs after the change: all planned first (table). Few runs, so this is a sign, not proof.
 - **Bug found and fixed (3a fallback).** Stop while the card holds Codex, then click: the click went to the held call (`delivery: "held"`), because Codex does not cancel the MCP call when its turn stops. Nobody read the answer: no turn started, and the card said "sent to the agent" (picture 09). Now a held call counts only while the turn that made it is still running (the waiter keeps its turn id); otherwise the stale call is freed with "not yet" and the choice goes out as a new turn. Live after the fix: Stop then "Find another way" was "sent as a new message" and the agent re-planned (picture 12). And a second case: Codex ended a turn on its own while its `team_plan` call was still open; the click then also started a new turn (picture 13).
+- **Bug found and fixed: Claude's handoff notes lost their text.** Claude Code defers MCP tools, so Claude calls `team_handoff` before reading its schema. It sent `{summary}`, got "Missing key changed", then sent the file list as `changed`; `summary` was an unknown key and was dropped. Two of three Claude handoffs were saved as `["src/format.ts"]` with no files (the Codex ones were fine). The input is now `summary` ("What changed, in words."); the stored field keeps its name. Live after the change (one Claude run, solo): saved `{summary, files, risks}` on its first real call, and it planned before editing. Making unknown keys an error would be better still, but the Toolkit decoder ignores the struct's `onExcessProperty` annotation.
+- **VISION.md 6.5, token use (research).** Briefing about 120 to 150 tokens per message (cached for Claude, Codex, OpenCode; repeated in history for Cursor, Grok, Antigravity); 6 tool definitions 750 to 1,000 (cached; Claude loads them on demand); about 700 to 1,600 input tokens per editing task. One cache break found: a briefing lookup over 2 s or failing leaves the briefing out for that turn, which changes OpenCode's system text (cache miss) and makes Codex resend its entry twice. Fix proposed (reuse the last briefing), not built. Six cuts listed, cheapest first.
 - **Test:** `team.choose` is refused to an `orchestration:read` session (real server, `ChatGptRpcScopes.test.ts`): `EnvironmentAuthorizationError`, required scope `orchestration:operate`.
 
 **3a self-test, live (step 2)**: what I clicked and saw
@@ -36,12 +38,13 @@ Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
 **Files touched**
 
-- `apps/server/src/team/TeamChoices.ts` (the fix), `apps/server/src/mcp/toolkits/team/handlers.test.ts` (stop-then-click test; the harness can stop a thread's turn), `apps/server/src/auth/ChatGptRpcScopes.test.ts`, `apps/server/src/team/TeamBriefing.ts` (+ test).
+- `apps/server/src/team/TeamChoices.ts` (the fix), `apps/server/src/mcp/toolkits/team/handlers.test.ts` (stop-then-click test; the harness can stop a thread's turn; handoff calls use `summary`), `apps/server/src/auth/ChatGptRpcScopes.test.ts`, `apps/server/src/team/TeamBriefing.ts` (+ test), `apps/server/src/mcp/toolkits/team/tools.ts` and `handlers.ts` (`summary`), `team/VISION.md` (6.5).
 
 **How it was checked**
 
 - `apps/server`: `vp test run src/team/ src/mcp/toolkits/team/ src/cli/team.test.ts src/provider/Layers/CodexTeamBriefing.test.ts src/auth/ChatGptRpcScopes.test.ts`: 19 files, **180 passed**. The new stop-then-click test fails without the fix (`{ delivery: 'held' }` instead of `'turn'`).
-- `tsc --noEmit` in `apps/server`: 0 errors. `vp lint` and `vp fmt` on the 5 changed files: clean.
+- After the `summary` rename: `vp test run src/team/ src/mcp/toolkits/team/ src/cli/team.test.ts`: 17 files, 170 passed.
+- `tsc --noEmit` in `apps/server`: 0 errors (both times). `vp lint` and `vp fmt` on the changed files: clean.
 - Live runs as above; dev server and browser stopped after (ports free).
 
 **What's left / findings not fixed**
@@ -50,7 +53,8 @@ Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 - Codex keeps thinking while its call is held, and can end its turn by itself with the call still open (seen once, after about 3 min). The fix covers the click; the agent's own text then says "waiting", which is right.
 - Claude calls deferred MCP tools once with empty arguments before loading their schema: the server logs `Invalid parameters for tool 'team_plan': Missing key` as ERROR, then the real call works. Noise only.
 - Claude's miss edited files through Bash (`python3` heredoc), not Edit or Write. Slice 3b's planned PreToolUse hook on Edit/Write would not catch that; only the turn diff would.
-- Claude said its handoff in the shared solo checkout recorded `files: []`. Not checked yet.
+- The two broken handoff notes from before the fix stay in the solo state of `solo-demo3` (dev home only); `team_status` shows them as `You, …: ["src/format.ts"]`.
+- 6.5's fixes 1 and 2 (reuse the last briefing; Codex's own key) are a few lines each: say if you want them next.
 
 **Unsure about / notes**
 
