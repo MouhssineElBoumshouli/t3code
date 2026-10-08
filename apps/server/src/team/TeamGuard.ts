@@ -77,22 +77,23 @@ export const make = Effect.gen(function* () {
       Effect.map((resolved) => (resolved._tag === "InTeam" ? resolved.context : undefined)),
     );
 
-  /** The paths in `paths` someone else holds and this thread did not plan, claim or go ahead on. */
+  /** The paths in `paths` someone else holds and this thread did not plan, claim, go ahead on or undo. */
   const heldFor = (context: TeamContext, paths: ReadonlyArray<TeamPath>) =>
     Effect.gen(function* () {
       if (paths.length === 0) return [];
       const teamId = context.teamFile.teamId;
-      const [claims, members, wentAhead] = yield* Effect.all([
+      const [claims, members, wentAhead, undo] = yield* Effect.all([
         teams.listActiveClaims(teamId),
         teams.listMembers(teamId),
         choices.wentAhead(context.thread.threadId),
+        choices.undoPaths(context.thread.threadId),
       ]);
       return heldElsewhere({
         paths,
         claims,
         viewer: { thread: context.thread, memberId: context.member.memberId, solo: context.solo },
         names: new Map(members.map((member) => [member.memberId, member.displayName])),
-        wentAhead,
+        wentAhead: new Set([...wentAhead, ...undo]),
       });
     });
 

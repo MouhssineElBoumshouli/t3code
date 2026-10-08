@@ -359,11 +359,17 @@ describe("TeamGuard", () => {
         );
         assert.include(
           started?.type === "thread.turn.start" ? started.message.text : "",
-          "Undo your changes to it",
+          "Undo only your own changes to it (no team_plan needed for that",
         );
+        // The undo edits the held file: let through, and its diff asks nothing.
+        assert.isUndefined(
+          yield* guard.checkEdit(THREAD_A, [NodePath.join(root, "src/auth/login.ts")]),
+        );
+        yield* turnDiff(THREAD_A, "turn-a-undo", ["src/auth/login.ts"], 13);
+        assert.lengthOf(yield* cards, 1);
 
-        // Another turn changes it again; this time the user keeps the change: no turn.
-        yield* turnDiff(THREAD_A, "turn-a3", ["src/auth/login.ts"], 14);
+        // Another turn changes another of Omar's files; this time the user keeps the change: no turn.
+        yield* turnDiff(THREAD_A, "turn-a3", ["src/auth/session.ts"], 14);
         const second = (yield* cards).at(-1)!;
         assert.notEqual(second.choiceId, card!.choiceId);
         assert.deepEqual(
@@ -379,10 +385,10 @@ describe("TeamGuard", () => {
         );
         assert.lengthOf(turnStarts, 1);
         // Kept: not asked again in this chat.
-        yield* turnDiff(THREAD_A, "turn-a4", ["src/auth/login.ts"], 15);
+        yield* turnDiff(THREAD_A, "turn-a4", ["src/auth/session.ts"], 15);
         assert.lengthOf(yield* cards, 2);
         assert.isUndefined(
-          yield* guard.checkEdit(THREAD_A, [NodePath.join(root, "src/auth/login.ts")]),
+          yield* guard.checkEdit(THREAD_A, [NodePath.join(root, "src/auth/session.ts")]),
         );
       }).pipe(Effect.scoped),
   );
