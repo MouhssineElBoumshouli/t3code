@@ -369,7 +369,7 @@ export const hashFiles = (
   });
 
 /** Whether `content` was ever at `file` in this copy's history: true, false, or null if Git cannot tell. */
-const inHistory = (git: Git, root: string, file: string, content: string) =>
+export const inHistory = (git: Git, root: string, file: string, content: string) =>
   runGit(git, root, [
     "log",
     "-1",

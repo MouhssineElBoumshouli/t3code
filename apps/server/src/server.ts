@@ -99,6 +99,7 @@ import * as GitTeamService from "./team/state/GitTeamService.ts";
 import { TeamBriefingLive } from "./mcp/toolkits/team/briefing.ts";
 import { TeamAutoNotesLive } from "./team/TeamAutoNotes.ts";
 import { TeamGuardLive } from "./team/TeamGuard.ts"; // team-layer
+import { TeamStaleViewLive } from "./team/TeamStaleView.ts"; // team-layer
 import { TeamClaimAutoReleaseLive } from "./team/TeamClaimAutoRelease.ts";
 import * as TeamWarmup from "./team/TeamWarmup.ts";
 import * as TeamFeed from "./team/TeamFeed.ts";
@@ -290,6 +291,8 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(TeamAutoNotesLive),
   // team-layer: the guard on edits to files held elsewhere (team/PREVENTION_PLAN.md section 3).
   Layer.provideMerge(TeamGuardLive),
+  // team-layer: the stale-view line at the start of each turn (team/VISION.md 3.6).
+  Layer.provideMerge(TeamStaleViewLive),
   // team-layer: open each project's team at start, so the first turn gets its briefing.
   Layer.provideMerge(TeamWarmup.layer),
   // team-layer: the read-only team feed for clients (team/UI_PLAN.md slice 0).
