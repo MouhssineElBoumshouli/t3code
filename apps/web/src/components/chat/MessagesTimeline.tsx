@@ -2563,6 +2563,8 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
   const shimmer = isPreparingWorktree || isCompacting;
   const label = isPreparingWorktree ? (
     "Setting up worktree…"
+  ) : row.awaitingInput ? ( // team-layer: an open warning card
+    "Waiting for your input"
   ) : isCompacting ? (
     <CompactingLabel />
   ) : row.createdAt ? (

@@ -145,7 +145,10 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
           AND kind IN (
             'user-input.requested',
             'user-input.resolved',
-            'provider.user-input.respond.failed'
+            'provider.user-input.respond.failed',
+            -- team-layer: the warning card (apps/server/src/team/openTeamChoices.ts)
+            'team.choice',
+            'team.choice.made'
           )
         ORDER BY
           CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,

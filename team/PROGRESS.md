@@ -2,6 +2,17 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-08 — Honest status while the card waits; token fixes; the guard (3b)
+
+**Step 1: "Awaiting Input" while the card waits**
+
+- An open warning card now counts as pending user input in the thread shell (`pendingUserInputCount`), so the sidebar shows "Awaiting Input" (web and mobile both read `hasPendingUserInput`), the thread is not auto-settled, and the input notification fires. Open means: no choice made, and no newer turn (if the user ignores the card and sends a message, the card stops counting; it still takes a click).
+- Timeline: while an open card is in the running turn, the "Working for" row reads "Waiting for your input" and the "Thinking" row is not added.
+- New: `apps/server/src/team/openTeamChoices.ts` (+ test: the count, and a run through the real projection pipeline: open card 1, choice made 0, unanswered card then a new turn 0), `apps/web/src/components/team/teamChoiceTimeline.test.ts`.
+- `team-layer:` edits in upstream files: `ProjectionPipeline.ts` (import; refresh the shell on the two card kinds; add the open-card count), `persistence/Layers/ProjectionThreadActivities.ts` (the summary query also reads `team.choice` and `team.choice.made`), `MessagesTimeline.logic.ts` (`awaitingInput` on the working row, its equality check, no thinking row), `MessagesTimeline.tsx` (the label).
+- Checked: `vp test run src/team/openTeamChoices.test.ts src/orchestration/Layers/ProjectionPipeline.test.ts` 37 passed; mutation (count left out of the pipeline) fails the test. Web: `teamChoiceTimeline.test.ts` + `MessagesTimeline.logic.test.ts` 123 passed. `tsc --noEmit` server and web: 0 errors. Lint: only old warnings in `MessagesTimeline.tsx`.
+- Not changed: manual settle (the decider's own pending check) does not know cards, so a user can settle a thread with an open card; the card then still counts. The mobile thread screen's own live row was not checked. Threads whose card opened before this build are counted at their next summary refresh.
+
 ## 2026-10-08 — Live check: agents call team_plan on their own; 3a self-test live; two bugs fixed; token research
 
 **What changed**

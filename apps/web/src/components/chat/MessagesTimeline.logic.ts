@@ -436,6 +436,8 @@ export type MessagesTimelineRow =
       kind: "working";
       id: string;
       createdAt: string | null;
+      /** team-layer: an open warning card waits on the user. */
+      awaitingInput?: true;
     }
   | {
       kind: "thinking";
@@ -1100,6 +1102,15 @@ export function deriveMessagesTimelineRows(input: {
   const activeWorkEntryIds = new Set(
     activeWorkRow !== null || latestToolFailed ? activeToolEntries.map((entry) => entry.id) : [],
   );
+  // team-layer: while a warning card in this turn waits for a click, the turn
+  // waits on the user, as with a pending question: no "Working for" or "Thinking".
+  const awaitingTeamChoice = input.timelineEntries.some(
+    (entry, index) =>
+      entry.kind === "work" &&
+      entry.entry.teamCard?.kind === "choice" &&
+      entry.entry.teamCard.card.made === null &&
+      entryBelongsToActiveTurn(entry, index),
+  );
   const appendWorkingRow = () => {
     const latestUserMessage = input.timelineEntries[lastUserMessageIndex(input.timelineEntries)];
     const visualResponseStartedAt =
@@ -1112,6 +1123,7 @@ export function deriveMessagesTimelineRows(input: {
       kind: "working",
       id: "working-indicator-row",
       createdAt: visualResponseStartedAt,
+      ...(awaitingTeamChoice ? { awaitingInput: true as const } : {}), // team-layer
     });
   };
   let hasActivityRow = false;
@@ -1472,7 +1484,12 @@ export function deriveMessagesTimelineRows(input: {
   if (input.isWorking && !hasWorkingRow && activeTurnHeaderIndex === input.timelineEntries.length) {
     appendWorkingRow();
   }
-  if (input.isWorking && !setupRunning && (!hasActivityRow || latestToolFailed)) {
+  if (
+    input.isWorking &&
+    !setupRunning &&
+    !awaitingTeamChoice && // team-layer
+    (!hasActivityRow || latestToolFailed)
+  ) {
     nextRows.push({
       kind: "thinking",
       id: LIVE_ACTIVITY_ROW_ID,
@@ -1616,6 +1633,10 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       );
     }
     case "working":
+      return (
+        a.createdAt === (b as typeof a).createdAt &&
+        a.awaitingInput === (b as typeof a).awaitingInput // team-layer
+      );
     case "thinking":
       return a.createdAt === (b as typeof a).createdAt;
     case "worktree-setup":

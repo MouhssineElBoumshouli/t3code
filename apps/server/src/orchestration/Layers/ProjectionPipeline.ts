@@ -63,6 +63,8 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
+// team-layer
+import { countOpenTeamChoices, TEAM_CHOICE_LIFECYCLE_KINDS } from "../../team/openTeamChoices.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -154,7 +156,8 @@ function shouldRefreshThreadShellSummary(event: OrchestrationEvent): boolean {
     case "provider.user-input.respond.failed":
       return true;
     default:
-      return false;
+      // team-layer: an open warning card counts as pending input
+      return TEAM_CHOICE_LIFECYCLE_KINDS.includes(event.payload.activity.kind);
   }
 }
 
@@ -590,7 +593,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           projectionPendingApprovalRepository.countPendingByThreadId({ threadId }),
         ]);
 
-      const pendingUserInputCount = derivePendingUserInputCountFromActivities(activities);
+      const pendingUserInputCount =
+        derivePendingUserInputCountFromActivities(activities) +
+        // team-layer: an open warning card waits on the user too
+        countOpenTeamChoices(activities, existingRow.value.latestTurnId);
 
       yield* projectionThreadRepository.upsert({
         ...existingRow.value,
