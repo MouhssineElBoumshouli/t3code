@@ -2,6 +2,28 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-08 — VISION.md 3.6: working on the same files often (research)
+
+**What changed**
+
+- New section 3.6 in `team/VISION.md`, research only, no code. Seven points (same part of a file, a "Shared files" list, stale view, breaks without file overlap, duplicate work, merge order, work outside the app), each with what the code has today, how useful, how hard, and its step. First two to build: the "Shared files" list, then the stale-view line at turn start.
+
+**Files touched**
+
+- `team/VISION.md`.
+
+**How it was checked**
+
+- Read in the code: `teamPathsOverlap` (paths only, no lines), `TeamAutoNotes` (files and hashes, no line ranges), `readDoNotTouchSection`, `checkFreshness` and `lateOverlaps`, `TeamClaimAutoRelease`, the `defaultThreadEnvMode` default (`local`; `t3 team init` turns worktrees on, solo does not). No `merge-tree` anywhere in the server. Nothing was run.
+
+**What's left**
+
+- Your call on solo worktrees: I suggest offering "Give this chat its own copy" when a second chat starts, not a default.
+
+**Unsure about / notes**
+
+- The test-combine command (typecheck and tests) has no home yet: a `t3.json` field or the rulebook.
+
 ## 2026-10-08 — The plan card (UI_PLAN.md slice 2)
 
 **What changed**

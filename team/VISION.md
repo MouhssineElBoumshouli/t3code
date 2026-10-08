@@ -79,6 +79,55 @@ The app test-combines active branches in the background and warns early: "your w
 
 A claim with no activity for a few days gets a question to its owner: "Still working on login?" No answer, and the claim fades and others are told the files are probably free.
 
+### 3.6 Working on the same files often (research, 2026-10-08)
+
+Research only, nothing built. Each point: what we have in the code today, how useful, how hard, and which step of section 7 it belongs to.
+
+**1. Warn on the same part of a file, not just the same file.** Most same-file work merges cleanly in Git, so a file-level warning is often a false alarm.
+
+- Have: claims are paths only. `teamPathsOverlap` (contracts `team.ts`) matches the same file or a folder and what is inside it; it knows nothing about lines. Each turn's diff (the checkpoint ref) knows which files changed, and Git can give the changed line ranges, but automatic notes keep only files and hashes (`TeamAutoNotes.ts`).
+- Knowing the part in advance: (a) the agent names it: an optional `parts` per file in `team_plan` ("function login, the routes list"); cheap, early, but self-reported. (b) Use what is already written: once the holder has edits (pushed branch or turn diff), compare their changed line ranges and function names with the planned part. (c) `git merge-tree --write-tree` on the two branches says exactly whether they clash; this is 3.4's check and needs both sides to have edits. So: warn at file level at plan time (we cannot know better before code exists), but word it by what is known: "Sara changed `login()` in this file" when her diff is known, "Sara holds this file, no edits yet" when not; and lower it to a quiet mark once merge-tree says the two branches merge cleanly.
+- Useful: high (the "no false alarms" rule). Hard: medium. Step 5 for (b) and (c); the `parts` hint can go in step 4.
+
+**2. A "Shared files" list in `.team/rulebook.md`** (routes, config, global styles): files everyone appends to; no warnings for those.
+
+- Have: the rulebook's "Do not touch" section is already parsed (`readDoNotTouchSection`, `rulebook.ts`) and shown in `team_status`. A "Shared files" section can use the same parser. `planFiles` and `claimAndSummarize` (`handlers.ts`) would skip holders on those paths; the claim is still recorded, so the markers can still show who is in there, quietly.
+- Risk: a real clash in a shared file goes unwarned. 3.4's test-combine catches it before merging.
+- Useful: high. Hard: low. Step 4.
+
+**3. Stale view: an agent plans from its memory of a file that changed since.** At the start of each turn the agent is told which files it touched or planned changed since its last turn, by whom, and whether merged, and to re-read them.
+
+- Have: the files a thread touched (each turn's diff), the files it planned (its claims and the `team.plan` activity), and other threads' automatic notes with file hashes and commits. Freshness (D7, `checkFreshness`) already compares a note's hashes with the caller's copy, but only inside `team_memory_search`. `lateOverlaps` tells an agent about new claims once, not about changed files. Nothing compares "my files" between my turns.
+- Build: at turn start, for this thread's touched and planned files, compare the hash at the end of its last turn with the hash now (same checkout), and look for other threads' notes naming those files since then (worktrees: "Sara changed `login.ts`, not merged into your copy" or "merged into main"). It must be a separate line added only when something changed: the briefing is fixed text under 150 tokens, and Cursor, Grok and Antigravity add it to every message.
+- Solo: solo chats share the checkout today (the built-in default is `local`; only `t3 team init` turns worktrees on), so one chat can change a file under another, and that chat's turn diff then shows the other chat's edits too. Should solo parallel chats get their own worktree by default? I would not make it the default for every chat: a worktree means the person merges their own chats, waits for setup scripts, and uses disk, which is a lot for one chat at a time. I would offer it at the moment it matters: when a chat starts while another chat of the same project is running or holds claims, the composer offers "Give this chat its own copy". Your call.
+- Useful: high, solo and team. Hard: medium. Step 4.
+
+**4. Breaks without file overlap** (a function renamed in one branch and still called in another).
+
+- Have: nothing for 3.4 yet. `merge-tree` is not used anywhere in the server.
+- Build: the background test-combine merges the active branches in a temporary worktree (`git merge-tree` first, which needs no checkout), then runs the project's typecheck and tests on the result. The command has to come from somewhere: a field in `t3.json` or the rulebook. It is heavy: dependencies to install, minutes of CPU on a laptop that already runs out of memory. So one at a time, only for branches that changed, when the machine is idle or on request.
+- Useful: high, though rare. Hard: high. Step 5.
+
+**5. Duplicate work in different files** (two people writing the same helper).
+
+- Have: tasks with titles and notes; `team_status` lists open tasks; `team_plan` takes a `note`; keyword matching exists for memory search (`queryTerms`, `rankMemory` in `memory.ts`).
+- Build, cheap: `team_plan`'s answer lists the other open tasks whose title matches the plan's note, or whose claims are in the same folders, and says "if one of these already does part of your task, tell the user". The agent judges better than keyword matching does. Richer later: "agents agree between themselves" (section 5).
+- Useful: medium. Hard: low for the cheap version. Step 4.
+
+**6. Merge order: suggest who merges first and update the other copy.**
+
+- Have: linked pull requests per thread (`visibleThreadPullRequests`), merges seen from T3 and from GitHub (`TeamClaimAutoRelease`), merging from T3 (`PullRequestService`). "Wait" (3c) will already rebase a thread when the holder's claim is released.
+- Build: when two branches overlap, suggest the one that is ready first (pull request open, checks green, smaller diff) and, after it merges, rebase the other with the same code as "Wait".
+- Useful: medium. Hard: medium, mostly shared with Wait. Step 5.
+
+**7. Someone working outside the app.**
+
+- Can still see: anything pushed to GitHub: branches and their diffs against the base (a fetch), pull requests (`gh`), commits on main (freshness already compares files with the copy). Cannot see: unpushed edits, and no claims, since only the app makes them.
+- Build: with step 5's fetch of active branches, show "a pushed branch changes this file" as a weaker mark, with the commit author's name, for branches no claim covers.
+- Useful: medium (classmates who never install it). Hard: medium. Step 5.
+
+**First two to build:** the "Shared files" list (2), because it cuts the false alarms the new warning card will raise, and it is small; then the stale-view line at turn start (3), because it helps every user, solo included, and uses data we already keep. Test-combine (4) is the most valuable of the rest, but it is step 5's main work.
+
 ### Rules
 
 - Never block. Always inform and offer choices.
