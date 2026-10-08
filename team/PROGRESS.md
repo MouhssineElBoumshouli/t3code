@@ -2,6 +2,31 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-08 — PREVENTION_PLAN.md: how the agent stops for the warning card (research)
+
+**What changed**
+
+- New `team/PREVENTION_PLAN.md` (research only, for your review before slice 3). In short: one mechanism for every provider, because all six mount T3's own MCP server. `team_plan` holds the tool call when a planned file is held elsewhere, shows the card, and answers with your choice. Per provider: Claude can hold (SDK MCP timeout effectively unbounded); Codex can hold once T3 passes `tool_timeout_sec`; OpenCode and the ACP agents only briefly. Fallback: at a per-provider cap the agent is told to end its turn, and the click starts a normal turn with the choice. Also covered: what each of the five choices does in the code, the pause in the middle (Claude `PreToolUse` hook, Antigravity's writes through T3, Codex/Cursor/Grok/OpenCode interception points with an interrupt-after fallback), what is testable without a provider, and the build order (3a hold + "another way" + "go anyway", 3b guard, 3c wait, 3d ask and build on top).
+
+**Files touched**
+
+- `team/PREVENTION_PLAN.md` (new).
+
+**How it was checked**
+
+- Read in the code: every adapter's MCP wiring, `PreviewAutomationBroker` (the hold pattern), `ProviderCommandReactor` (how approvals and user input route back to providers), `TeamClaimAutoRelease`, the timeline's work-log entries. Read in the installed packages: the Claude Agent SDK 0.3.276 types (`hooks`, `PreToolUse` `deny`, MCP tool timeout, `onElicitation`), the Codex app-server schema (hooks, `mcp_tool` handler, hook trust states) for codex-cli 0.160.0.
+- Nothing in it was run. The "Sure?" column says which parts need a live run.
+
+**What's left**
+
+- Your review. Slice 3 is not started.
+
+**Unsure about / notes**
+
+- About 1,600 words, a bit over the two pages asked for, mostly the two tables.
+- Codex hooks: the schema shows them; whether hooks passed with `-c` run without the user trusting them is not known.
+- OpenCode's tool-call timeout: not found in the code; 60 s is the MCP TypeScript SDK default, assumed.
+
 ## 2026-10-08 — The dev login override stays on local origins; holder names in the row and tab tooltips
 
 **What changed**
