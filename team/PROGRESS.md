@@ -30,6 +30,24 @@ Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 - Checked: `vp test run src/team/ src/mcp/toolkits/team/ src/cli/team.test.ts src/provider/Layers/CodexTeamBriefing.test.ts src/auth/ChatGptRpcScopes.test.ts`: 21 files, 188 passed. New `TeamGuard.test.ts` (5): the pure rule; refusal by full and relative path, the Claude hook's deny output and its silence on a free file, allowed once this chat claims; the after-the-turn card (only the held file, `edited`, its turn), refusal while it waits, no second card for the same file, "Undo" starts a turn with the undo text, "Keep the change" starts none and is not asked again; the shared-checkout case both ways. `tsc` server, web, client-runtime: 0 errors. Lint: no new warnings.
 - Not tested automatically: the Antigravity refusal (it calls the same tested check; the adapter path was not run).
 
+**Step 3, live self-test** (pictures: branch `test-screenshots`, `2026-10-08-guard-slice3b/`, 17 PNGs + NOTES.md, commit 8e670bb22)
+
+- Fresh `~/code/team-demo9` (seed script, rulebook claim line removed) and `~/code/solo-demo4`. Codex GPT-6-Astra, Claude Sonnet 5.5.
+- **Step 1 live:** every hold showed "Waiting for your input" in the timeline (no "Working for"/"Thinking") and "Input" in the sidebar, running turn or ended turn (pictures 01, 02, 04, 06, 09, 12). After the click the status went back to "Working" or cleared.
+- **Claude hook live, team:** told to call Edit on Omar's `session.ts` without team tools: refused with the reason (server log "Team guard refused an edit"), file unchanged; Claude then called `team_plan`, card, "Go anyway", edit landed (05 to 07).
+- **After the turn, Bash edit, Claude solo:** chat B (Codex) held `format.ts`; a Claude chat changed it with a python3 heredoc and no team tools; the card "Another chat holds a file this chat changed" appeared after the turn (09). "Undo it" undid only its own line and kept chat B's (10).
+- **Codex:** in all 3 Codex runs it planned first, even when told to skip team tools (01, 02), so Codex never made an unplanned edit. The after-the-turn card on a Codex chat was checked by changing `format.ts` by hand during its `sleep 40` turn (14); "Keep the change" started no turn (15). Codex's own shell edit after "Go anyway" (03) gave no second card, as it should.
+- **Two bugs found live and fixed** (commit f994a2f4d, tests updated): (1) Claude Code drops a held MCP request after 60 s (HTTP 499 at 60001 ms, twice); Claude saw "timed out" and called `team_plan` again (16). The 24 h cap in PREVENTION_PLAN.md was wrong: Claude's cap is now 50 s, so it gets "Paused" and ends its turn; live after the fix: answered at 50045 ms, no 499, Claude ended its turn, and the click went out as a new message (12, 13). The plan's table row is rewritten. (2) "Undo it, find another way" asked for an undo that edits the held file, so Claude was sent back to `team_plan` and stuck. Now the guard lets this chat edit those files for the undo (and its diff asks nothing), and the message says no `team_plan` is needed for the undo and not to restore the whole file. Live after the fix: picture 10.
+- Not run live: Antigravity, Cursor, Grok, OpenCode; a teammate on GitHub.
+- Dev server and browser stopped after (ports 13773 and 5733 free).
+
+**Unsure about / notes (step 3)**
+
+- With Claude now capped at 50 s, every Claude card ends its turn within a minute and the choice arrives as a new message. That costs one more turn than a held call would. Raising Claude Code's own limit (its `MCP_TOOL_TIMEOUT` setting) might allow a longer hold; not tried.
+- After "Undo it", the chat may edit those files for the rest of its life without the guard (only the instruction keeps it to the undo).
+- The after-the-turn card names every holder chat, including chats that only planned the file; with three chats in one checkout the holder line gets long (14).
+- An agent told to skip team tools can still edit through Bash; the guard then catches it only after the turn, as designed.
+
 ## 2026-10-08 — Live check: agents call team_plan on their own; 3a self-test live; two bugs fixed; token research
 
 **What changed**
