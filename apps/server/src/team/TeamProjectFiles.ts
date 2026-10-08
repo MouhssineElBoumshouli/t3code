@@ -94,6 +94,10 @@ const WORKTREE_VALUE = "worktree";
 /** The template's "Do not touch" example line; `team_status` leaves it out. */
 export const TEAM_RULEBOOK_DO_NOT_TOUCH_EXAMPLE = "Files or folders that need a human first.";
 
+/** The template's "Shared files" example line; it names no file. */
+export const TEAM_RULEBOOK_SHARED_FILES_EXAMPLE =
+  "Files everyone adds to, like a routes list; no overlap warnings for these.";
+
 export const TEAM_RULEBOOK_TEMPLATE = `# Project rulebook
 
 Keep this file under ${TEAM_RULEBOOK_MAX_WORDS.toLocaleString("en-US")} words. Every agent on the team reads all of it before its first change, so cut anything that is not a rule.
@@ -114,6 +118,10 @@ One or two sentences.
 ## Do not touch
 
 - ${TEAM_RULEBOOK_DO_NOT_TOUCH_EXAMPLE}
+
+## Shared files
+
+- ${TEAM_RULEBOOK_SHARED_FILES_EXAMPLE}
 
 ## Decisions
 

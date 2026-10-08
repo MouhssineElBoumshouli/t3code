@@ -28,6 +28,7 @@ import * as Stream from "effect/Stream";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { makeTeamResolver, type TeamContext } from "../mcp/toolkits/team/resolve.ts";
+import { isSharedPath, readSharedFiles } from "../mcp/toolkits/team/rulebook.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -80,7 +81,13 @@ export const make = Effect.gen(function* () {
   /** The paths in `paths` someone else holds and this thread did not plan, claim, go ahead on or undo. */
   const heldFor = (context: TeamContext, paths: ReadonlyArray<TeamPath>) =>
     Effect.gen(function* () {
-      if (paths.length === 0) return [];
+      // The rulebook's shared files never stop anyone (VISION.md 3.6).
+      const shared = yield* readSharedFiles(context).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      );
+      const checked = paths.filter((file) => !isSharedPath(file, shared));
+      if (checked.length === 0) return [];
       const teamId = context.teamFile.teamId;
       const [claims, members, wentAhead, undo] = yield* Effect.all([
         teams.listActiveClaims(teamId),
@@ -89,7 +96,7 @@ export const make = Effect.gen(function* () {
         choices.undoPaths(context.thread.threadId),
       ]);
       return heldElsewhere({
-        paths,
+        paths: checked,
         claims,
         viewer: { thread: context.thread, memberId: context.member.memberId, solo: context.solo },
         names: new Map(members.map((member) => [member.memberId, member.displayName])),

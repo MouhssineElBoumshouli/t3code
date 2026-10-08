@@ -425,6 +425,26 @@ describe("TeamGuard", () => {
       }).pipe(Effect.scoped),
   );
 
+  it.effect("never stops a shared file from the rulebook", () =>
+    Effect.gen(function* () {
+      const { root, guard, cards, omarClaims, turnDiff } = yield* makeHarness();
+      NodeFS.writeFileSync(
+        NodePath.join(root, ".team", "rulebook.md"),
+        "# Rules\n\n## Shared files\n\n- `src/api/routes.ts`: everyone adds routes.\n",
+      );
+      yield* omarClaims(["src/api/routes.ts", "src/auth/"]);
+      assert.isUndefined(
+        yield* guard.checkEdit(THREAD_A, [NodePath.join(root, "src/api/routes.ts")]),
+      );
+      yield* turnDiff(THREAD_A, "turn-a", ["src/api/routes.ts", "src/auth/login.ts"], 12);
+      const [card] = yield* cards;
+      assert.deepEqual(
+        card?.files.map((file) => file.path),
+        ["src/auth/login.ts"],
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("checks nothing outside a team", () =>
     Effect.gen(function* () {
       assert.isUndefined(yield* checkTeamEdit(THREAD_A, ["src/auth/login.ts"]));

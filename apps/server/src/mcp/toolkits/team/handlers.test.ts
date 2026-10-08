@@ -1263,6 +1263,38 @@ describe("team toolkit", () => {
       }),
   );
 
+  it.effect("does not ask about a shared file from the rulebook, and says so", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      const { call, dispatched } = yield* makeHarness({ workspaceRoot: root });
+      writeFile(
+        root,
+        ".team/rulebook.md",
+        "# Rules\n\n## Shared files\n\n- `src/api/routes.ts`: everyone adds routes.\n",
+      );
+      const sara = yield* teammate("Sara");
+      yield* sara.openTeam({ teamFile: TEAM_FILE, checkout: root });
+      yield* sara.claimPaths({
+        teamId: TEAM_ID,
+        memberId: TeamMemberId.make("Sara"),
+        thread: { environmentId: EnvironmentId.make("Sara-server"), threadId: THREAD_C },
+        paths: ["src/api/routes.ts"],
+      });
+
+      const plan = inTeam(yield* call("team_plan", { files: ["src/api/routes.ts"] }));
+      assert.notProperty(plan, "choice");
+      assert.equal(
+        plan.message,
+        "Planned and claimed 1 file; the user sees the plan. Others also hold `src/api/routes.ts`, shared files in the rulebook: no need to ask; keep your change there small.",
+      );
+      // The plan card still shows who is in there; no warning card.
+      const kinds = (yield* Ref.get(dispatched)).flatMap((command) =>
+        command.type === "thread.activity.append" ? [command.activity.kind] : [],
+      );
+      assert.deepEqual(kinds, ["team.plan"]);
+    }),
+  );
+
   it("holds each provider's call only as long as it waits", () => {
     assert.equal(Duration.toMillis(TeamChoices.holdCap("claudeAgent")), 50 * 1000);
     assert.equal(Duration.toMillis(TeamChoices.holdCap("codex")), 55 * 60 * 1000);

@@ -1,7 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import { TEAM_RULEBOOK_TEMPLATE } from "../../../team/TeamProjectFiles.ts";
-import { readDoNotTouchSection, TEAM_DO_NOT_TOUCH_LIMITS } from "./rulebook.ts";
+import {
+  isSharedPath,
+  readDoNotTouchSection,
+  readSharedFilesSection,
+  TEAM_DO_NOT_TOUCH_LIMITS,
+} from "./rulebook.ts";
 
 const RULEBOOK_PATH = ".team/rulebook.md";
 
@@ -98,5 +103,32 @@ describe("readDoNotTouchSection", () => {
       list.at(-1),
       `+${count - TEAM_DO_NOT_TOUCH_LIMITS.items + 1} more in ../../.team/rulebook.md`,
     );
+  });
+});
+
+describe("readSharedFilesSection", () => {
+  it("reads each item's path: its first code span, else its first word", () => {
+    const markdown = rulebook(
+      [
+        "## Shared files",
+        "",
+        "- `src/api/routes.ts`: everyone adds routes here.",
+        "- ./src/styles/, the global styles",
+        "- `config\\app.json`",
+      ].join("\n"),
+    );
+    const shared = readSharedFilesSection(markdown);
+    assert.deepEqual(shared, ["src/api/routes.ts", "src/styles", "config/app.json"]);
+    assert.isTrue(isSharedPath("src/api/routes.ts", shared));
+    assert.isTrue(isSharedPath("src/styles/Theme.css", shared));
+    assert.isTrue(isSharedPath("SRC/API/routes.ts", shared));
+    // A folder holding a shared file is not shared itself, nor is a look-alike.
+    assert.isFalse(isSharedPath("src/api", shared));
+    assert.isFalse(isSharedPath("src/styles-old/a.css", shared));
+  });
+
+  it("gives nothing without the section, or for the template's example line", () => {
+    assert.deepEqual(readSharedFilesSection(rulebook("")), []);
+    assert.deepEqual(readSharedFilesSection(TEAM_RULEBOOK_TEMPLATE), []);
   });
 });

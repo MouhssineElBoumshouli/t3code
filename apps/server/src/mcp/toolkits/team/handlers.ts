@@ -40,7 +40,7 @@ import {
   TEAM_MEMORY_LIMITS,
 } from "./memory.ts";
 import { toProjectPaths } from "./paths.ts";
-import { readDoNotTouch } from "./rulebook.ts";
+import { isSharedPath, readDoNotTouch, readSharedFiles } from "./rulebook.ts";
 import { fromService, makeTeamResolver, type TeamContext } from "./resolve.ts";
 import {
   type NotInTeamResult,
@@ -460,9 +460,15 @@ const make = Effect.gen(function* () {
             ...(yield* lateOverlapsOf(context)),
           };
           // Slice 3a: a held file stops the agent until the user picks a choice on the card.
-          // Files the user already chose "Go anyway" for in this chat do not ask again.
+          // Files the user already chose "Go anyway" for in this chat do not ask again,
+          // and the rulebook's shared files never ask (VISION.md 3.6).
           const wentAhead = yield* choices.wentAhead(context.thread.threadId);
-          const held = files.filter((file) => file.holders.length > 0 && !wentAhead.has(file.path));
+          const shared = yield* readSharedFiles(context).pipe(withFiles);
+          const othersHold = files.filter((file) => file.holders.length > 0);
+          const sharedHeld = othersHold.filter((file) => isSharedPath(file.path, shared));
+          const held = othersHold.filter(
+            (file) => !wentAhead.has(file.path) && !isSharedPath(file.path, shared),
+          );
           if (held.length > 0) {
             const { providerInstanceId } = yield* McpInvocationContext.McpInvocationContext;
             const outcome = yield* choices.ask({ context, files: held, providerInstanceId });
@@ -478,7 +484,17 @@ const make = Effect.gen(function* () {
               ? `${CLAIM_NOT_SHARED_MESSAGE}${overlapText === null ? "" : ` Already known: ${overlapText}`}`
               : overlapText === null
                 ? `${planned} No overlaps.`
-                : `${planned} The user already chose to go ahead on the files others hold.`,
+                : [
+                    planned,
+                    ...(sharedHeld.length === othersHold.length
+                      ? []
+                      : ["The user already chose to go ahead on the files others hold."]),
+                    ...(sharedHeld.length === 0
+                      ? []
+                      : [
+                          `Others also hold ${sharedHeld.map((file) => `\`${file.path}\``).join(", ")}, shared files in the rulebook: no need to ask; keep your change there small.`,
+                        ]),
+                  ].join(" "),
           } satisfies TeamPlanResult;
         }),
       ),

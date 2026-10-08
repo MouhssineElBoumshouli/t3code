@@ -2,7 +2,7 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
-## 2026-10-08 — Honest status while the card waits; token fixes; the guard (3b)
+## 2026-10-08 — Honest status while the card waits; token fixes; the guard (3b); shared files
 
 **Step 1: "Awaiting Input" while the card waits**
 
@@ -47,6 +47,14 @@ Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 - After "Undo it", the chat may edit those files for the rest of its life without the guard (only the instruction keeps it to the undo).
 - The after-the-turn card names every holder chat, including chats that only planned the file; with three chats in one checkout the holder line gets long (14).
 - An agent told to skip team tools can still edit through Bash; the guard then catches it only after the turn, as designed.
+
+**Step 4: the "Shared files" list (VISION.md 3.6, point 2)**
+
+- `.team/rulebook.md` can have a `## Shared files` section; each item's first `code span` (else its first word) is a file or folder. Someone else holding one of those never raises the warning card (`team_plan`) or the guard (edit refusal, after-the-turn card). The claim is still recorded, so the plan card and the markers still show who is in there. `team_plan` then says "Others also hold `src/api/routes.ts`, shared files in the rulebook: no need to ask; keep your change there small."
+- The `t3 team init` template gets the section with an example line that names no file (left out when read).
+- Files touched: `mcp/toolkits/team/rulebook.ts` (one section reader for both lists, `readSharedFiles`, `isSharedPath`) and its test, `mcp/toolkits/team/handlers.ts` (+ test), `team/TeamGuard.ts` (+ test), `team/TeamProjectFiles.ts` (template). No upstream file.
+- Checked: `vp test run src/team/ src/mcp/toolkits/team/ src/cli/team.test.ts src/provider/Layers/CodexTeamBriefing.test.ts src/auth/ChatGptRpcScopes.test.ts`: 21 files, 192 passed. New: the parser (code span, first word, folder, Windows slashes, case, a folder holding a shared file is not shared, template gives nothing); `team_plan` on a shared file Sara holds: no card, only the plan card, the message above; the guard lets the shared file through and the after-the-turn card names only the non-shared held file. `tsc` server 0 errors; lint clean.
+- Not live-tested (no dev run after this step). A real clash inside a shared file is not warned; VISION.md 3.4's test-combine is meant to catch it before merging.
 
 ## 2026-10-08 — Live check: agents call team_plan on their own; 3a self-test live; two bugs fixed; token research
 
