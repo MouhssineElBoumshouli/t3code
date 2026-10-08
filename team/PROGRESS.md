@@ -2,6 +2,61 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-08 — Live check: agents call team_plan on their own; 3a self-test live; one bug fixed
+
+**What changed**
+
+- **Live check (step 1).** Normal tasks on held files, never naming team_plan or claims, in `~/code/team-demo8` (team) and a fresh `~/code/solo-demo3` (solo). Each run: did the agent call `team_plan` before its first edit?
+
+  | Run                                                          | Provider | Mode | Briefing | team_status then team_plan before editing?                                                |
+  | ------------------------------------------------------------ | -------- | ---- | -------- | ----------------------------------------------------------------------------------------- |
+  | "Add a GET /pins/count route" (routes.ts, Sara)              | Codex    | team | old      | yes                                                                                       |
+  | "Sessions should last 1 day instead of 7" (session.ts, Omar) | Claude   | team | old      | yes                                                                                       |
+  | "Show each note's date" (format.ts, nobody yet)              | Claude   | solo | old      | yes                                                                                       |
+  | "Cut note text to 40 characters" (format.ts, chat A)         | Codex    | solo | old      | yes                                                                                       |
+  | "Number the list from 1" (format.ts, chats A, B)             | Claude   | solo | old      | **no**: no team call at all; edited format.ts and cli.ts with a `python3` heredoc in Bash |
+  | "Show (empty) for notes with no text"                        | Claude   | solo | new      | yes                                                                                       |
+  | "Put a * in front of today's notes"                          | Codex    | solo | new      | yes                                                                                       |
+  | "Search ignores a leading #" (search.ts, Sara)               | Claude   | team | new      | yes                                                                                       |
+
+  So 7 of 8; the miss was Claude, solo, on a small edit. The run had the briefing and the tools (server log "Team briefing added"; the tools were in its list).
+
+- **Briefing fix** (both briefings): "Before any edit, even a small one, call team_status, then team_plan the files you will change." and "Follow team_plan's answer; it may wait for the user." (replaces "if it reports overlaps, tell the user": team_plan now holds instead). The solo one opens with why: "Other chats of this user may be changing this project too." Team briefing still about 148 tokens with the longest names (budget 150); solo down from about 133 to 126. Tool descriptions unchanged. Three runs after the change: all planned first (table). Few runs, so this is a sign, not proof.
+- **Bug found and fixed (3a fallback).** Stop while the card holds Codex, then click: the click went to the held call (`delivery: "held"`), because Codex does not cancel the MCP call when its turn stops. Nobody read the answer: no turn started, and the card said "sent to the agent" (picture 09). Now a held call counts only while the turn that made it is still running (the waiter keeps its turn id); otherwise the stale call is freed with "not yet" and the choice goes out as a new turn. Live after the fix: Stop then "Find another way" was "sent as a new message" and the agent re-planned (picture 12). And a second case: Codex ended a turn on its own while its `team_plan` call was still open; the click then also started a new turn (picture 13).
+- **Test:** `team.choose` is refused to an `orchestration:read` session (real server, `ChatGptRpcScopes.test.ts`): `EnvironmentAuthorizationError`, required scope `orchestration:operate`.
+
+**3a self-test, live (step 2)**: what I clicked and saw
+
+- Codex, team: card held; still held at 2 min (past the old 60 s, so the raised `tool_timeout_sec` works); "Find another way": Codex re-planned with `src/server.ts` (nobody holds it) and left routes.ts alone (pictures 01 to 03).
+- Claude, team: card held; "Go anyway": session.ts edited, team activity "mouhssine went ahead on src/auth/session.ts, held by Omar." pushed to the state ref (04 to 06).
+- Codex, solo: "Another chat holds a file", chip with the other chat's title, only "Wait for that chat" coming soon (07); the Stop bug above (08, 09) and the fix (12, 13).
+- Claude, solo: held with two holder chats; "Find another way": re-planned with `src/cli.ts`, edited only that (10, 11).
+- Light and dark: both cards read well in both (01/02, 04/05).
+- Screenshots: branch `test-screenshots`, folder `2026-10-08-ui-slice3a/` (13 pictures + NOTES.md), commit 7a00653fa.
+
+**Files touched**
+
+- `apps/server/src/team/TeamChoices.ts` (the fix), `apps/server/src/mcp/toolkits/team/handlers.test.ts` (stop-then-click test; the harness can stop a thread's turn), `apps/server/src/auth/ChatGptRpcScopes.test.ts`, `apps/server/src/team/TeamBriefing.ts` (+ test).
+
+**How it was checked**
+
+- `apps/server`: `vp test run src/team/ src/mcp/toolkits/team/ src/cli/team.test.ts src/provider/Layers/CodexTeamBriefing.test.ts src/auth/ChatGptRpcScopes.test.ts`: 19 files, **180 passed**. The new stop-then-click test fails without the fix (`{ delivery: 'held' }` instead of `'turn'`).
+- `tsc --noEmit` in `apps/server`: 0 errors. `vp lint` and `vp fmt` on the 5 changed files: clean.
+- Live runs as above; dev server and browser stopped after (ports free).
+
+**What's left / findings not fixed**
+
+- **"Working" while the card waits for the user.** During a hold the sidebar says "Working 2m" and the timeline "Thinking", but the agent waits on the user. The honest state is the sidebar's "input" status. It comes from `hasPendingUserInput`, which the projection derives from `user-input.*` activities (`ProjectionPipeline.ts`, its SQL filter and the backfill migration), and it also drives settling and queued sends. Making an open card count there is an upstream change in several places: your call before I do it.
+- Codex keeps thinking while its call is held, and can end its turn by itself with the call still open (seen once, after about 3 min). The fix covers the click; the agent's own text then says "waiting", which is right.
+- Claude calls deferred MCP tools once with empty arguments before loading their schema: the server logs `Invalid parameters for tool 'team_plan': Missing key` as ERROR, then the real call works. Noise only.
+- Claude's miss edited files through Bash (`python3` heredoc), not Edit or Write. Slice 3b's planned PreToolUse hook on Edit/Write would not catch that; only the turn diff would.
+- Claude said its handoff in the shared solo checkout recorded `files: []`. Not checked yet.
+
+**Unsure about / notes**
+
+- 8 live runs is small; Claude's skip may come back on other small tasks.
+- Dev home `~/.t3-dev` now has projects team-demo8 and solo-demo3 with these chats.
+
 ## 2026-10-08 — The warning card, slice 3a (PREVENTION_PLAN.md section 5): code and tests; live runs not done
 
 **What changed**
