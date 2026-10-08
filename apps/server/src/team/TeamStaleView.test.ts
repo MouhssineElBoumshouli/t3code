@@ -266,6 +266,35 @@ describe("TeamStaleView", () => {
       }).pipe(Effect.scoped),
   );
 
+  it.effect("names the author of a merged commit that no note holds", () =>
+    Effect.gen(function* () {
+      const { root, read, endTurnOfA } = yield* makeHarness(true);
+      writeFile(root, "src/a.ts", "a2\n");
+      yield* endTurnOfA(["src/a.ts"]);
+      // Sara's work is pulled into this copy (a merge or a rebase): a commit she wrote.
+      writeFile(root, "src/a.ts", "a-sara\n");
+      git(root, "add", "-A");
+      git(root, "commit", "--quiet", "--author=Sara <sara@example.com>", "-m", "Sara: a");
+      // A hand edit after it is still nobody's.
+      writeFile(root, "src/c.ts", "c2\n");
+      yield* endTurnOfA(["src/c.ts"]);
+      writeFile(root, "src/c.ts", "c3\n");
+      assert.equal(
+        yield* read(THREAD_A),
+        "<team_changes>Changed since your last turn: `src/c.ts` (outside this chat, in your copy). Re-read them before editing them.</team_changes>",
+      );
+      writeFile(root, "src/c.ts", "c2\n");
+      yield* endTurnOfA([]);
+      writeFile(root, "src/a.ts", "a-sara-2\n");
+      git(root, "add", "-A");
+      git(root, "commit", "--quiet", "--author=Sara <sara@example.com>", "-m", "Sara: a again");
+      assert.equal(
+        yield* read(THREAD_A),
+        "<team_changes>Changed since your last turn: `src/a.ts` (by Sara, in your copy). Re-read them before editing them.</team_changes>",
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("works solo: another chat's edit in the shared checkout", () =>
     Effect.gen(function* () {
       const { root, teams, memberId, read, endTurnOfA, noteBy } = yield* makeHarness(false);

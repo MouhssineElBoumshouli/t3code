@@ -8,7 +8,9 @@
  *   checkpoint ref (a commit of the whole working tree).
  * - A file whose content here differs from that is named, with who changed
  *   it: the other thread whose note (automatic or handoff) holds exactly this
- *   content, else whoever else holds the file, else "outside this chat".
+ *   content, else the author of the commit that made this content (a
+ *   teammate's merged work pulled in), else whoever else holds the file, else
+ *   "outside this chat".
  * - A file unchanged here that a teammate's note, written since that turn,
  *   holds in another version not in this copy's history is named as "not
  *   merged into your copy".
@@ -116,6 +118,29 @@ export const make = Effect.gen(function* () {
         }),
       );
 
+  /** The author of the newest commit in HEAD's history that made `blob` the file's content. */
+  const committedBy = (repoRoot: string, repoPath: string, blob: string) =>
+    git
+      .execute({
+        operation: "TeamStaleView.author",
+        cwd: repoRoot,
+        args: [
+          "log",
+          "-1",
+          "--format=%an",
+          `--find-object=${blob}`,
+          "HEAD",
+          "--",
+          `:(literal)${repoPath}`,
+        ],
+        allowNonZeroExit: true,
+        timeoutMs: 1_000,
+      })
+      .pipe(
+        Effect.map((result) => (result.exitCode === 0 ? result.stdout.trim() : "")),
+        Effect.orElseSucceed(() => ""),
+      );
+
   const staleFiles = (context: TeamContext) =>
     Effect.gen(function* () {
       const threadId = context.thread.threadId;
@@ -171,12 +196,18 @@ export const make = Effect.gen(function* () {
         const noted = others.filter((note) => note.fileHashes?.[file] !== undefined);
         if (then !== current) {
           const authors = noted.filter((note) => note.fileHashes?.[file] === current).map(who);
+          const author =
+            authors.length > 0 || current === null
+              ? ""
+              : yield* committedBy(repoRoot, toRepo(file), current);
           const by =
             authors.length > 0
               ? authors
-              : holdersOf(file, otherClaims, viewer, memberNames).map((holder) =>
-                  holder.kind === "member" ? holder.name : "another chat",
-                );
+              : author.length > 0
+                ? [author]
+                : holdersOf(file, otherClaims, viewer, memberNames).map((holder) =>
+                    holder.kind === "member" ? holder.name : "another chat",
+                  );
           stale.push({ path: file, by: [...new Set(by)], inCopy: true });
           continue;
         }

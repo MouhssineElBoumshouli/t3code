@@ -62,6 +62,13 @@ export const TeamChoiceMadePayload = Schema.Struct({
 });
 export type TeamChoiceMadePayload = typeof TeamChoiceMadePayload.Type;
 
+/**
+ * A message T3 sent on the user's behalf to carry a card's outcome (a choice,
+ * the end of a wait, a teammate's answer): its id starts with the card's id.
+ * Clients draw it as coming from the app, not as typed by the user.
+ */
+export const isTeamAppMessageId = (messageId: string) => messageId.startsWith("team-choice:");
+
 /** "1 planned file is held: your choice"; "1 changed file is held: …" for an edited card. */
 export const teamChoiceSummary = (fileCount: number, edited = false) =>
   `${fileCount} ${edited ? "changed" : "planned"} ${fileCount === 1 ? "file is" : "files are"} held: your choice`;

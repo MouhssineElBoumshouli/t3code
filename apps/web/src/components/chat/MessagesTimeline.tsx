@@ -16,6 +16,7 @@ import {
   COMPOSER_CONTEXT_KINDS,
   type AssistantCitation,
   type EnvironmentId,
+  isTeamAppMessageId, // team-layer
   type MessageId,
   type ScopedThreadRef,
   type ServerProviderSkill,
@@ -155,6 +156,7 @@ import {
 import { ProposedPlanCard } from "./ProposedPlanCard";
 // team-layer: the plan card and the warning card (team/UI_PLAN.md slices 2 and 3)
 import type { TeamCard } from "@t3tools/client-runtime/work-log/team-cards";
+import { TeamAppMessage } from "../team/TeamAppMessage";
 import { TeamChoiceCard } from "../team/TeamChoiceCard";
 import { TeamPlanCard } from "../team/TeamPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
@@ -1741,7 +1743,14 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "work-toggle" ? <WorkGroupToggleTimelineRow row={row} /> : null}
       {row.kind === "turn-fold" ? <TurnFoldTimelineRow row={row} /> : null}
       {row.kind === "context-compaction" ? <ContextCompactionTimelineRow row={row} /> : null}
-      {row.kind === "message" && row.message.role === "user" ? <UserTimelineRow row={row} /> : null}
+      {row.kind === "message" && row.message.role === "user" ? (
+        // team-layer: a message T3 sent for a warning card is drawn as the app's
+        isTeamAppMessageId(row.message.id) ? (
+          <TeamAppMessage message={row.message} />
+        ) : (
+          <UserTimelineRow row={row} />
+        )
+      ) : null}
       {row.kind === "message" && row.message.role === "assistant" ? (
         <AssistantTimelineRow row={row} />
       ) : null}

@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
+  isTeamAppMessageId,
   ProjectId,
   ProviderInstanceId,
   TEAM_CHOICE_ACTIVITY_KIND,
@@ -217,6 +218,15 @@ const makeHarness = Effect.fn("makeTeamWaitHarness")(function* (team: boolean) {
       ),
     ),
   );
+  /** Every turn T3 started carries a message clients draw as the app's. */
+  const turnsFromApp = Ref.get(dispatched).pipe(
+    Effect.map((commands) =>
+      commands.every(
+        (command) =>
+          command.type !== "thread.turn.start" || isTeamAppMessageId(command.message.messageId),
+      ),
+    ),
+  );
   const cardCount = Ref.get(dispatched).pipe(
     Effect.map(
       (commands) =>
@@ -240,6 +250,7 @@ const makeHarness = Effect.fn("makeTeamWaitHarness")(function* (team: boolean) {
     plan,
     made,
     turnStarts,
+    turnsFromApp,
     cardCount,
     turns,
     endTurn,
@@ -284,7 +295,11 @@ const omarHolding = Effect.fn("omarHolding")(function* (
       // His poller would push it within 15 s.
       yield* omar.sync(TEAM_ID);
     });
-  return { mergeAndRelease };
+  /** He archives his chat without merging: his claim is released, nothing lands on `main`. */
+  const releaseOnly = omar
+    .releaseThreadClaims({ thread, reason: "its chat was archived" })
+    .pipe(Effect.andThen(omar.sync(TEAM_ID)));
+  return { mergeAndRelease, releaseOnly };
 }, Effect.provide(NodeServices.layer));
 
 const omarHolds = (path: string): TeamPlanFile => ({
@@ -345,9 +360,28 @@ describe("TeamWait", () => {
         (yield* h.made(choiceId)).map((record) => record.wait),
         ["waiting", "cancelled", "waiting", "done"],
       );
+      assert.isTrue(yield* h.turnsFromApp);
       // Told once.
       assert.deepEqual(yield* h.checkWaits, []);
       assert.lengthOf(yield* h.turnStarts, 1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect('does not say "with their work" when Omar lets go without merging', () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness(true);
+      const omar = yield* omarHolding(h.root, [LOGIN]);
+      yield* h.teams.refresh(TEAM_ID);
+      const { call, choiceId } = yield* h.plan([omarHolds(LOGIN)]);
+      yield* h.choices.choose({ threadId: THREAD_A, choiceId, choice: "wait" });
+      yield* Fiber.join(call);
+      yield* h.endTurn;
+      yield* omar.releaseOnly;
+      yield* h.teams.refresh(TEAM_ID);
+      assert.deepEqual(yield* h.checkWaits, [choiceId]);
+      assert.deepEqual(yield* h.turnStarts, [
+        "Done waiting: Omar let go of `src/auth/login.ts` without merging a change to it. Your copy is now on top of `origin/main`. Re-read it, then continue the task. Call team_plan before editing.",
+      ]);
     }).pipe(Effect.scoped),
   );
 

@@ -167,15 +167,21 @@ const itOrThem = (files: ReadonlyArray<unknown>) => (files.length === 1 ? "it" :
 
 /**
  * The turn that ends a wait. `copy`: "updated" when this chat's worktree was
- * moved on top of the holder's merged work, "unknown" when it was not touched.
+ * moved on top of the base (`touched`: the commits it got change the files,
+ * the holder's work merged), "unknown" when it was not touched.
  */
 export const waitDoneInstruction = (
   files: ReadonlyArray<TeamPlanFile>,
-  copy: { readonly status: "updated"; readonly base: string } | { readonly status: "unknown" },
+  copy:
+    | { readonly status: "updated"; readonly base: string; readonly touched: boolean }
+    | { readonly status: "unknown" },
 ) => {
   const paths = quoted(files.map((file) => file.path));
   const who = waiteeWords(files);
   const it = itOrThem(files);
+  if (copy.status === "updated" && !copy.touched) {
+    return `Done waiting: ${who} let go of ${paths} without merging a change to ${it}. Your copy is now on top of \`${copy.base}\`. Re-read ${it}, then continue the task. Call team_plan before editing.`;
+  }
   const where =
     copy.status === "updated"
       ? ` Your copy is now on top of \`${copy.base}\`, with their work.`
