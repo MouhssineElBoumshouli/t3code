@@ -13,7 +13,8 @@
  *
  * Also checks the team feed (`subscribeTeamFeed`, team/UI_PLAN.md slice 0):
  * readable with `orchestration:read`, refused to a session without it (one
- * with only `relay:read`).
+ * with only `relay:read`). And the warning card's click (`teamChoose`): refused
+ * to an `orchestration:read` session.
  */
 import {
   AuthOrchestrationReadScope,
@@ -311,6 +312,21 @@ it.layer(ReadOnlySocketLive, { timeout: STARTUP_TIMEOUT_MS + 30_000, excludeTest
         const failure = failureOf(exit);
         assert.strictEqual(failure?._tag, "EnvironmentAuthorizationError");
         assert.strictEqual(failure?.requiredScope, "orchestration:read");
+      }),
+    );
+
+    // team-layer: answering the warning card steers the agent, so reading is not enough.
+    it.effect("teamChoose refuses an orchestration:read session", () =>
+      Effect.gen(function* () {
+        const { wsUrl } = yield* ReadOnlySocket;
+        const exit = yield* callByName(
+          wsUrl,
+          WS_METHODS.teamChoose,
+          yield* samplePayload(WS_METHODS.teamChoose),
+        );
+        const failure = failureOf(exit);
+        assert.strictEqual(failure?._tag, "EnvironmentAuthorizationError");
+        assert.strictEqual(failure?.requiredScope, "orchestration:operate");
       }),
     );
 
