@@ -29,6 +29,18 @@ const CHOICE_LABELS: Record<TeamChoice, string> = {
   goAnyway: "Go anyway",
 };
 
+/** A card for a change the turn already made (the guard's after-the-turn check). */
+const EDITED_CHOICE_LABELS: Record<TeamChoice, string> = {
+  anotherWay: "Undo it, find another way",
+  goAnyway: "Keep the change",
+};
+
+const DELIVERY_WORDS = {
+  held: "· sent to the agent",
+  turn: "· sent as a new message",
+  none: "· the change stays",
+} as const;
+
 /** "Omar", "Sara and Omar"; null when only the user's own chats hold the files. */
 const memberNames = (card: TeamChoiceCardData) => {
   const names = [
@@ -56,11 +68,13 @@ export const TeamChoiceCard = memo(function TeamChoiceCard(props: {
   );
   const names = card.solo ? null : memberNames(card);
   const fileWords = files.length === 1 ? "a file" : `${files.length} files`;
+  const where = card.edited === true ? "this chat changed" : "in this plan";
   const title =
     names === null
-      ? `Another chat holds ${fileWords} in this plan`
-      : `${names} ${names.includes(" and ") ? "hold" : "holds"} ${fileWords} in this plan`;
+      ? `Another chat holds ${fileWords} ${where}`
+      : `${names} ${names.includes(" and ") ? "hold" : "holds"} ${fileWords} ${where}`;
   const waitFor = names ?? "that chat";
+  const labels = card.edited === true ? EDITED_CHOICE_LABELS : CHOICE_LABELS;
 
   const onChoose = (choice: TeamChoice) => {
     setPending(choice);
@@ -89,9 +103,13 @@ export const TeamChoiceCard = memo(function TeamChoiceCard(props: {
       <div className="px-3 pt-2 pb-1">
         <p className="font-medium text-foreground">{title}</p>
         <p className="text-muted-foreground">
-          {card.made === null
-            ? "The agent stopped before editing. Choose how it goes on."
-            : "The agent stopped before editing."}
+          {card.edited === true
+            ? card.made === null
+              ? "This chat changed it without planning it first. Choose what happens to the change."
+              : "This chat changed it without planning it first."
+            : card.made === null
+              ? "The agent stopped before editing. Choose how it goes on."
+              : "The agent stopped before editing."}
         </p>
       </div>
       <ul className="pb-1.5">
@@ -127,7 +145,7 @@ export const TeamChoiceCard = memo(function TeamChoiceCard(props: {
                   disabled={pending !== null}
                   onClick={() => onChoose(choice)}
                 >
-                  {pending === choice ? "Sending…" : CHOICE_LABELS[choice]}
+                  {pending === choice ? "Sending…" : labels[choice]}
                 </Button>
               ))}
             </div>
@@ -151,10 +169,8 @@ export const TeamChoiceCard = memo(function TeamChoiceCard(props: {
         ) : (
           <p className="flex items-center gap-1.5 text-foreground">
             <CheckIcon aria-hidden className="size-3.5 text-muted-foreground" />
-            You chose: {CHOICE_LABELS[card.made.choice]}
-            <span className="text-muted-foreground">
-              {card.made.delivery === "held" ? "· sent to the agent" : "· sent as a new message"}
-            </span>
+            You chose: {labels[card.made.choice]}
+            <span className="text-muted-foreground">{DELIVERY_WORDS[card.made.delivery]}</span>
           </p>
         )}
       </div>

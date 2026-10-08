@@ -25,11 +25,19 @@ export const TeamChoiceActivityPayload = Schema.Struct({
   solo: Schema.Boolean,
   /** Only the planned files someone else holds, each with its holders. */
   files: Schema.Array(TeamPlanFile),
+  /**
+   * The turn already changed these files without planning them (found in its
+   * diff, PREVENTION_PLAN.md section 3). No call is held; the click starts a turn.
+   */
+  edited: Schema.optionalKey(Schema.Boolean),
 });
 export type TeamChoiceActivityPayload = typeof TeamChoiceActivityPayload.Type;
 
-/** How the choice reached the agent: the held `team_plan` call, or a new turn. */
-export const TeamChoiceDelivery = Schema.Literals(["held", "turn"]);
+/**
+ * How the choice reached the agent: the held `team_plan` call, or a new turn.
+ * "none": "Go anyway" on a change already made, with nothing to tell the agent.
+ */
+export const TeamChoiceDelivery = Schema.Literals(["held", "turn", "none"]);
 export type TeamChoiceDelivery = typeof TeamChoiceDelivery.Type;
 
 export const TeamChoiceMadePayload = Schema.Struct({
@@ -39,9 +47,9 @@ export const TeamChoiceMadePayload = Schema.Struct({
 });
 export type TeamChoiceMadePayload = typeof TeamChoiceMadePayload.Type;
 
-/** "1 planned file is held: your choice". */
-export const teamChoiceSummary = (fileCount: number) =>
-  `${fileCount} planned ${fileCount === 1 ? "file is" : "files are"} held: your choice`;
+/** "1 planned file is held: your choice"; "1 changed file is held: …" for an edited card. */
+export const teamChoiceSummary = (fileCount: number, edited = false) =>
+  `${fileCount} ${edited ? "changed" : "planned"} ${fileCount === 1 ? "file is" : "files are"} held: your choice`;
 
 export const teamChoiceMadeSummary = (choice: TeamChoice) =>
   choice === "anotherWay" ? "Chose: find another way" : "Chose: go anyway";

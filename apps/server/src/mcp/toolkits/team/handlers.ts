@@ -6,8 +6,6 @@ import {
   type TeamClaim,
   type TeamClaimOverlap,
   type TeamPlanActivityPayload,
-  type TeamPlanHolder,
-  teamPathsOverlap,
   teamPlanSummary,
   type TeamTask,
   type TeamThreadRef,
@@ -24,6 +22,7 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { folderKey, realFolder } from "../../../team/folders.ts";
+import { holdersOf } from "../../../team/heldElsewhere.ts";
 import * as TeamChoices from "../../../team/TeamChoices.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
@@ -297,31 +296,15 @@ const make = Effect.gen(function* () {
     overlaps: ReadonlyArray<TeamClaimOverlap>,
     names: ReadonlyMap<string, string>,
   ): TeamPlanActivityPayload["files"] =>
-    paths.map((path) => {
-      const seen = new Set<string>();
-      const holders: Array<TeamPlanHolder> = [];
-      for (const { claim } of overlaps) {
-        if (!claim.paths.some((held) => teamPathsOverlap(path, held))) continue;
-        const mine = context.solo || claim.memberId === context.member.memberId;
-        const key = mine
-          ? `chat:${claim.thread.environmentId}/${claim.thread.threadId}`
-          : `member:${claim.memberId}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        holders.push(
-          mine
-            ? { kind: "chat", thread: claim.thread }
-            : {
-                kind: "member",
-                memberId: claim.memberId,
-                name: names.get(claim.memberId) ?? claim.memberId,
-              },
-        );
-      }
-      // Teammates first, as the markers order them.
-      holders.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "member" ? -1 : 1));
-      return { path, holders };
-    });
+    paths.map((path) => ({
+      path,
+      holders: holdersOf(
+        path,
+        overlaps.map((overlap) => overlap.claim),
+        { memberId: context.member.memberId, solo: context.solo },
+        names,
+      ),
+    }));
 
   /**
    * The plan card: one activity on the thread, in the running turn. Best

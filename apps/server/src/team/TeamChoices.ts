@@ -25,6 +25,7 @@ import {
   TEAM_CHOICE_MADE_ACTIVITY_KIND,
   type TeamChoice,
   TeamChoiceActivityPayload,
+  type TeamChoiceDelivery,
   TeamChoiceError,
   TeamChoiceMadePayload,
   teamChoiceMadeSummary,
@@ -83,6 +84,14 @@ export interface AskInput {
   readonly providerInstanceId: ProviderInstanceId;
 }
 
+export interface ShowEditedInput {
+  readonly context: TeamContext;
+  /** The files the turn changed that someone else holds and this chat did not plan. */
+  readonly files: ReadonlyArray<TeamPlanFile>;
+  /** The turn whose diff changed them; a newer turn stops the card counting as waiting. */
+  readonly turnId: TurnId;
+}
+
 export class TeamChoices extends Context.Service<
   TeamChoices,
   {
@@ -92,6 +101,10 @@ export class TeamChoices extends Context.Service<
     readonly subscribeHolds: Effect.Effect<PubSub.Subscription<string>, never, Scope.Scope>;
     /** Paths this thread's user already chose "Go anyway" for. */
     readonly wentAhead: (threadId: ThreadId) => Effect.Effect<ReadonlySet<string>>;
+    /** Paths on this thread's cards the user has not answered yet. */
+    readonly openPaths: (threadId: ThreadId) => Effect.Effect<ReadonlySet<string>>;
+    /** The card for files a finished turn already changed (the guard's after-the-turn check). */
+    readonly showEdited: (input: ShowEditedInput) => Effect.Effect<void>;
     /** The click: side effect, delivery to the agent, and the record on the card. */
     readonly choose: (input: TeamChooseInput) => Effect.Effect<TeamChooseResult, TeamChoiceError>;
   }
@@ -121,9 +134,14 @@ export const choiceInstruction = (
   choice: TeamChoice,
   files: ReadonlyArray<TeamPlanFile>,
   voice: "tool" | "message",
+  edited = false,
 ) => {
   const paths = quoted(files.map((file) => file.path));
   const who = holderWords(files);
+  if (choice === "anotherWay" && edited) {
+    const it = files.length === 1 ? "it" : "them";
+    return `Find another way: you changed ${paths} without planning it, and ${who} ${files.length === 1 ? "holds it" : "hold them"}. Undo your changes to ${it}, then do the task without changing ${it}. Call team_plan again with your new plan before editing.`;
+  }
   if (choice === "anotherWay") {
     return voice === "tool"
       ? `User chose: find another way. Do the task without changing ${paths}; your claims on them are released. Call team_plan again with your new plan before editing.`
@@ -191,10 +209,13 @@ export const make = Effect.gen(function* () {
     readonly summary: string;
     readonly payload: unknown;
     readonly id: string;
+    /** The turn to file it under; else the running turn, if any. */
+    readonly turnId?: TurnId;
   }) =>
     Effect.gen(function* () {
       const thread = yield* snapshots.getThreadShellById(input.threadId);
       const latestTurn = Option.getOrUndefined(thread)?.latestTurn ?? null;
+      const runningTurnId = latestTurn?.state === "running" ? latestTurn.turnId : null;
       const createdAt = yield* nowIso;
       yield* engine.dispatch({
         type: "thread.activity.append",
@@ -206,7 +227,7 @@ export const make = Effect.gen(function* () {
           kind: input.kind,
           summary: input.summary,
           payload: input.payload,
-          turnId: latestTurn?.state === "running" ? latestTurn.turnId : null,
+          turnId: input.turnId ?? runningTurnId,
           createdAt,
         },
         createdAt,
@@ -383,8 +404,10 @@ export const make = Effect.gen(function* () {
         // A call whose cap just passed is done already, and one whose turn was stopped
         // is still waiting but nobody reads its answer (Codex does not cancel it): then
         // a turn carries the choice. The stopped one is freed with "not yet".
+        // An edited card holds no call; "Go anyway" there keeps the change as it is.
         const running = yield* runningTurn(input.threadId);
-        let delivery: "held" | "turn" = "turn";
+        const edited = card.edited === true;
+        let delivery: TeamChoiceDelivery = edited && input.choice === "goAnyway" ? "none" : "turn";
         for (const waiter of waiting.get(input.choiceId) ?? []) {
           const live = running !== null && (waiter.turnId ?? running) === running;
           const answer = live ? Option.some(input.choice) : Option.none();
@@ -394,7 +417,7 @@ export const make = Effect.gen(function* () {
           yield* startTurn(
             input.threadId,
             input.choiceId,
-            choiceInstruction(input.choice, card.files, "message"),
+            choiceInstruction(input.choice, card.files, "message", edited),
           ).pipe(
             Effect.catchCause(failed("The choice was saved, but the agent could not be started.")),
           );
@@ -414,6 +437,40 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const openPaths = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const made = yield* madeChoices;
+      return new Set(
+        (yield* listChoices(threadId))
+          .filter((card) => !made.has(card.choiceId))
+          .flatMap((card) => card.files.map((file) => file.path)),
+      );
+    }).pipe(Effect.orElseSucceed((): ReadonlySet<string> => new Set()));
+
+  const showEdited = (input: ShowEditedInput) =>
+    Effect.gen(function* () {
+      const threadId = input.context.thread.threadId;
+      const choiceId = `team-choice:${yield* crypto.randomUUIDv4}`;
+      yield* appendActivity({
+        threadId,
+        kind: TEAM_CHOICE_ACTIVITY_KIND,
+        summary: teamChoiceSummary(input.files.length, true),
+        payload: {
+          choiceId,
+          threadId,
+          solo: input.context.solo,
+          files: input.files,
+          edited: true,
+        } satisfies TeamChoiceActivityPayload,
+        id: choiceId,
+        turnId: input.turnId,
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("The warning card for a finished turn could not be shown.", { cause }),
+      ),
+    );
+
   const wentAhead = (threadId: ThreadId) =>
     Effect.gen(function* () {
       const made = yield* madeChoices;
@@ -424,7 +481,14 @@ export const make = Effect.gen(function* () {
       );
     }).pipe(Effect.orElseSucceed((): ReadonlySet<string> => new Set()));
 
-  return TeamChoices.of({ ask, subscribeHolds: PubSub.subscribe(holds), wentAhead, choose });
+  return TeamChoices.of({
+    ask,
+    subscribeHolds: PubSub.subscribe(holds),
+    wentAhead,
+    openPaths,
+    showEdited,
+    choose,
+  });
 });
 
 export const layer = Layer.effect(TeamChoices, make);

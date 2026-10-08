@@ -98,6 +98,7 @@ import * as ThreadPullRequestReactor from "./orchestration/ThreadPullRequestReac
 import * as GitTeamService from "./team/state/GitTeamService.ts";
 import { TeamBriefingLive } from "./mcp/toolkits/team/briefing.ts";
 import { TeamAutoNotesLive } from "./team/TeamAutoNotes.ts";
+import { TeamGuardLive } from "./team/TeamGuard.ts"; // team-layer
 import { TeamClaimAutoReleaseLive } from "./team/TeamClaimAutoRelease.ts";
 import * as TeamWarmup from "./team/TeamWarmup.ts";
 import * as TeamFeed from "./team/TeamFeed.ts";
@@ -287,6 +288,8 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(TeamClaimAutoReleaseLive),
   // team-layer: an automatic note per thread after each turn (team/DESIGN.md D7).
   Layer.provideMerge(TeamAutoNotesLive),
+  // team-layer: the guard on edits to files held elsewhere (team/PREVENTION_PLAN.md section 3).
+  Layer.provideMerge(TeamGuardLive),
   // team-layer: open each project's team at start, so the first turn gets its briefing.
   Layer.provideMerge(TeamWarmup.layer),
   // team-layer: the read-only team feed for clients (team/UI_PLAN.md slice 0).

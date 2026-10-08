@@ -96,6 +96,7 @@ import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 // team-layer: team briefing for runtime instructions (see team/DESIGN.md D4).
 import { readTeamBriefing } from "../../team/TeamBriefing.ts";
+import { claudeTeamEditHooks } from "../../team/teamEditCheck.ts"; // team-layer
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   type ClaudeModelCatalog,
@@ -4946,6 +4947,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
         canUseTool,
+        // team-layer: refuse edits to files held elsewhere (team/PREVENTION_PLAN.md section 3).
+        hooks: claudeTeamEditHooks(threadId, runPromise),
         onUserDialog,
         supportedDialogKinds: ["resume_return"],
         env: McpProviderSession.withAgentDeviceEnvironment(claudeEnvironment, mcpSession),

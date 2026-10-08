@@ -39,6 +39,7 @@ import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 // team-layer: team briefing for runtime instructions (see team/DESIGN.md D4).
 import { readTeamBriefing } from "../../team/TeamBriefing.ts";
+import { checkTeamEdit } from "../../team/teamEditCheck.ts"; // team-layer
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import type { AntigravityAuth } from "../AntigravityAuth.ts";
 import {
@@ -825,7 +826,14 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                 readClientTextFile({ fileSystem, path, allowedRoots, request }),
               );
               yield* runtime.handleWriteTextFile((request) =>
-                writeClientTextFile({ fileSystem, path, allowedRoots, request }),
+                // team-layer: refuse writes to files held elsewhere (team/PREVENTION_PLAN.md section 3).
+                checkTeamEdit(input.threadId, [request.path]).pipe(
+                  Effect.flatMap((reason) =>
+                    reason === undefined
+                      ? writeClientTextFile({ fileSystem, path, allowedRoots, request })
+                      : Effect.fail(EffectAcpErrors.AcpRequestError.invalidParams(reason)),
+                  ),
+                ),
               );
               yield* runtime.handleRequestPermission((request) =>
                 context

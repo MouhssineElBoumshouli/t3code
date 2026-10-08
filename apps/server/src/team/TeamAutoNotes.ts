@@ -32,6 +32,23 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { findRepoRoot } from "./TeamProjectFiles.ts";
 import * as TeamService from "./TeamService.ts";
 
+/** Turn diff paths are relative to the Git repo root; team paths to the folder holding `.team/`. */
+export const diffToTeamPaths = (
+  path: Path.Path,
+  files: ReadonlyArray<string>,
+  repoRoot: string,
+  teamRoot: string,
+) =>
+  files.flatMap((file) => {
+    const relative = path.relative(teamRoot, path.join(repoRoot, file)).replaceAll("\\", "/");
+    const outside =
+      relative.length === 0 ||
+      relative === ".." ||
+      relative.startsWith("../") ||
+      path.isAbsolute(relative);
+    return outside ? [] : [relative];
+  });
+
 export const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
@@ -43,17 +60,8 @@ export const make = Effect.gen(function* () {
   // Subscribe now, so no event published before activation is missed.
   const events = yield* engine.subscribeDomainEvents;
 
-  /** Turn diff paths are relative to the Git repo root; team paths to the folder holding `.team/`. */
   const toTeamPaths = (files: ReadonlyArray<string>, repoRoot: string, teamRoot: string) =>
-    files.flatMap((file) => {
-      const relative = path.relative(teamRoot, path.join(repoRoot, file)).replaceAll("\\", "/");
-      const outside =
-        relative.length === 0 ||
-        relative === ".." ||
-        relative.startsWith("../") ||
-        path.isAbsolute(relative);
-      return outside ? [] : [relative];
-    });
+    diffToTeamPaths(path, files, repoRoot, teamRoot);
 
   const save = (threadId: ThreadId, turnFiles: ReadonlyArray<string>) =>
     Effect.gen(function* () {
