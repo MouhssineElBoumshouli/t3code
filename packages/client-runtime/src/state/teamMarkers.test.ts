@@ -7,13 +7,14 @@ import {
   type TeamFeedTeam,
   ThreadId,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   claimPathInProject,
   fileHolders,
   findProjectTeam,
   holderInitials,
+  planHolders,
   teammatesOf,
   threadHolders,
 } from "./teamMarkers.ts";
@@ -133,6 +134,22 @@ describe("team markers", () => {
     const [yassine] = teammatesOf(feedTeam);
     expect(yassine?.initials).toBe("YA");
     expect(yassine?.claims.map((held) => held.paths)).toEqual([["src/auth/"], ["docs/"]]);
+  });
+
+  it("draws a plan card's holders with the same chips as the markers", () => {
+    const feedTeam = team({
+      claims: [
+        claim("mouhssine", "mine", ["src/auth/login.ts"]),
+        claim("mouhssine", "notes", ["src/auth/login.ts"]),
+        claim("yassine-a", "theirs", ["src/auth/"]),
+      ],
+    });
+    const marked = threadHolders(feedTeam, thread("mine"));
+    const planned = planHolders([
+      { kind: "member", memberId: TeamMemberId.make("yassine-a"), name: "Yassine Amrani" },
+      { kind: "chat", thread: thread("notes") },
+    ]);
+    expect(planned).toEqual(marked);
   });
 
   it("makes two-letter initials", () => {

@@ -56,17 +56,25 @@ const holderKey = (holder: TeamHolder) =>
     ? `member:${holder.memberId}`
     : `chat:${holder.environmentId}/${holder.threadId}`;
 
-/** "Also held by Yassine, your chat "Search page"", for a tooltip. */
-export function TeamHoldersText(props: { readonly holders: ReadonlyArray<TeamHolder> }) {
+/** "Yassine, your chat "Search page"": holders by name, in words. */
+export function TeamHolderNames(props: { readonly holders: ReadonlyArray<TeamHolder> }) {
   return (
     <>
-      Also held by{" "}
       {props.holders.map((holder, index) => (
         <span key={holderKey(holder)}>
           {index > 0 ? ", " : null}
           {holder.kind === "member" ? holder.name : <ChatName holder={holder} />}
         </span>
       ))}
+    </>
+  );
+}
+
+/** "Also held by Yassine, your chat "Search page"", for a tooltip. */
+export function TeamHoldersText(props: { readonly holders: ReadonlyArray<TeamHolder> }) {
+  return (
+    <>
+      Also held by <TeamHolderNames holders={props.holders} />
     </>
   );
 }

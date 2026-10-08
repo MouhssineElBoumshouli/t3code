@@ -89,6 +89,15 @@ export const TeamClaimResult = Schema.Struct({
 });
 export type TeamClaimResult = typeof TeamClaimResult.Type;
 
+export const TeamPlanResult = Schema.Struct({
+  planned: Schema.Array(Schema.String),
+  overlaps: Schema.Array(ClaimSummary),
+  /** Teammates' claims that overlap this thread's earlier claims, found since; each told once. */
+  lateOverlaps: Schema.optionalKey(Schema.Array(Schema.String)),
+  message: Schema.String,
+});
+export type TeamPlanResult = typeof TeamPlanResult.Type;
+
 export const TeamTaskResult = Schema.Struct({
   task: Schema.NullOr(TaskSummary),
   message: Schema.optionalKey(Schema.String),
@@ -142,9 +151,26 @@ const TeamStatusTool = Tool.make("team_status", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const TeamPlanTool = Tool.make("team_plan", {
+  description:
+    "Before your first edit for a task, list every file you expect to change. Claims them, checks them against others' claims, and shows the user your plan. Call again if the plan changes.",
+  parameters: Schema.Struct({
+    files: PathList,
+    note: Schema.optional(Schema.String.annotate({ description: "The task, in a few words." })),
+  }),
+  success: Schema.Union([NotInTeamResult, TeamPlanResult]),
+  failure: TeamToolFailure,
+  dependencies,
+})
+  .annotate(Tool.Title, "Plan files to change")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
 const TeamClaimTool = Tool.make("team_claim", {
   description:
-    "Claim files or folders before editing them; returns overlaps with others' claims. Claims last until your work merges or this thread is archived: don't release when done. release: true only if the user drops the work.",
+    "Claim more files or folders mid-task; returns overlaps with others' claims. Claims last until your work merges or this thread is archived: don't release when done. release: true only if the user drops the work.",
   parameters: Schema.Struct({
     paths: Schema.optional(PathList),
     note: Schema.optional(Schema.String.annotate({ description: "Why, in a few words." })),
@@ -219,6 +245,7 @@ const TeamMemorySearchTool = Tool.make("team_memory_search", {
 
 export const TeamToolkit = Toolkit.make(
   TeamStatusTool,
+  TeamPlanTool,
   TeamClaimTool,
   TeamTaskTool,
   TeamHandoffTool,

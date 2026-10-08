@@ -153,6 +153,9 @@ import {
   SnapShotAttachmentDetails,
 } from "./SnapShotAttachmentDetails";
 import { ProposedPlanCard } from "./ProposedPlanCard";
+// team-layer: the plan card (team/UI_PLAN.md slice 2)
+import type { TeamPlanActivityPayload } from "@t3tools/contracts";
+import { TeamPlanCard } from "../team/TeamPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { useAtomValue } from "@effect/atom-react";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
@@ -1720,7 +1723,11 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       }
       data-message-role={row.kind === "message" ? row.message.role : undefined}
     >
-      {row.kind === "work" ? (
+      {/* team-layer: the plan card (team/UI_PLAN.md slice 2) */}
+      {row.kind === "work" && row.groupedEntries[0]?.teamPlan ? (
+        <TeamPlanTimelineRow plan={row.groupedEntries[0].teamPlan} />
+      ) : null}
+      {row.kind === "work" && !row.groupedEntries[0]?.teamPlan ? (
         <WorkGroupSection
           anchorKey={row.id}
           groupedEntries={row.groupedEntries}
@@ -1749,6 +1756,16 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     </div>
   );
 });
+
+// team-layer: the plan card (team/UI_PLAN.md slice 2)
+function TeamPlanTimelineRow({ plan }: { plan: TeamPlanActivityPayload }) {
+  const ctx = use(TimelineRowCtx);
+  return (
+    <div className="min-w-0 px-1 py-0.5">
+      <TeamPlanCard plan={plan} resolvedTheme={ctx.resolvedTheme} />
+    </div>
+  );
+}
 
 function WorktreeSetupTimelineRow({
   row,

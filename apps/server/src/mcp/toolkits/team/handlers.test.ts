@@ -12,6 +12,8 @@ import {
   TeamId,
   TeamMemberId,
   ThreadId,
+  TurnId,
+  type OrchestrationCommand,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
@@ -28,6 +30,7 @@ import type { Tool } from "effect/unstable/ai";
 
 import * as ServerConfig from "../../../config.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
+import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { TEAM_RULEBOOK_TEMPLATE } from "../../../team/TeamProjectFiles.ts";
 import * as TeamService from "../../../team/TeamService.ts";
@@ -58,6 +61,7 @@ const PROJECT_ID = ProjectId.make("project-1");
 const THREAD_A = ThreadId.make("thread-a");
 const THREAD_B = ThreadId.make("thread-b");
 const THREAD_C = ThreadId.make("thread-c");
+const RUNNING_TURN = TurnId.make("turn-running");
 const TEAM_ID = TeamId.make("team-1");
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const TEAM_FILE = TeamFile.make({ teamId: TEAM_ID, name: "Core" });
@@ -103,7 +107,14 @@ function makeThread(id: ThreadId, worktreePath: string | null): OrchestrationThr
     branch: null,
     worktreePath,
     pullRequests: [],
-    latestTurn: null,
+    latestTurn: {
+      turnId: RUNNING_TURN,
+      state: "running",
+      requestedAt: "2026-09-01T00:00:00.000Z",
+      startedAt: "2026-09-01T00:00:00.000Z",
+      completedAt: null,
+      assistantMessageId: null,
+    },
     createdAt: "2026-09-01T00:00:00.000Z",
     updatedAt: "2026-09-01T00:00:00.000Z",
     archivedAt: null,
@@ -151,6 +162,7 @@ const RealGitLayer = GitVcsDriver.layer.pipe(
 
 const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: HarnessOptions) {
   const gitCalls = yield* Ref.make<ReadonlyArray<GitVcsDriver.ExecuteGitInput>>([]);
+  const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
   const fs = yield* FileSystem.FileSystem;
   // The team service always runs real Git: its state is a Git repo.
   const teamLayer = testTeamServiceLayer({
@@ -170,6 +182,12 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
             : Option.none(),
         ),
       getProjectShellById: () => Effect.succeed(Option.some(makeProject(options.workspaceRoot))),
+    }),
+    Layer.mock(OrchestrationEngineService)({
+      dispatch: (command) =>
+        Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+          Effect.as({ sequence: 1 }),
+        ),
     }),
     options.realGit === true
       ? RealGitLayer
@@ -229,7 +247,7 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
     });
     assert.equal(started.membership.status, "member");
   }
-  return { call, teams, gitCalls };
+  return { call, teams, gitCalls, dispatched };
 }, Effect.provide(NodeServices.layer));
 
 /**
@@ -920,6 +938,111 @@ describe("team toolkit", () => {
         again.overlaps.map(({ who, paths }) => ({ who, paths })),
         [{ who: "Sara", paths: ["src"] }],
       );
+    }),
+  );
+
+  it.effect("plans files: claims them and adds the plan card with each file's holders", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      const { call, dispatched } = yield* makeHarness({ workspaceRoot: root });
+      // Another of my chats holds the notes; Sara (a teammate) holds src/auth/.
+      inTeam(yield* call("team_claim", { paths: ["src/notes.ts"] }, THREAD_B));
+      const sara = yield* teammate("Sara");
+      yield* sara.openTeam({ teamFile: TEAM_FILE, checkout: root });
+      const saraThread = { environmentId: EnvironmentId.make("Sara-server"), threadId: THREAD_C };
+      yield* sara.claimPaths({
+        teamId: TEAM_ID,
+        memberId: TeamMemberId.make("Sara"),
+        thread: saraThread,
+        paths: ["src/auth/"],
+      });
+
+      const plan = inTeam(
+        yield* call("team_plan", {
+          files: [`${root}/src/auth/login.ts`, "src/notes.ts", "src/search.ts"],
+          note: "login page",
+        }),
+      );
+      assert.deepEqual(plan.planned, ["src/auth/login.ts", "src/notes.ts", "src/search.ts"]);
+      assert.deepEqual(
+        plan.overlaps
+          .map(({ who, paths }) => ({ who, paths }))
+          .toSorted((a, b) => a.who.localeCompare(b.who)),
+        [
+          { who: ME, paths: ["src/notes.ts"] },
+          { who: "Sara", paths: ["src/auth"] },
+        ],
+      );
+      assert.equal(
+        plan.message,
+        "Planned and claimed 3 files; the user sees the plan. But teammates hold overlapping paths. Their changes are in their own copy and not merged yet, so you may not see them. Tell the user before editing those.",
+      );
+      // The plan is a claim like any other: the next chat sees it.
+      const status = inTeam(yield* call("team_status", {}, THREAD_B));
+      assert.isTrue(status.claims.some((claim) => claim.paths.includes("src/search.ts")));
+
+      const commands = yield* Ref.get(dispatched);
+      assert.lengthOf(commands, 1);
+      const command = commands[0]!;
+      assert.equal(command.type, "thread.activity.append");
+      if (command.type !== "thread.activity.append") return;
+      assert.equal(command.threadId, THREAD_A);
+      assert.equal(command.activity.kind, "team.plan");
+      assert.equal(command.activity.summary, "3 files planned, checked against claims");
+      assert.equal(command.activity.turnId, RUNNING_TURN);
+      assert.deepEqual(command.activity.payload, {
+        solo: false,
+        shared: true,
+        files: [
+          {
+            path: "src/auth/login.ts",
+            holders: [{ kind: "member", memberId: "Sara", name: "Sara" }],
+          },
+          {
+            path: "src/notes.ts",
+            holders: [
+              { kind: "chat", thread: { environmentId: ENVIRONMENT_ID, threadId: THREAD_B } },
+            ],
+          },
+          { path: "src/search.ts", holders: [] },
+        ],
+      });
+
+      const empty = yield* call("team_plan", { files: [] }).pipe(Effect.flip);
+      assert.equal(empty.message, "Pass the files you expect to change.");
+    }),
+  );
+
+  it.effect("plans files solo: other chats are the holders", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(false);
+      const { call, dispatched } = yield* makeHarness({
+        workspaceRoot: root,
+        startsTeam: false,
+        host: fakeTeamHost(null),
+      });
+      inTeam(yield* call("team_plan", { files: ["src/a.ts"] }, THREAD_B));
+      const plan = inTeam(yield* call("team_plan", { files: ["src/a.ts", "src/b.ts"] }));
+      assert.include(plan.message, "other chats of the user hold overlapping paths");
+      const payloads = (yield* Ref.get(dispatched)).map((command) =>
+        command.type === "thread.activity.append" ? command.activity.payload : null,
+      );
+      assert.deepEqual(payloads, [
+        { solo: true, shared: true, files: [{ path: "src/a.ts", holders: [] }] },
+        {
+          solo: true,
+          shared: true,
+          files: [
+            {
+              path: "src/a.ts",
+              holders: [
+                { kind: "chat", thread: { environmentId: ENVIRONMENT_ID, threadId: THREAD_B } },
+              ],
+            },
+            { path: "src/b.ts", holders: [] },
+          ],
+        },
+      ]);
     }),
   );
 

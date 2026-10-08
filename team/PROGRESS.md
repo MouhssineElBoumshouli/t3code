@@ -2,6 +2,47 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-08 — The plan card (UI_PLAN.md slice 2)
+
+**What changed**
+
+- New team tool **`team_plan`** (`files`, optional `note`): before its first edit for a task, the agent lists the files it expects to change. It claims them (one claim, as `team_claim` does; held files too, so the holder sees the overlap early), checks them against everyone's claims, and answers with the overlaps. `team_claim` stays for files added later and for releasing. The team and solo briefings now say "call team_status, then team_plan the files you will change" (both stay under their token budgets).
+- The server adds **one thread activity, `team.plan`**, in the running turn: per file, who else held it when the plan was checked: a teammate (`member`, with the name), or another chat of the same person (`chat`, always in solo), plus whether the claim was shared. Contract: `packages/contracts/src/teamPlan.ts`. If adding the activity fails, the claim stands and the agent is still answered (logged).
+- **The card** (`apps/web/src/components/team/TeamPlanCard.tsx`) in the agent's message: "3 files planned, checked against claims · 2 held by others" (solo: "by another chat"; none held: "nobody else holds them" or "no other chat holds it"), then each file with its icon and, when held, the same chip as the markers and "held by Omar" or 'held by your chat "…"'. "Not shared yet" line when the claim could not be pushed. It is a record of the check: it does not update later (the tree and sidebar marks show who holds what now).
+- Timeline: a plan entry is its own row, like an answered question: never grouped with tool calls, never folded away when the turn settles. `planHolders` (client-runtime) builds the chips from the activity, so web and mobile color them like the markers.
+- Mobile: no card yet; the activity shows there as an ordinary row with its summary ("3 files planned, checked against claims").
+- Two of our earlier test files imported `vitest` instead of `vite-plus/test`, which failed the contracts and client-runtime typechecks; fixed.
+
+**Files touched**
+
+- New: `packages/contracts/src/teamPlan.ts`, `apps/web/src/components/team/TeamPlanCard.tsx`.
+- `apps/server/src/mcp/toolkits/team/tools.ts`, `handlers.ts` (+ test; `team_claim` and `team_plan` share `claimAndSummarize`), `apps/server/src/team/TeamBriefing.ts` (+ test), `packages/client-runtime/src/state/teamMarkers.ts` (+ test), `apps/web/src/components/team/TeamHolderMarks.tsx` (`TeamHolderNames`), `packages/contracts/src/teamFeed.test.ts`.
+- `team-layer:` edits in upstream files: `packages/contracts/src/index.ts`, `apps/web/src/session-logic.ts` (decode the plan into the work entry), `components/chat/MessagesTimeline.logic.ts` (5 one-line conditions, next to `questionAnswer`'s), `components/chat/MessagesTimeline.tsx` (the row), `MessagesTimeline.logic.test.ts` (1 test).
+
+**How it was checked**
+
+- `apps/server`: `vp test run src/team/ src/mcp/toolkits/team/ src/cli/team.test.ts src/provider/Layers/CodexTeamBriefing.test.ts`: 18 files, **170 passed**. New: a team plan (a teammate's folder claim, another of my chats, a free file) claims the three files and dispatches one `team.plan` activity in the running turn with exactly those holders; solo, the second chat's plan names the first chat. Mutation: counting every holder as a teammate fails both tests.
+- `packages/client-runtime`: `teamMarkers.test.ts` 6 passed (plan chips equal the markers' chips). `packages/contracts`: `teamFeed.test.ts` passed. `apps/web`: `MessagesTimeline.logic.test.ts`, `session-logic.test.ts`, `RightPanelTabs.test.tsx`, `Sidebar.logic.test.ts`: **392 passed**; the new test runs a real `team.plan` activity (and a malformed one) through `deriveWorkLogEntries` and the row derivation of a settled turn. Mutation: without the fold exception it fails.
+- `tsc --noEmit`: server, web, contracts, client-runtime, mobile: 0 errors. `vp lint` on the changed files: no errors (the warnings in `MessagesTimeline.tsx` and `Sidebar.tsx` were there before).
+- **Self-test in the real app** (Playwright, headless, 1440×900), `vp run dev --home-dir ~/.t3-dev` with `T3CODE_TEAM_LOGIN_OVERRIDE=mouhssine` (origin is a local folder), stopped by its task after (ports free). Projects: `~/code/team-demo7` (seeded with `team-cold-start-seed.ts`: Sara holds `src/pins/search.ts` and `src/api/routes.ts`, Omar `src/auth/session.ts`) and `~/code/solo-demo2` (plain Git repo, no remote). Codex (GPT-6-Astra) in all chats.
+  - Team: told to call `team_plan` with `src/auth/session.ts`, `src/pins/search.ts`, `src/auth/RememberMe.tsx` and not edit. The card: "3 files planned, checked against claims · 2 held by others", OM "held by Omar", SA "held by Sara", the third file with no chip; it stays visible under "Worked for 14s" after the turn folded. Codex's own reply named the same overlaps. (`team-light.png`, `team-dark.png`)
+  - Tooltips (step 1): hovering the chat's sidebar row shows the details card ending in "Also held by Sara, Omar" with the chips (`team-light-row-tooltip.png`); hovering the `session.ts` tab shows "session.ts / Also held by Omar" (`team-light-tab-tooltip.png`).
+  - Solo: chat 1 planned `src/notes/editor.ts` ("1 file planned … no other chat holds it", after the singular fix below); chat 2 planned `editor.ts` and `list.ts`: "1 held by another chat", `editor.ts` with chat 1's color square and 'held by your chat "Request Team Plan for Editor Toolbar"'. No presence chip (solo). (`solo-light.png`, `solo-dark.png`)
+  - Found and fixed during the test: a one-file plan said "nobody else holds them"; now "it". Seen fixed in the app after the reload.
+  - Console: one React error, the upstream `ChatView` key-spread warning already noted last round.
+  - Screenshots: `test-screenshots` branch, folder `2026-10-08-ui-slice2/` with NOTES.md. I looked at every picture; none shows a pairing link or token.
+
+**What's left**
+
+- Slice 3 waits for your review of PREVENTION_PLAN.md.
+- Mobile card (the rules and `planHolders` are shared; the activity already reaches mobile as a plain row).
+- Agents call `team_plan` here because the prompt said so; whether they call it unprompted, from the briefing alone, is not tested yet (needs a live run without the instruction).
+
+**Unsure about / notes**
+
+- In light mode the card's background (`bg-secondary`, as the changed-files card) is close to the page's; it reads, but it is quiet.
+- No performance numbers measured. The card renders only when its row changes (work entries are cached per activity; rows compared by identity); nothing ticks.
+
 ## 2026-10-08 — PREVENTION_PLAN.md: how the agent stops for the warning card (research)
 
 **What changed**

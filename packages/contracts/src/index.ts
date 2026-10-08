@@ -48,3 +48,4 @@ export * from "./worktreeSetup.ts";
 export * from "./team.ts";
 export * from "./teamState.ts";
 export * from "./teamFeed.ts";
+export * from "./teamPlan.ts"; // team-layer: the plan card (UI_PLAN.md slice 2)

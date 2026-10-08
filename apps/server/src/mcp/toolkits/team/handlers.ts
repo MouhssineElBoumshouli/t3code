@@ -1,9 +1,19 @@
 import {
+  CommandId,
   countTeamWords,
+  EventId,
+  TEAM_PLAN_ACTIVITY_KIND,
   type TeamClaim,
+  type TeamClaimOverlap,
+  type TeamPlanActivityPayload,
+  type TeamPlanHolder,
+  teamPathsOverlap,
+  teamPlanSummary,
   type TeamTask,
   type TeamThreadRef,
 } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -11,6 +21,7 @@ import * as Path from "effect/Path";
 
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
+import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { folderKey, realFolder } from "../../../team/folders.ts";
 import * as TeamService from "../../../team/TeamService.ts";
@@ -36,6 +47,7 @@ import {
   TeamToolError,
   TeamToolkit,
   type TeamMemorySearchResult,
+  type TeamPlanResult,
   type TeamStatusResult,
 } from "./tools.ts";
 
@@ -98,6 +110,8 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+  const crypto = yield* Crypto.Crypto;
   const { resolve } = yield* makeTeamResolver;
   const platform = yield* HostProcessPlatform;
 
@@ -232,6 +246,113 @@ const make = Effect.gen(function* () {
       ]),
     );
 
+  /**
+   * Claims paths for this thread and words the overlaps for the agent; shared
+   * by `team_claim` and `team_plan`.
+   */
+  const claimAndSummarize = (
+    context: TeamContext,
+    paths: ReadonlyArray<string>,
+    note: string | undefined,
+  ) =>
+    Effect.gen(function* () {
+      const { claim, overlaps, confirmed } = yield* teams
+        .claimPaths({
+          teamId: context.teamFile.teamId,
+          memberId: context.member.memberId,
+          thread: context.thread,
+          paths,
+          note,
+        })
+        .pipe(Effect.mapError(fromService("claim")));
+      const names = overlaps.length === 0 ? new Map<string, string>() : yield* namesOf(context);
+      const tasks =
+        overlaps.length === 0
+          ? []
+          : yield* teams
+              .listTasks(context.teamFile.teamId)
+              .pipe(Effect.mapError(fromService("claim")));
+      const whereOf = makeWhereOf(context);
+      const shown = yield* Effect.forEach(overlaps, (overlap) =>
+        whereOf(overlap.claim.thread).pipe(
+          Effect.map((where) => summarizeClaim(overlap.claim, overlap.paths, names, tasks, where)),
+        ),
+      );
+      const holders = context.solo ? "other chats of the user" : "teammates";
+      const overlapText =
+        shown.length === 0
+          ? null
+          : shown.some((overlap) => overlap.where === CLAIM_WHERE.ownCopy)
+            ? `${holders} hold overlapping paths. Their changes are in their own copy and not merged yet, so you may not see them. Tell the user before editing those.`
+            : `${holders} hold overlapping paths. Tell the user before editing those.`;
+      return { claim, overlaps, names, shown, confirmed, overlapText };
+    });
+
+  /** Who else held each planned path: a teammate, or another chat of the same person. */
+  const planFiles = (
+    context: TeamContext,
+    paths: ReadonlyArray<string>,
+    overlaps: ReadonlyArray<TeamClaimOverlap>,
+    names: ReadonlyMap<string, string>,
+  ): TeamPlanActivityPayload["files"] =>
+    paths.map((path) => {
+      const seen = new Set<string>();
+      const holders: Array<TeamPlanHolder> = [];
+      for (const { claim } of overlaps) {
+        if (!claim.paths.some((held) => teamPathsOverlap(path, held))) continue;
+        const mine = context.solo || claim.memberId === context.member.memberId;
+        const key = mine
+          ? `chat:${claim.thread.environmentId}/${claim.thread.threadId}`
+          : `member:${claim.memberId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        holders.push(
+          mine
+            ? { kind: "chat", thread: claim.thread }
+            : {
+                kind: "member",
+                memberId: claim.memberId,
+                name: names.get(claim.memberId) ?? claim.memberId,
+              },
+        );
+      }
+      // Teammates first, as the markers order them.
+      holders.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "member" ? -1 : 1));
+      return { path, holders };
+    });
+
+  /**
+   * The plan card: one activity on the thread, in the running turn. Best
+   * effort: the claim stands and the agent is answered even if it fails.
+   */
+  const appendPlanActivity = (context: TeamContext, payload: TeamPlanActivityPayload) =>
+    Effect.gen(function* () {
+      const threadId = context.thread.threadId;
+      const thread = yield* snapshots.getThreadShellById(threadId);
+      const latestTurn = Option.getOrUndefined(thread)?.latestTurn ?? null;
+      const uuid = yield* crypto.randomUUIDv4;
+      const createdAt = DateTime.formatIso(yield* DateTime.now);
+      yield* engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make(`server:team-plan:${threadId}:${uuid}`),
+        threadId,
+        activity: {
+          id: EventId.make(`team-plan:${uuid}`),
+          tone: "info",
+          kind: TEAM_PLAN_ACTIVITY_KIND,
+          summary: teamPlanSummary(payload.files.length),
+          payload,
+          turnId: latestTurn?.state === "running" ? latestTurn.turnId : null,
+          createdAt,
+        },
+        createdAt,
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Could not add the plan card to the thread.", { cause }),
+      ),
+    );
+
   const withFiles = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) =>
     effect.pipe(
       Effect.provideService(Path.Path, path),
@@ -336,6 +457,34 @@ const make = Effect.gen(function* () {
         }),
       ),
 
+    team_plan: (input) =>
+      inTeam((context) =>
+        Effect.gen(function* () {
+          const paths = yield* projectPaths(input.files, context);
+          if (paths.length === 0) {
+            return yield* new TeamToolError({ detail: "Pass the files you expect to change." });
+          }
+          const { claim, overlaps, names, shown, confirmed, overlapText } =
+            yield* claimAndSummarize(context, paths, input.note);
+          yield* appendPlanActivity(context, {
+            solo: context.solo,
+            files: planFiles(context, claim.paths, overlaps, names),
+            shared: confirmed,
+          });
+          const planned = `Planned and claimed ${claim.paths.length} ${claim.paths.length === 1 ? "file" : "files"}; the user sees the plan.`;
+          return {
+            planned: claim.paths,
+            overlaps: shown,
+            ...(yield* lateOverlapsOf(context)),
+            message: !confirmed
+              ? `${CLAIM_NOT_SHARED_MESSAGE}${overlapText === null ? "" : ` Already known: ${overlapText}`}`
+              : overlapText === null
+                ? `${planned} No overlaps.`
+                : `${planned} But ${overlapText}`,
+          } satisfies TeamPlanResult;
+        }),
+      ),
+
     team_claim: (input) =>
       inTeam((context) =>
         Effect.gen(function* () {
@@ -364,35 +513,11 @@ const make = Effect.gen(function* () {
           if (paths === undefined || paths.length === 0) {
             return yield* new TeamToolError({ detail: "Pass paths to claim." });
           }
-          const { claim, overlaps, confirmed } = yield* teams
-            .claimPaths({
-              teamId,
-              memberId: context.member.memberId,
-              thread: context.thread,
-              paths,
-              note: input.note,
-            })
-            .pipe(Effect.mapError(fromService("claim")));
-          const names = overlaps.length === 0 ? new Map() : yield* namesOf(context);
-          const tasks =
-            overlaps.length === 0
-              ? []
-              : yield* teams.listTasks(teamId).pipe(Effect.mapError(fromService("claim")));
-          const whereOf = makeWhereOf(context);
-          const shown = yield* Effect.forEach(overlaps, (overlap) =>
-            whereOf(overlap.claim.thread).pipe(
-              Effect.map((where) =>
-                summarizeClaim(overlap.claim, overlap.paths, names, tasks, where),
-              ),
-            ),
+          const { claim, shown, confirmed, overlapText } = yield* claimAndSummarize(
+            context,
+            paths,
+            input.note,
           );
-          const holders = context.solo ? "other chats of the user" : "teammates";
-          const overlapText =
-            shown.length === 0
-              ? null
-              : shown.some((overlap) => overlap.where === CLAIM_WHERE.ownCopy)
-                ? `${holders} hold overlapping paths. Their changes are in their own copy and not merged yet, so you may not see them. Tell the user before editing those.`
-                : `${holders} hold overlapping paths. Tell the user before editing those.`;
           return {
             claimed: claim.paths,
             released: [],

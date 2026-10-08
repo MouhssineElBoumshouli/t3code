@@ -39,6 +39,7 @@ import {
   createMessageAttachmentPreviewProjector,
   deriveTimelineEntries,
   deriveTimelineEntriesWithState,
+  deriveWorkLogEntries,
   type WorkLogEntry,
   type TimelineEntriesProjection,
 } from "../../session-logic";
@@ -3368,6 +3369,57 @@ describe("deriveMessagesTimelineRows", () => {
     expect(expandedRows.find((row) => row.kind === "work-toggle")).toMatchObject({
       expanded: true,
     });
+  });
+
+  // team-layer: the plan card (team/UI_PLAN.md slice 2)
+  it("keeps the team plan card in its own row through tool grouping and turn folding", () => {
+    const turnId = TurnId.make("plan-turn");
+    const time = (second: number) => new Date(Date.UTC(2026, 9, 8, 0, 0, second)).toISOString();
+    const plan = {
+      solo: false,
+      shared: true,
+      files: [
+        {
+          path: "src/auth/login.ts",
+          holders: [{ kind: "member", memberId: "yassine-a", name: "Yassine" }],
+        },
+        { path: "src/search.ts", holders: [] },
+      ],
+    };
+    const activity = (second: number, kind: string, payload: unknown) => ({
+      id: EventId.make(`activity-${second}`),
+      tone: kind === "team.plan" ? ("info" as const) : ("tool" as const),
+      kind,
+      summary: kind === "team.plan" ? "2 files planned, checked against claims" : "Ran command",
+      payload,
+      turnId,
+      createdAt: time(second),
+    });
+    const workEntries = deriveWorkLogEntries([
+      activity(1, "tool.completed", { itemType: "command_execution", detail: "git status" }),
+      activity(2, "team.plan", plan),
+      activity(3, "tool.completed", { itemType: "command_execution", detail: "git diff" }),
+      // A payload that is not a plan stays an ordinary row.
+      activity(4, "team.plan", { files: "nope" }),
+    ]);
+    expect(workEntries.map((entry) => entry.teamPlan)).toEqual([
+      undefined,
+      plan,
+      undefined,
+      undefined,
+    ]);
+    const input = {
+      timelineEntries: deriveTimelineEntries([], [], workEntries),
+      latestTurn: { turnId, state: "completed", startedAt: time(0), completedAt: time(5) },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    } satisfies Parameters<typeof deriveMessagesTimelineRows>[0];
+    const collapsed = deriveMessagesTimelineRows(input);
+    expect(collapsed.map((row) => row.kind)).toEqual(["turn-fold", "work"]);
+    const planRow = collapsed.find((row) => row.kind === "work");
+    expect(planRow?.kind === "work" ? planRow.groupedEntries : null).toEqual([workEntries[1]]);
   });
 
   it("keeps user input in its own row through tool grouping and turn folding", () => {

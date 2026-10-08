@@ -19,6 +19,7 @@ import {
   type TeamFeedTeam,
   type TeamMemberId,
   teamPathsOverlap,
+  type TeamPlanHolder,
   type ThreadId,
 } from "@t3tools/contracts";
 
@@ -174,6 +175,29 @@ export function threadHolders(
     overlapping.map((claim) =>
       isMine(team, claim) ? chatHolder(claim) : memberHolder(team, claim.memberId),
     ),
+  );
+}
+
+/**
+ * A plan card's holders (slice 2) as chips: the same color and initials as
+ * the markers. The name is the one the server saw when it checked the plan.
+ */
+export function planHolders(holders: ReadonlyArray<TeamPlanHolder>): ReadonlyArray<TeamHolder> {
+  return holders.map((holder) =>
+    holder.kind === "member"
+      ? {
+          kind: "member",
+          memberId: holder.memberId,
+          name: holder.name,
+          initials: holderInitials(holder.name),
+          hue: holderHue(`member:${holder.memberId}`),
+        }
+      : {
+          kind: "chat",
+          environmentId: holder.thread.environmentId,
+          threadId: holder.thread.threadId,
+          hue: holderHue(`chat:${holder.thread.environmentId}/${holder.thread.threadId}`),
+        },
   );
 }
 

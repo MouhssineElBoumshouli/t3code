@@ -35,7 +35,7 @@ describe("renderTeamBriefing", () => {
       rulebookPath: ".team/rulebook.md",
     });
     assert.include(briefing, 'This project is in team "Core". You are "Mouhssine\'s laptop".');
-    assert.include(briefing, "call team_status, then team_claim the paths you will touch");
+    assert.include(briefing, "call team_status, then team_plan the files you will change");
     assert.include(briefing, "If it reports overlaps, tell the user before editing");
     assert.include(briefing, "Write a team_handoff only after editing files");
     assert.include(briefing, "Project rules are in .team/rulebook.md; read it before your first");

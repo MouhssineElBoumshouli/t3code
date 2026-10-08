@@ -45,7 +45,7 @@ export function renderTeamBriefing(input: TeamBriefingInput): string {
   return [
     "<team_context>",
     `This project is in team "${toBriefingName(input.teamName)}". You are "${toBriefingName(input.memberName)}".`,
-    "Before editing files, call team_status, then team_claim the paths you will touch.",
+    "Before editing files, call team_status, then team_plan the files you will change.",
     "If it reports overlaps, tell the user before editing those files.",
     // "only": Codex gets this every turn and read "when you finish or stop" as every turn end.
     "Write a team_handoff only after editing files or if the user stops work partway; keep claims unless the user drops it.",
@@ -63,7 +63,7 @@ export function renderSoloBriefing(): string {
   return [
     "<project_memory>",
     "T3 keeps notes for this project between the user's chats, on this computer only.",
-    "Before editing files, call team_status (what other chats hold, recent notes), then team_claim the paths you will touch.",
+    "Before editing files, call team_status (what other chats hold, recent notes), then team_plan the files you will change.",
     "If it reports overlaps with another chat, tell the user before editing those files.",
     "Write a team_handoff only after editing files or if the user stops work partway; keep claims unless the user drops it.",
     "To find earlier work, use team_memory_search. Code is the truth; notes can be out of date.",

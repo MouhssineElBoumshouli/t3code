@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { TeamId } from "./team.ts";
 import { applyTeamFeedEvent, type TeamFeedTeam } from "./teamFeed.ts";
