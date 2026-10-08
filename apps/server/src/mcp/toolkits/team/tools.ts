@@ -214,7 +214,9 @@ const TeamHandoffTool = Tool.make("team_handoff", {
   description:
     "Save a handoff note after editing files, or when the user stops work partway: what changed, what is left, risks. Not after only answering questions. Max 150 words. The current commit is added for you.",
   parameters: Schema.Struct({
-    changed: Schema.String,
+    // "summary", not "changed": Claude Code defers MCP tools, so Claude often calls
+    // before reading the schema; it guesses "summary", and read "changed" as a file list.
+    summary: Schema.String.annotate({ description: "What changed, in words." }),
     left: Schema.optional(Schema.String),
     risks: Schema.optional(Schema.String),
     files: Schema.optional(PathList),

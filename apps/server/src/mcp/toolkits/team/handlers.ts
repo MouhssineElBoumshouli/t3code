@@ -603,7 +603,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const teamId = context.teamFile.teamId;
           const files = yield* projectPaths(input.files ?? [], context);
-          if (input.changed.trim().length === 0) {
+          if (input.summary.trim().length === 0) {
             return yield* new TeamToolError({ detail: "Say what changed." });
           }
           const task = yield* teams
@@ -629,7 +629,7 @@ const make = Effect.gen(function* () {
               memberId: context.member.memberId,
               thread: context.thread,
               taskId: Option.getOrUndefined(Option.map(task, (value) => value.taskId)),
-              changed: input.changed,
+              changed: input.summary,
               left: input.left,
               risks: input.risks,
               files,

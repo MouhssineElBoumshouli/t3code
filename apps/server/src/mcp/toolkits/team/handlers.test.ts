@@ -380,7 +380,7 @@ describe("team toolkit", () => {
         );
 
         inTeam(
-          yield* call("team_handoff", { changed: "Added the login form.", files: ["src/a.ts"] }),
+          yield* call("team_handoff", { summary: "Added the login form.", files: ["src/a.ts"] }),
         );
         const found = inTeam(yield* call("team_memory_search", { query: "login" }, THREAD_B));
         assert.deepEqual(
@@ -408,7 +408,7 @@ describe("team toolkit", () => {
         yield* call("team_status", {}),
         yield* call("team_claim", { paths: ["src/a.ts"] }),
         yield* call("team_task", { title: "Anything", status: "in_progress" }),
-        yield* call("team_handoff", { changed: "Something.", files: ["src/a.ts"] }),
+        yield* call("team_handoff", { summary: "Something.", files: ["src/a.ts"] }),
         yield* call("team_memory_search", { query: "login" }),
         yield* call("team_status", {}, THREAD_B),
       ];
@@ -608,7 +608,7 @@ describe("team toolkit", () => {
       yield* call("team_task", { title: "Add login" });
       const saved = inTeam(
         yield* call("team_handoff", {
-          changed: "Added the login form.",
+          summary: "Added the login form.",
           left: "Error states.",
           risks: "Session cookie name may clash.",
           files: [`${worktree}/src/login.tsx`, "src/session.ts"],
@@ -633,12 +633,12 @@ describe("team toolkit", () => {
       assert.equal(handoff?.taskId, Option.getOrThrow(task).taskId);
 
       const tooLong = yield* call("team_handoff", {
-        changed: Array.from({ length: 151 }, () => "word").join(" "),
+        summary: Array.from({ length: 151 }, () => "word").join(" "),
       }).pipe(Effect.flip);
       assert.equal(tooLong._tag, "TeamToolError");
       assert.equal(tooLong.message, "Handoff note has 151 words; the limit is 150.");
       const outside = yield* call("team_handoff", {
-        changed: "x",
+        summary: "x",
         files: [`${project}/src/a.ts`],
       }).pipe(Effect.flip);
       assert.include(outside.message, "is outside this project");
@@ -654,7 +654,7 @@ describe("team toolkit", () => {
       // The cold start test's Codex note: no files, no claims, no edits in the chat.
       const quiet = inTeam(
         yield* call("team_handoff", {
-          changed: "No code changes; reviewed the live team status for a progress update.",
+          summary: "No code changes; reviewed the live team status for a progress update.",
         }),
       );
       assert.equal(quiet.message, HANDOFF_NOTHING_CHANGED_MESSAGE);
@@ -662,11 +662,11 @@ describe("team toolkit", () => {
 
       // Each sign of real work keeps the message away.
       const namesFiles = inTeam(
-        yield* call("team_handoff", { changed: "Looked into it.", files: ["src/a.ts"] }, THREAD_B),
+        yield* call("team_handoff", { summary: "Looked into it.", files: ["src/a.ts"] }, THREAD_B),
       );
       assert.notProperty(namesFiles, "message");
       yield* call("team_claim", { paths: ["src/b.ts"] }, THREAD_C);
-      const holdsClaims = inTeam(yield* call("team_handoff", { changed: "Halfway." }, THREAD_C));
+      const holdsClaims = inTeam(yield* call("team_handoff", { summary: "Halfway." }, THREAD_C));
       assert.notProperty(holdsClaims, "message");
       const [owner] = yield* teams.listMembers(TEAM_ID);
       yield* teams.saveAutomaticNote({
@@ -676,7 +676,7 @@ describe("team toolkit", () => {
         files: ["src/c.ts"],
         fileHashes: {},
       });
-      const editedEarlier = inTeam(yield* call("team_handoff", { changed: "Done with c." }));
+      const editedEarlier = inTeam(yield* call("team_handoff", { summary: "Done with c." }));
       assert.notProperty(editedEarlier, "message");
 
       const saved = yield* teams.listHandoffs(TEAM_ID);
@@ -790,19 +790,19 @@ describe("team toolkit", () => {
       const { call, teams } = yield* makeHarness({ workspaceRoot: root });
       assert.notProperty(inTeam(yield* call("team_status", {})), "handoffs");
 
-      yield* call("team_handoff", { changed: "Oldest note." }, THREAD_B);
+      yield* call("team_handoff", { summary: "Oldest note." }, THREAD_B);
       yield* TestClock.adjust("1 minute");
       yield* call(
         "team_handoff",
         {
-          changed: `Search ${"word ".repeat(30).trim()}\nSecond line is left out.`,
+          summary: `Search ${"word ".repeat(30).trim()}\nSecond line is left out.`,
           left: "Paging.",
         },
         THREAD_B,
       );
       yield* TestClock.adjust("1 minute");
       // Neither this chat's own note nor an automatic note is listed.
-      yield* call("team_handoff", { changed: "My own note." });
+      yield* call("team_handoff", { summary: "My own note." });
       const [owner] = yield* teams.listMembers(TEAM_ID);
       yield* teams.saveAutomaticNote({
         teamId: TEAM_ID,
@@ -812,7 +812,7 @@ describe("team toolkit", () => {
         fileHashes: {},
       });
       yield* TestClock.adjust("1 minute");
-      yield* call("team_handoff", { changed: "Newest of mine." }, THREAD_C);
+      yield* call("team_handoff", { summary: "Newest of mine." }, THREAD_C);
       yield* TestClock.adjust("1 minute");
       // Sara writes from her own server; ours sees it after a sync. No clock
       // jumps after this: they would time out Git calls still running.
@@ -1301,7 +1301,7 @@ describe("team toolkit", () => {
       // Chat A edits login.ts in the main checkout and leaves it uncommitted.
       writeFile(root, "src/login.ts", "v2\n");
       yield* call("team_handoff", {
-        changed: "Login form posts to /api/login.",
+        summary: "Login form posts to /api/login.",
         left: "Error states.",
         files: ["src/login.ts"],
       });
@@ -1363,10 +1363,10 @@ describe("team toolkit", () => {
       const root = yield* makeProjectFolder(true);
       const { call } = yield* makeHarness({ workspaceRoot: root });
       for (let index = 1; index <= 7; index++) {
-        yield* call("team_handoff", { changed: `Cache step ${index}.` });
+        yield* call("team_handoff", { summary: `Cache step ${index}.` });
         yield* TestClock.adjust("1 second");
       }
-      yield* call("team_handoff", { changed: "Payments page." });
+      yield* call("team_handoff", { summary: "Payments page." });
 
       const search = inTeam(yield* call("team_memory_search", { query: "cache" }));
       assert.deepEqual(
@@ -1396,7 +1396,7 @@ describe("team toolkit", () => {
       const root = yield* makeProjectFolder(true);
       initRepo(root, { "src/login.ts": "v1\n" });
       const { call, teams } = yield* makeHarness({ workspaceRoot: root, realGit: true });
-      yield* call("team_handoff", { changed: "Login form.", files: ["src/login.ts"] }, THREAD_B);
+      yield* call("team_handoff", { summary: "Login form.", files: ["src/login.ts"] }, THREAD_B);
       yield* TestClock.adjust("1 minute");
       const [owner] = yield* teams.listMembers(TEAM_ID);
       // Newer, and matches more of the query, but was not written by an agent.
@@ -1427,9 +1427,9 @@ describe("team toolkit", () => {
     Effect.gen(function* () {
       const root = yield* makeProjectFolder(true);
       const { call, teams } = yield* makeHarness({ workspaceRoot: root });
-      yield* call("team_handoff", { changed: "Login form." }, THREAD_B);
+      yield* call("team_handoff", { summary: "Login form." }, THREAD_B);
       yield* TestClock.adjust("1 minute");
-      yield* call("team_handoff", { changed: "Search page." }, THREAD_C);
+      yield* call("team_handoff", { summary: "Search page." }, THREAD_C);
       const [owner] = yield* teams.listMembers(TEAM_ID);
       yield* teams.saveAutomaticNote({
         teamId: TEAM_ID,
@@ -1461,7 +1461,7 @@ describe("team toolkit", () => {
       initRepo(root, { "src/a.ts": "a\n" });
       const { call, teams } = yield* makeHarness({ workspaceRoot: root, realGit: true });
       yield* call("team_handoff", {
-        changed: "Work.",
+        summary: "Work.",
         files: ["src/a.ts", "src/gone.ts", "src"],
       });
       const [handoff] = yield* teams.listHandoffs(TEAM_ID);
