@@ -7,8 +7,8 @@
  *
  * A card is open until the user picks a choice, or until a newer turn starts
  * (the user moved on with a message; the card still takes a click). A card
- * that waits for its holder waits on them, not on the user; cancelling the
- * wait opens it again.
+ * that waits for its holder, or for a teammate's answer, waits on them, not
+ * on the user; cancelling the wait, or a "no", opens it again.
  *
  * @module openTeamChoices
  */
@@ -17,7 +17,7 @@ import {
   TEAM_CHOICE_MADE_ACTIVITY_KIND,
   TeamChoiceActivityPayload,
   TeamChoiceMadePayload,
-  teamChoiceIsOpen,
+  teamChoiceAwaitsUser,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -50,7 +50,9 @@ export function countOpenTeamChoices(
   for (const activity of activities) {
     if (activity.kind !== TEAM_CHOICE_ACTIVITY_KIND) continue;
     const payload = decodeChoice(activity.payload);
-    if (Option.isNone(payload) || !teamChoiceIsOpen(made.get(payload.value.choiceId))) continue;
+    if (Option.isNone(payload) || !teamChoiceAwaitsUser(made.get(payload.value.choiceId))) {
+      continue;
+    }
     // A card shown with no running turn has no turn to be overtaken by.
     if (activity.turnId !== null && activity.turnId !== latestTurnId) continue;
     open.add(payload.value.choiceId);

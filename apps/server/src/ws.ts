@@ -182,6 +182,7 @@ import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http
 import * as RelayClient from "@t3tools/shared/relayClient";
 import * as TeamFeed from "./team/TeamFeed.ts"; // team-layer
 import * as TeamChoices from "./team/TeamChoices.ts"; // team-layer
+import * as TeamQuestions from "./team/TeamQuestions.ts"; // team-layer
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -677,6 +678,7 @@ const makeWsRpcLayer = (
       // team-layer: the team feed (team/UI_PLAN.md slice 0).
       const teamFeed = yield* TeamFeed.TeamFeed;
       const teamChoices = yield* TeamChoices.TeamChoices; // team-layer: the warning card
+      const teamQuestions = yield* TeamQuestions.TeamQuestions; // team-layer: "Ask"
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -3802,6 +3804,11 @@ const makeWsRpcLayer = (
         // team-layer: the warning card's choice (team/PREVENTION_PLAN.md, slice 3a).
         [WS_METHODS.teamChoose]: (input) =>
           observeRpcEffect(WS_METHODS.teamChoose, teamChoices.choose(input), {
+            "rpc.aggregate": "team",
+          }),
+        // team-layer: answering a teammate's question (team/PREVENTION_PLAN.md, slice 3d).
+        [WS_METHODS.teamAnswer]: (input) =>
+          observeRpcEffect(WS_METHODS.teamAnswer, teamQuestions.answer(input), {
             "rpc.aggregate": "team",
           }),
         [WS_METHODS.subscribeBackgroundPolicy]: (_input) =>

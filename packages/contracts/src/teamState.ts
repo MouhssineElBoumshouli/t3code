@@ -39,6 +39,9 @@ export const TEAM_STATE_LIMITS = {
   releasedClaimDays: 7,
   notes: 200,
   activity: 100,
+  /** Open questions this writer asked; a question leaves once it is answered or dropped. */
+  questions: 50,
+  answers: 100,
 } as const;
 
 /**
@@ -70,6 +73,11 @@ export const TeamStateClaim = Schema.Struct({
   note: Schema.NullOr(TrimmedNonEmptyString),
   /** The thread's branch, when known, so readers can tell when it merged (STORAGE_PLAN.md 4.5). */
   branch: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * The commit `origin/<branch>` was at when this server last looked: the
+   * branch is pushed, so a teammate can build on top of it (PREVENTION_PLAN.md 2).
+   */
+  pushedCommit: Schema.optionalKey(TrimmedNonEmptyString),
   claimedAt: IsoDateTime,
   /** Null while the claim is active. */
   releasedAt: Schema.NullOr(IsoDateTime),
@@ -119,6 +127,32 @@ export const TeamStateActivity = Schema.Struct({
 });
 export type TeamStateActivity = typeof TeamStateActivity.Type;
 
+/**
+ * "Ask" on the warning card (PREVENTION_PLAN.md section 2): may this chat
+ * change files the people in `to` hold? Kept in the asker's writer file while
+ * it is open; their servers show it and answer in their own file.
+ */
+export const TeamStateQuestion = Schema.Struct({
+  questionId: TrimmedNonEmptyString,
+  to: Schema.Array(TeamLogin),
+  paths: Schema.Array(TeamPath),
+  /** The asker's line, if any. */
+  text: Schema.NullOr(TrimmedNonEmptyString),
+  /** The asking chat. */
+  thread: TeamThreadRef,
+  askedAt: IsoDateTime,
+});
+export type TeamStateQuestion = typeof TeamStateQuestion.Type;
+
+/** An answer to a question, in the answerer's writer file. */
+export const TeamStateAnswer = Schema.Struct({
+  questionId: TrimmedNonEmptyString,
+  yes: Schema.Boolean,
+  text: Schema.NullOr(TrimmedNonEmptyString),
+  answeredAt: IsoDateTime,
+});
+export type TeamStateAnswer = typeof TeamStateAnswer.Type;
+
 /** `writers/<login>/<environmentId>.json`: everything one T3 server wrote. */
 export const TeamWriterFile = Schema.Struct({
   format: TeamStateFormat,
@@ -130,5 +164,8 @@ export const TeamWriterFile = Schema.Struct({
   tasks: Schema.Array(TeamStateTask),
   notes: Schema.Array(TeamStateNote),
   activity: Schema.Array(TeamStateActivity),
+  /** Absent in files written before "Ask". */
+  questions: Schema.optionalKey(Schema.Array(TeamStateQuestion)),
+  answers: Schema.optionalKey(Schema.Array(TeamStateAnswer)),
 });
 export type TeamWriterFile = typeof TeamWriterFile.Type;

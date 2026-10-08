@@ -1,8 +1,9 @@
 /**
  * team-layer: the presence chip in the chat header (team/UI_PLAN.md slice 1,
  * Option B's chip). Teammates' faces and whether the team state is current;
- * a click opens who is on what and the latest handoff notes. Solo projects
- * show nothing here. Times are worded when drawn; nothing ticks.
+ * a click opens teammates' questions waiting for an answer ("Ask", slice 3d),
+ * who is on what and the latest handoff notes. Solo projects show nothing
+ * here. Times are worded when drawn; nothing ticks.
  */
 import { findProjectTeam, teammatesOf } from "@t3tools/client-runtime/state/teamMarkers";
 import type { EnvironmentId, ProjectId, TeamFeedTeam } from "@t3tools/contracts";
@@ -14,6 +15,7 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { TeamFace } from "./TeamHolderMarks";
+import { TeamAnswerForm, TeamQuestionText } from "./TeamQuestionCard";
 
 /** What the chip says about the team state. */
 export function syncLabel(sync: TeamFeedTeam["sync"]): { text: string; warn: boolean } {
@@ -61,6 +63,7 @@ export const TeamPresenceChip = memo(function TeamPresenceChip(props: {
   // Solo: no faces, no empty team UI.
   if (team === null || team.solo) return null;
   const label = syncLabel(team.sync);
+  const questions = team.questions ?? [];
   const names = (memberId: string) =>
     team.members.find((member) => member.memberId === memberId)?.displayName ?? memberId;
 
@@ -98,10 +101,38 @@ export const TeamPresenceChip = memo(function TeamPresenceChip(props: {
           />
           {label.text}
         </span>
+        {questions.length > 0 ? (
+          <span className="font-medium text-warning-foreground">
+            · {questions.length} {questions.length === 1 ? "question" : "questions"}
+          </span>
+        ) : null}
       </PopoverTrigger>
       <PopoverPopup side="bottom" align="end" width="md" padding="compact">
         <PopoverTitle>{team.name}</PopoverTitle>
         <p className="mt-0.5 text-xs text-muted-foreground">{syncSentence(team.sync)}</p>
+
+        {questions.length > 0 ? (
+          <div className="mt-3 flex flex-col gap-2 rounded-lg border border-warning/32 bg-warning-surface p-2 text-xs">
+            <div className="text-2xs font-medium text-muted-foreground">Questions for you</div>
+            {questions.map((question) => (
+              <div key={question.questionId} className="flex flex-col gap-1.5">
+                <div>
+                  <TeamQuestionText
+                    name={names(question.from)}
+                    paths={question.paths}
+                    text={question.text}
+                    askedAt={question.askedAt}
+                  />
+                </div>
+                <TeamAnswerForm
+                  environmentId={props.environmentId}
+                  teamId={team.teamId}
+                  questionId={question.questionId}
+                />
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         <div className="mt-3 flex flex-col gap-2.5">
           {teammates.length === 0 ? (

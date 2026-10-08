@@ -16,6 +16,7 @@
  * @module TeamChoices
  */
 import {
+  buildOnTopClaim,
   CommandId,
   EventId,
   MessageId,
@@ -25,9 +26,11 @@ import {
   TEAM_CHOICE_MADE_ACTIVITY_KIND,
   type TeamChoice,
   TeamChoiceActivityPayload,
+  type TeamChoiceAnswer,
   type TeamChoiceDelivery,
   TeamChoiceError,
   TeamChoiceMadePayload,
+  teamChoiceIsAsking,
   teamChoiceIsOpen,
   teamChoiceIsWaiting,
   teamChoiceMadeSummary,
@@ -56,6 +59,8 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { makeTeamResolver, type TeamContext } from "../mcp/toolkits/team/resolve.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { moveCopyOnto } from "./teamCopy.ts";
 import * as TeamService from "./TeamService.ts";
 
 /**
@@ -93,6 +98,21 @@ export interface EndWaitInput {
   readonly text: string;
 }
 
+export interface AskedCard {
+  readonly card: TeamChoiceActivityPayload;
+  readonly questionId: string;
+}
+
+export interface AnsweredInput {
+  readonly threadId: ThreadId;
+  readonly choiceId: string;
+  readonly questionId: string;
+  readonly answer: TeamChoiceAnswer;
+}
+
+/** A branch name from the team state that is safe to put in a refspec. */
+const SAFE_BRANCH = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._/-]*$/u;
+
 export interface ShowEditedInput {
   readonly context: TeamContext;
   /** The files the turn changed that someone else holds and this chat did not plan. */
@@ -126,6 +146,13 @@ export class TeamChoices extends Context.Service<
      * (the card tells the user). False when the card no longer waits.
      */
     readonly endWait: (input: EndWaitInput) => Effect.Effect<boolean, TeamChoiceError>;
+    /** Every card that asked teammates and has no answer yet ("Ask", slice 3d). */
+    readonly askedCards: Effect.Effect<ReadonlyArray<AskedCard>>;
+    /**
+     * The teammates' answer: a yes goes on as "Go anyway, agreed", a no opens
+     * the card again without Ask. False when the card no longer asks it.
+     */
+    readonly answered: (input: AnsweredInput) => Effect.Effect<boolean, TeamChoiceError>;
     /** The card for files a finished turn already changed (the guard's after-the-turn check). */
     readonly showEdited: (input: ShowEditedInput) => Effect.Effect<void>;
     /** The click: side effect, delivery to the agent, and the record on the card. */
@@ -191,27 +218,53 @@ export const waitDoneInstruction = (
   return `Done waiting: ${who} let go of ${paths}.${where} Re-read ${it}, then continue the task. Call team_plan before editing.`;
 };
 
+/** What a choice carries besides itself: a teammate's answer, or the branch built on. */
+export interface ChoiceDetails {
+  readonly answer?: TeamChoiceAnswer | undefined;
+  readonly onTopOf?: { readonly name: string; readonly branch: string } | undefined;
+}
+
+const answerLine = (answer: TeamChoiceAnswer) =>
+  answer.text === null ? "" : ` (${answer.by}: "${answer.text}")`;
+
 /** What the agent is told: as the held call's answer, or as the user's next message. */
 export const choiceInstruction = (
   choice: TeamChoice,
   files: ReadonlyArray<TeamPlanFile>,
   voice: "tool" | "message",
   edited = false,
+  details: ChoiceDetails = {},
 ) => {
   const paths = quoted(files.map((file) => file.path));
   const who = holderWords(files);
+  const it = itOrThem(files);
   if (choice === "wait") {
     const waitee = waiteeWords(files);
-    return `User chose: wait for ${waitee}. Do not edit ${paths}. End your turn now; T3 starts your next turn when ${waitee} ${waitee.includes(" and ") ? "let" : "lets"} go of ${itOrThem(files)}.`;
+    return `User chose: wait for ${waitee}. Do not edit ${paths}. End your turn now; T3 starts your next turn when ${waitee} ${waitee.includes(" and ") ? "let" : "lets"} go of ${it}.`;
+  }
+  if (choice === "ask") {
+    return `User chose: ask ${who} whether you may change ${paths}. Do not edit ${it}. End your turn now; T3 starts your next turn with the answer or the user's choice.`;
+  }
+  if (choice === "buildOnTop" && details.onTopOf !== undefined) {
+    const { name, branch } = details.onTopOf;
+    const where = `your copy is now on top of ${name}'s branch \`${branch}\`, which is not merged yet: their changes to ${paths} are in it`;
+    return voice === "tool"
+      ? `User chose: build on top of ${name}'s work. ${where.charAt(0).toUpperCase()}${where.slice(1)}. Read those changes before editing ${it}; you may edit ${it}. Mention these files in your team_handoff.`
+      : `Build on top: ${where}. Read those changes before editing ${it}, then continue the task; you may edit ${it}. Mention these files in your team_handoff.`;
   }
   if (choice === "anotherWay" && edited) {
-    const it = files.length === 1 ? "it" : "them";
     return `Find another way: you changed ${paths} without planning it, and ${who} ${files.length === 1 ? "holds it" : "hold them"}. Undo only your own changes to ${it} (no team_plan needed for that; others may have changed ${it} too, so do not restore the whole file), then do the task without changing ${it}. Call team_plan with your new plan before other edits.`;
   }
   if (choice === "anotherWay") {
     return voice === "tool"
       ? `User chose: find another way. Do the task without changing ${paths}; your claims on them are released. Call team_plan again with your new plan before editing.`
       : `Find another way: do the task without changing ${paths} (your claims on them are released). Call team_plan again with your new plan before editing, then continue the task.`;
+  }
+  if (details.answer?.yes === true) {
+    const agreed = `${details.answer.by} agreed that you change ${paths}${answerLine(details.answer)}`;
+    return voice === "tool"
+      ? `User asked, and ${agreed}. You may edit ${it}. Mention these files in your team_handoff.`
+      : `${agreed}. You may edit ${it}; continue the task, and mention these files in your team_handoff.`;
   }
   return voice === "tool"
     ? `User chose: go anyway. You may edit ${paths}; ${who} will see that you went ahead. Mention these files in your team_handoff.`
@@ -238,12 +291,17 @@ export interface UndoRequest {
   readonly paths: ReadonlyArray<string>;
 }
 
+interface Delivered {
+  readonly choice: TeamChoice;
+  readonly instruction: string;
+}
+
 interface Waiter {
   readonly threadId: ThreadId;
   /** The turn that made the call. Once it stops, nothing reads the call's answer. */
   readonly turnId: TurnId | null;
-  /** The click's choice, or none when the cap passes first. */
-  readonly deferred: Deferred.Deferred<Option.Option<TeamChoice>>;
+  /** The click's choice and what to tell the agent, or none when the cap passes first. */
+  readonly deferred: Deferred.Deferred<Option.Option<Delivered>>;
 }
 
 export const make = Effect.gen(function* () {
@@ -251,6 +309,7 @@ export const make = Effect.gen(function* () {
   const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
   const crypto = yield* Crypto.Crypto;
+  const git = yield* GitVcsDriver.GitVcsDriver;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
   const { resolve } = yield* makeTeamResolver;
   /** Held calls by choice id; a call removes itself when it returns or is cancelled. */
@@ -372,7 +431,7 @@ export const make = Effect.gen(function* () {
       const waiter: Waiter = {
         threadId,
         turnId: yield* runningTurn(threadId),
-        deferred: yield* Deferred.make<Option.Option<TeamChoice>>(),
+        deferred: yield* Deferred.make<Option.Option<Delivered>>(),
       };
       // Registered before the card shows, so a click always finds this call.
       const set = waiting.get(choiceId) ?? new Set();
@@ -406,18 +465,19 @@ export const make = Effect.gen(function* () {
         } else {
           // Answered between the lookup and the registration: that click started a turn.
           const made = (yield* madeChoices).get(choiceId);
-          if (!teamChoiceIsOpen(made)) return Option.some(made!.choice);
+          if (!teamChoiceIsOpen(made)) {
+            return Option.some<Delivered>({
+              choice: made!.choice,
+              instruction: choiceInstruction(made!.choice, input.files, "tool", false, made!),
+            });
+          }
         }
         yield* PubSub.publish(holds, choiceId);
         return yield* Deferred.await(waiter.deferred);
       }).pipe(Effect.ensuring(release));
       return Option.match(chosen, {
         onNone: () => notYet,
-        onSome: (choice): AskOutcome => ({
-          _tag: "Chosen",
-          choice,
-          instruction: choiceInstruction(choice, input.files, "tool"),
-        }),
+        onSome: ({ choice, instruction }): AskOutcome => ({ _tag: "Chosen", choice, instruction }),
       });
     }).pipe(
       // No card means nothing can answer: the agent is told to stop.
@@ -435,7 +495,12 @@ export const make = Effect.gen(function* () {
     );
 
   /** Releases the held files, or tells the team the user went ahead. Outside a team, nothing. */
-  const sideEffect = (choice: TeamChoice, threadId: ThreadId, files: ReadonlyArray<TeamPlanFile>) =>
+  const sideEffect = (
+    choice: TeamChoice,
+    threadId: ThreadId,
+    files: ReadonlyArray<TeamPlanFile>,
+    details: ChoiceDetails = {},
+  ) =>
     Effect.gen(function* () {
       const resolved = yield* resolve({ environmentId, threadId });
       if (resolved._tag === "NotInTeam") return;
@@ -450,13 +515,115 @@ export const make = Effect.gen(function* () {
         });
         return;
       }
+      const me = context.member.displayName;
       yield* teams.recordActivity({
         teamId: context.teamFile.teamId,
         memberId: context.member.memberId,
         thread: context.thread,
         kind: "overlap.accepted",
-        summary: `${context.member.displayName} went ahead on ${paths.join(", ")}, held by ${holderWords(files)}.`,
+        summary:
+          details.onTopOf !== undefined
+            ? `${me} built on top of ${details.onTopOf.name}'s work on ${paths.join(", ")} (branch ${details.onTopOf.branch}).`
+            : details.answer?.yes === true
+              ? `${me} went ahead on ${paths.join(", ")}, agreed by ${details.answer.by}.`
+              : `${me} went ahead on ${paths.join(", ")}, held by ${holderWords(files)}.`,
       });
+    });
+
+  /** The team context of a card's thread; a choice that needs a team fails without one. */
+  const teamContextOf = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const resolved = yield* resolve({ environmentId, threadId });
+      if (resolved._tag === "NotInTeam" || resolved.context.solo) {
+        return yield* new TeamChoiceError({ detail: "This choice needs a team." });
+      }
+      return resolved.context;
+    }).pipe(
+      Effect.catchTag("TeamToolError", (error) =>
+        Effect.fail(new TeamChoiceError({ detail: error.detail })),
+      ),
+      Effect.catchTag("TeamToolFailedError", failed("The team could not be read.")),
+    );
+
+  /** "Ask": the question goes to the team state for the teammates the card names. */
+  const askHolders = (card: TeamChoiceActivityPayload, text: string | undefined) =>
+    Effect.gen(function* () {
+      const context = yield* teamContextOf(card.threadId);
+      const to = [
+        ...new Set(
+          card.files.flatMap((file) =>
+            file.holders.flatMap((holder) => (holder.kind === "member" ? [holder.memberId] : [])),
+          ),
+        ),
+      ];
+      if (to.length === 0) {
+        return yield* new TeamChoiceError({ detail: "Only your own chats hold these files." });
+      }
+      return yield* teams
+        .askQuestion({
+          teamId: context.teamFile.teamId,
+          memberId: context.member.memberId,
+          thread: context.thread,
+          to,
+          paths: card.files.map((file) => file.path),
+          text,
+        })
+        .pipe(Effect.catchCause(failed("The question could not be saved to the team.")));
+    });
+
+  /** "Build on top": moves this chat's own copy onto the holder's pushed branch. */
+  const moveOntoHolder = (card: TeamChoiceActivityPayload) =>
+    Effect.gen(function* () {
+      const context = yield* teamContextOf(card.threadId);
+      const shell = Option.getOrUndefined(
+        yield* snapshots
+          .getThreadShellById(card.threadId)
+          .pipe(Effect.catch(failed("This chat could not be read."))),
+      );
+      const folder = shell?.worktreePath ?? null;
+      if (folder === null) {
+        return yield* new TeamChoiceError({
+          detail:
+            "This chat works in the project's checkout, not a copy of its own, so it cannot move onto a teammate's branch.",
+        });
+      }
+      const teamId = context.teamFile.teamId;
+      const [claims, members] = yield* Effect.all([
+        teams.listActiveClaims(teamId),
+        teams.listMembers(teamId),
+      ]).pipe(Effect.catch(failed("The team could not be read.")));
+      const target = buildOnTopClaim(claims, card.files);
+      if (target === undefined || !SAFE_BRANCH.test(target.branch)) {
+        return yield* new TeamChoiceError({ detail: "Their work is not pushed yet." });
+      }
+      const name =
+        members.find((member) => member.memberId === target.memberId)?.displayName ??
+        target.memberId;
+      const branch = target.branch;
+      const moved = yield* moveCopyOnto(git, {
+        folder,
+        fetch: ["origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
+        onto: `origin/${branch}`,
+        paths: [],
+        operation: "TeamChoices.buildOnTop",
+      });
+      switch (moved.status) {
+        case "updated":
+          return { name, branch };
+        case "dirty":
+          return yield* new TeamChoiceError({
+            detail:
+              "This chat's copy has uncommitted changes. Commit or undo them, then try again.",
+          });
+        case "conflict":
+          return yield* new TeamChoiceError({
+            detail: `This chat's work conflicts with ${name}'s branch ${branch}; nothing was changed.`,
+          });
+        case "unavailable":
+          return yield* new TeamChoiceError({
+            detail: `${name}'s branch ${branch} could not be fetched. Try again in a moment.`,
+          });
+      }
     });
 
   /** A turn whose message comes from the card; `key` keeps each card's turns apart. */
@@ -489,11 +656,61 @@ export const make = Effect.gen(function* () {
       yield* appendActivity({
         threadId,
         kind: TEAM_CHOICE_MADE_ACTIVITY_KIND,
-        summary: teamChoiceMadeSummary(made.choice, made.wait),
+        summary: teamChoiceMadeSummary(made),
         payload: made,
         id: first ? `${made.choiceId}:made` : `${made.choiceId}:made:${yield* crypto.randomUUIDv4}`,
       });
     });
+
+  /**
+   * Tells the agent: the held call if one still waits, else a new turn (`key`
+   * names it), unless `noTurn`. A call whose cap just passed is done already,
+   * and one whose turn was stopped is still waiting but nobody reads its
+   * answer (Codex does not cancel it): then a turn carries the choice. The
+   * stopped one is freed with "not yet".
+   */
+  const deliver = (input: {
+    readonly threadId: ThreadId;
+    readonly choiceId: string;
+    readonly key: string;
+    readonly choice: TeamChoice;
+    readonly tool: string;
+    readonly message: string;
+    readonly noTurn: boolean;
+  }) =>
+    Effect.gen(function* () {
+      const running = yield* runningTurn(input.threadId);
+      let delivery: TeamChoiceDelivery = input.noTurn ? "none" : "turn";
+      for (const waiter of waiting.get(input.choiceId) ?? []) {
+        const live = running !== null && (waiter.turnId ?? running) === running;
+        const answer = live
+          ? Option.some<Delivered>({ choice: input.choice, instruction: input.tool })
+          : Option.none();
+        if ((yield* Deferred.succeed(waiter.deferred, answer)) && live) delivery = "held";
+      }
+      if (delivery === "turn") {
+        yield* startTurn(input.threadId, input.key, input.message).pipe(
+          Effect.catchCause(failed("The choice was saved, but the agent could not be started.")),
+        );
+      }
+      return delivery;
+    });
+
+  /** Drops the card's open question: it was answered, or the user chose something else. */
+  const withdraw = (threadId: ThreadId, questionId: string) =>
+    Effect.gen(function* () {
+      const resolved = yield* resolve({ environmentId, threadId });
+      if (resolved._tag === "NotInTeam") return;
+      yield* teams.withdrawQuestion({
+        teamId: resolved.context.teamFile.teamId,
+        memberId: resolved.context.member.memberId,
+        questionId,
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("A team question could not be withdrawn.", { questionId, cause }),
+      ),
+    );
 
   const choose = (input: TeamChooseInput) =>
     clicks.withPermits(1)(
@@ -527,40 +744,109 @@ export const make = Effect.gen(function* () {
         if (choice === "wait" && edited) {
           return yield* new TeamChoiceError({ detail: "A change already made cannot wait." });
         }
-        if (choice !== "wait") {
-          yield* sideEffect(choice, input.threadId, card.files).pipe(
+        if ((choice === "ask" || choice === "buildOnTop") && (card.solo || edited)) {
+          return yield* new TeamChoiceError({
+            detail: "This choice is for a teammate's files, before the change is made.",
+          });
+        }
+        if (choice === "ask" && latest?.ask !== undefined) {
+          return yield* new TeamChoiceError({
+            detail:
+              latest.ask === "asked"
+                ? "Already asked; the answer comes on this card."
+                : "They already answered no.",
+          });
+        }
+
+        let made: TeamChoiceMadePayload = {
+          choiceId: input.choiceId,
+          choice,
+          delivery: "none",
+          ...(choice === "wait" ? { wait: "waiting" as const } : {}),
+        };
+        if (choice === "ask") {
+          const question = yield* askHolders(card, input.text);
+          made = {
+            ...made,
+            ask: "asked",
+            questionId: question.questionId,
+            askedAt: question.askedAt,
+          };
+        } else if (choice === "buildOnTop") {
+          made = { ...made, onTopOf: yield* moveOntoHolder(card) };
+        }
+        if (choice !== "wait" && choice !== "ask") {
+          yield* sideEffect(choice, input.threadId, card.files, made).pipe(
             Effect.catchCause(failed("The choice could not be saved to the team.")),
           );
         }
-        // A call whose cap just passed is done already, and one whose turn was stopped
-        // is still waiting but nobody reads its answer (Codex does not cancel it): then
-        // a turn carries the choice. The stopped one is freed with "not yet".
+        if (latest?.ask === "asked" && latest.questionId !== undefined) {
+          yield* withdraw(input.threadId, latest.questionId);
+        }
         // An edited card holds no call; "Go anyway" there keeps the change as it is.
-        // "Wait" with no call to answer tells the agent nothing now: the wait's end does.
-        const running = yield* runningTurn(input.threadId);
-        let delivery: TeamChoiceDelivery =
-          choice === "wait" || (edited && choice === "goAnyway") ? "none" : "turn";
-        for (const waiter of waiting.get(input.choiceId) ?? []) {
-          const live = running !== null && (waiter.turnId ?? running) === running;
-          const answer = live ? Option.some(choice) : Option.none();
-          if ((yield* Deferred.succeed(waiter.deferred, answer)) && live) delivery = "held";
+        // "Wait" and "Ask" with no call to answer tell the agent nothing now: their end does.
+        const delivery = yield* deliver({
+          threadId: input.threadId,
+          choiceId: input.choiceId,
+          key: input.choiceId,
+          choice,
+          tool: choiceInstruction(choice, card.files, "tool", edited, made),
+          message: choiceInstruction(choice, card.files, "message", edited, made),
+          noTurn: choice === "wait" || choice === "ask" || (edited && choice === "goAnyway"),
+        });
+        yield* recordMade(input.threadId, { ...made, delivery }).pipe(
+          Effect.catchCause(notRecorded),
+        );
+        return { delivery } satisfies TeamChooseResult;
+      }),
+    );
+
+  /**
+   * The teammates' answer to the card's question: a yes goes on as "Go
+   * anyway, agreed"; a no opens the card again without Ask. False when the
+   * card no longer asks that question.
+   */
+  const answered = (input: AnsweredInput) =>
+    clicks.withPermits(1)(
+      Effect.gen(function* () {
+        const unreadable = failed("The warning card could not be read.");
+        const latest = (yield* madeChoices.pipe(Effect.catch(unreadable))).get(input.choiceId);
+        if (!teamChoiceIsAsking(latest) || latest?.questionId !== input.questionId) return false;
+        const card = (yield* listChoices(input.threadId).pipe(Effect.catch(unreadable))).find(
+          (candidate) => candidate.choiceId === input.choiceId,
+        );
+        if (card === undefined) return false;
+        yield* withdraw(input.threadId, input.questionId);
+        const notRecorded = failed("The answer came, but it was not recorded on the card.");
+        if (!input.answer.yes) {
+          yield* recordMade(input.threadId, {
+            ...latest,
+            delivery: "none",
+            ask: "declined",
+            answer: input.answer,
+          }).pipe(Effect.catchCause(notRecorded));
+          return true;
         }
-        if (delivery === "turn") {
-          yield* startTurn(
-            input.threadId,
-            input.choiceId,
-            choiceInstruction(choice, card.files, "message", edited),
-          ).pipe(
-            Effect.catchCause(failed("The choice was saved, but the agent could not be started.")),
-          );
-        }
+        const details = { answer: input.answer };
+        yield* sideEffect("goAnyway", input.threadId, card.files, details).pipe(
+          Effect.catchCause(failed("The answer could not be saved to the team.")),
+        );
+        const delivery = yield* deliver({
+          threadId: input.threadId,
+          choiceId: input.choiceId,
+          key: `${input.choiceId}:answer`,
+          choice: "goAnyway",
+          tool: choiceInstruction("goAnyway", card.files, "tool", false, details),
+          message: choiceInstruction("goAnyway", card.files, "message", false, details),
+          noTurn: false,
+        });
         yield* recordMade(input.threadId, {
           choiceId: input.choiceId,
-          choice,
+          choice: "goAnyway",
           delivery,
-          ...(choice === "wait" ? { wait: "waiting" as const } : {}),
+          answer: input.answer,
         }).pipe(Effect.catchCause(notRecorded));
-        return { delivery } satisfies TeamChooseResult;
+        return true;
       }),
     );
 
@@ -614,6 +900,20 @@ export const make = Effect.gen(function* () {
     );
   }).pipe(Effect.orElseSucceed((): ReadonlyArray<TeamChoiceActivityPayload> => []));
 
+  const askedCards = Effect.gen(function* () {
+    const made = yield* madeChoices;
+    return (yield* snapshots.listActivitiesByKind(TEAM_CHOICE_ACTIVITY_KIND)).flatMap(
+      (activity): Array<AskedCard> => {
+        const card = decodeChoice(activity.payload);
+        if (Option.isNone(card)) return [];
+        const latest = made.get(card.value.choiceId);
+        return teamChoiceIsAsking(latest) && latest?.questionId !== undefined
+          ? [{ card: card.value, questionId: latest.questionId }]
+          : [];
+      },
+    );
+  }).pipe(Effect.orElseSucceed((): ReadonlyArray<AskedCard> => []));
+
   const showEdited = (input: ShowEditedInput) =>
     Effect.gen(function* () {
       const threadId = input.context.thread.threadId;
@@ -639,7 +939,7 @@ export const make = Effect.gen(function* () {
     );
 
   const wentAhead = (threadId: ThreadId) =>
-    pathsWhere(threadId, (made) => made?.choice === "goAnyway");
+    pathsWhere(threadId, (made) => made?.choice === "goAnyway" || made?.choice === "buildOnTop");
 
   // The undo edits the held file: the guard lets the undo turn through, and its diff asks nothing.
   const undoRequests = (threadId: ThreadId) =>
@@ -667,6 +967,8 @@ export const make = Effect.gen(function* () {
     waitingPaths,
     waitingCards,
     endWait,
+    askedCards,
+    answered,
     showEdited,
     choose,
   });

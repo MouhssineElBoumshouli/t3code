@@ -15,6 +15,8 @@
 import type {
   EnvironmentId,
   Team,
+  TeamAnswer,
+  TeamQuestion,
   TeamFeedSync,
   TeamActivity,
   TeamActivityKind,
@@ -86,6 +88,19 @@ export interface ClaimPathsInput {
   readonly thread: TeamThreadRef;
   readonly paths: ReadonlyArray<string>;
   readonly note?: string | undefined;
+  /** The thread's own branch (a worktree), so a teammate can build on top of it once pushed. */
+  readonly branch?: string | undefined;
+  /** The commit `origin/<branch>` is at, when it is pushed. */
+  readonly pushedCommit?: string | undefined;
+}
+
+export interface AskQuestionInput {
+  readonly teamId: TeamId;
+  readonly memberId: TeamMemberId;
+  readonly thread: TeamThreadRef;
+  readonly to: ReadonlyArray<TeamMemberId>;
+  readonly paths: ReadonlyArray<string>;
+  readonly text?: string | undefined;
 }
 
 export interface ReleasePathsInput {
@@ -263,6 +278,44 @@ export class TeamService extends Context.Service<
       teamId: TeamId,
       options?: { readonly thread?: TeamThreadRef; readonly limit?: number },
     ) => Effect.Effect<ReadonlyArray<TeamHandoff>, TeamServiceError>;
+    /**
+     * Records where the thread's branch is on `origin` (undefined: not pushed)
+     * on this server's active claims of that thread and branch. Shared only
+     * when it changed.
+     */
+    readonly setClaimsPushed: (input: {
+      readonly teamId: TeamId;
+      readonly memberId: TeamMemberId;
+      readonly thread: TeamThreadRef;
+      readonly branch: string;
+      readonly pushedCommit: string | undefined;
+    }) => Effect.Effect<void, TeamServiceError>;
+    /** "Ask" on the warning card: writes an open question, shared at once. */
+    readonly askQuestion: (
+      input: AskQuestionInput,
+    ) => Effect.Effect<TeamQuestion, TeamServiceError>;
+    /** Drops one of this server's questions (answered, or the user chose something else). */
+    readonly withdrawQuestion: (input: {
+      readonly teamId: TeamId;
+      readonly memberId: TeamMemberId;
+      readonly questionId: string;
+    }) => Effect.Effect<void, TeamServiceError>;
+    /** Answers a question to this member, shared at once. */
+    readonly answerQuestion: (input: {
+      readonly teamId: TeamId;
+      readonly memberId: TeamMemberId;
+      readonly questionId: string;
+      readonly yes: boolean;
+      readonly text?: string | undefined;
+    }) => Effect.Effect<TeamAnswer, TeamServiceError>;
+    /** Open questions, oldest first. */
+    readonly listQuestions: (
+      teamId: TeamId,
+    ) => Effect.Effect<ReadonlyArray<TeamQuestion>, TeamServiceError>;
+    /** Answers to open or recent questions, oldest first. */
+    readonly listAnswers: (
+      teamId: TeamId,
+    ) => Effect.Effect<ReadonlyArray<TeamAnswer>, TeamServiceError>;
     /** Adds one line to the team's activity, as this member (the warning card's "Go anyway"). */
     readonly recordActivity: (input: {
       readonly teamId: TeamId;

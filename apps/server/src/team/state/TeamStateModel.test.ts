@@ -17,8 +17,10 @@ import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 
 import {
+  addAnswer,
   addClaim,
   addHandoff,
+  addQuestion,
   addActivity,
   buildTeamView,
   compactWriterFile,
@@ -29,7 +31,9 @@ import {
   overlapKey,
   parseTeamState,
   releasePaths,
+  removeQuestion,
   saveAutomaticNote,
+  setClaimsPushed,
   saveTask,
   writerFilePath,
 } from "./TeamStateModel.ts";
@@ -489,5 +493,67 @@ describe("TeamStateModel", () => {
       now: at(3),
     });
     assert.equal(none.file, result.file);
+  });
+
+  it("reads questions, answers and a claim's pushed branch; older files have none", () => {
+    // A file written before "Ask": no questions or answers, and it still reads.
+    const old = claim(writer("omar", "env-omar"), "t1", ["src/a.ts"], 1).file;
+    assert.notProperty(JSON.parse(encodeWriterFile(old)), "questions");
+    let omar = addClaim(old, {
+      claimId: TeamClaimId.make(id("claim")),
+      activityId: TeamActivityId.make(id("activity")),
+      thread: thread("env-omar", "t2"),
+      paths: ["src/b.ts"],
+      note: null,
+      branch: "t3/omar",
+      now: at(2),
+    }).file;
+    // Pushed: recorded on that thread's claims with that branch, once.
+    const pushed = setClaimsPushed(omar, {
+      thread: thread("env-omar", "t2"),
+      branch: "t3/omar",
+      pushedCommit: "abc123",
+    });
+    assert.notEqual(pushed, omar);
+    assert.equal(
+      setClaimsPushed(pushed, {
+        thread: thread("env-omar", "t2"),
+        branch: "t3/omar",
+        pushedCommit: "abc123",
+      }),
+      pushed,
+      "no change, no write",
+    );
+    omar = addAnswer(pushed, { questionId: "q1", yes: false, text: "not now", answeredAt: at(4) });
+    omar = addAnswer(omar, { questionId: "q1", yes: true, text: null, answeredAt: at(5) });
+    let sara = addQuestion(writer("sara", "env-sara"), {
+      questionId: "q1",
+      to: ["omar" as TeamLogin],
+      paths: ["src/b.ts"],
+      text: "Only a param",
+      thread: thread("env-sara", "s1"),
+      askedAt: at(3),
+    });
+    const view = viewOf(tree(old, omar, sara));
+    assert.deepEqual(view.warnings, []);
+    assert.deepEqual(
+      view.activeClaims.map((item) => [item.paths, item.branch, item.pushedCommit]),
+      [
+        [["src/a.ts"], undefined, undefined],
+        [["src/b.ts"], "t3/omar", "abc123"],
+      ],
+    );
+    assert.deepEqual(
+      view.questions.map((question) => [question.questionId, question.from, ...question.to]),
+      [["q1", "sara", "omar"]],
+    );
+    // One answer per person and question: the newest.
+    assert.deepEqual(
+      view.answers.map((answer) => [answer.by, answer.yes]),
+      [["omar", true]],
+    );
+    sara = removeQuestion(sara, "q1");
+    assert.deepEqual(viewOf(tree(omar, sara)).questions, []);
+    assert.equal(removeQuestion(sara, "q1"), sara);
   });
 });

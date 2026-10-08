@@ -99,10 +99,26 @@ export const make = Effect.gen(function* () {
       const tasks = yield* teams.listTasks(teamId);
       const notes = yield* teams.listHandoffs(teamId);
       const me = yield* teams.currentMember(teamId);
+      const solo = yield* teams.isSolo(teamId);
+      // Questions to this person they have not answered yet ("Ask", slice 3d).
+      const questions =
+        solo || Option.isNone(me)
+          ? []
+          : yield* Effect.gen(function* () {
+              const answers = yield* teams.listAnswers(teamId);
+              return (yield* teams.listQuestions(teamId)).filter(
+                (question) =>
+                  question.to.includes(me.value.memberId) &&
+                  !answers.some(
+                    (answer) =>
+                      answer.questionId === question.questionId && answer.by === me.value.memberId,
+                  ),
+              );
+            });
       return Option.some<TeamFeedTeam>({
         teamId,
         name: team.value.name,
-        solo: yield* teams.isSolo(teamId),
+        solo,
         projects,
         me: Option.match(me, { onNone: () => null, onSome: (member) => member.memberId }),
         members,
@@ -119,6 +135,7 @@ export const make = Effect.gen(function* () {
             files: note.files.slice(0, TEAM_FEED_LIMITS.handoffFiles),
             createdAt: note.createdAt,
           })),
+        ...(questions.length === 0 ? {} : { questions }),
         sync: yield* teams.syncState(teamId),
       });
     }).pipe(Effect.orElseSucceed(() => Option.none<TeamFeedTeam>()));

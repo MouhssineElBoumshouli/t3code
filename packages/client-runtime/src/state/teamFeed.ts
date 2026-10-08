@@ -29,5 +29,10 @@ export function createTeamFeedAtoms<R, E>(runtime: Atom.AtomRuntime<EnvironmentR
       label: "environment-data:team:choose",
       tag: WS_METHODS.teamChoose,
     }),
+    /** An answer to a teammate's question (slice 3d). */
+    answer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:team:answer",
+      tag: WS_METHODS.teamAnswer,
+    }),
   };
 }

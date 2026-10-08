@@ -91,6 +91,10 @@ export const TeamClaim = Schema.Struct({
   thread: TeamThreadRef,
   paths: Schema.Array(TeamPath),
   note: Schema.NullOr(TrimmedNonEmptyString),
+  /** The claiming chat's own branch, when it has one (a worktree). */
+  branch: Schema.optionalKey(TrimmedNonEmptyString),
+  /** Set once that branch is pushed: the commit `origin/<branch>` was at. */
+  pushedCommit: Schema.optionalKey(TrimmedNonEmptyString),
   claimedAt: IsoDateTime,
   /** Null while the claim is active. */
   releasedAt: Schema.NullOr(IsoDateTime),

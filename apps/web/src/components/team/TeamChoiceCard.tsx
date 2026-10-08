@@ -1,46 +1,58 @@
 /**
  * team-layer: the warning card (team/UI_PLAN.md slice 3, PREVENTION_PLAN.md
- * slices 3a and 3c). In the agent's message, where it stopped before editing:
- * the planned files someone else holds, and the choices. The click goes to
- * the server, which answers the held `team_plan` call or starts a turn; the
- * choice then shows on the card. "Wait" shows while it waits and can be
- * stopped, which opens the card again; when the holder lets go, the server
- * continues the chat.
+ * slices 3a, 3c and 3d). In the agent's message, where it stopped before
+ * editing: the planned files someone else holds, and the choices. The click
+ * goes to the server, which answers the held `team_plan` call or starts a
+ * turn; the choice then shows on the card. "Wait" shows while it waits and
+ * can be stopped, which opens the card again; when the holder lets go, the
+ * server continues the chat. Team only: "Ask" sends a question (the other
+ * choices stay open until the answer; a no opens the card without Ask), and
+ * "Build on top" moves this chat's copy onto the holder's pushed branch.
  */
-import { planHolders } from "@t3tools/client-runtime/state/teamMarkers";
+import { findProjectTeam, planHolders } from "@t3tools/client-runtime/state/teamMarkers";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { TeamChoiceCard as TeamChoiceCardData } from "@t3tools/client-runtime/work-log/team-cards";
 import {
+  buildOnTopClaim,
   type EnvironmentId,
-  type TeamChoice,
   type TeamChooseAction,
   teamChoiceIsOpen,
 } from "@t3tools/contracts";
-import { CheckIcon, HourglassIcon, TriangleAlertIcon } from "lucide-react";
+import {
+  CheckIcon,
+  GitBranchIcon,
+  HourglassIcon,
+  MessageCircleQuestionIcon,
+  TriangleAlertIcon,
+  XIcon,
+} from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
 import { PierreEntryIcon } from "~/components/chat/PierreEntryIcon";
 import { Button } from "~/components/ui/button";
+import { Input } from "~/components/ui/input";
 import { MiddleTruncate } from "~/components/ui/middle-truncate";
 import { toastManager } from "~/components/ui/toast";
-import { teamFeed } from "~/state/teamFeed";
+import { useThreadShell } from "~/state/entities";
+import { teamFeed, useTeamFeed } from "~/state/teamFeed";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { TeamHolderMarks, TeamHolderNames } from "./TeamHolderMarks";
 
-const CHOICE_LABELS: Record<Exclude<TeamChoice, "wait">, string> = {
+const CHOICE_LABELS = {
   anotherWay: "Find another way",
   goAnyway: "Go anyway",
-};
+} as const;
 
 /** A card for a change the turn already made (the guard's after-the-turn check). */
-const EDITED_CHOICE_LABELS: Record<Exclude<TeamChoice, "wait">, string> = {
+const EDITED_CHOICE_LABELS = {
   anotherWay: "Undo it, find another way",
   goAnyway: "Keep the change",
-};
+} as const;
 
 const DELIVERY_WORDS = {
   held: "· sent to the agent",
@@ -69,6 +81,8 @@ export const TeamChoiceCard = memo(function TeamChoiceCard(props: {
   const { card } = props;
   const choose = useAtomCommand(teamFeed.choose, { reportFailure: false });
   const [pending, setPending] = useState<TeamChooseAction | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [askLine, setAskLine] = useState("");
   const files = useMemo(
     () => card.files.map((file) => ({ path: file.path, holders: planHolders(file.holders) })),
     [card.files],
@@ -82,16 +96,41 @@ export const TeamChoiceCard = memo(function TeamChoiceCard(props: {
       : `${names} ${names.includes(" and ") ? "hold" : "holds"} ${fileWords} ${where}`;
   const waitFor = names ?? "that chat";
   const labels = card.edited === true ? EDITED_CHOICE_LABELS : CHOICE_LABELS;
-  const open = teamChoiceIsOpen(card.made);
+  const made = card.made;
+  const open = teamChoiceIsOpen(made);
   const them = files.length === 1 ? "it" : "them";
+  // Team only, before the change: "Ask" and "Build on top" need a teammate.
+  const teamChoices = !card.solo && card.edited !== true && names !== null;
 
-  const onChoose = (choice: TeamChooseAction) => {
+  // "Build on top" needs the holder's branch pushed (from the team feed) and a copy of this chat's own.
+  const shell = useThreadShell(
+    teamChoices ? { environmentId: props.environmentId, threadId: card.threadId } : null,
+  );
+  const teams = useTeamFeed(teamChoices ? props.environmentId : null);
+  const pushed = useMemo(() => {
+    const team = findProjectTeam(teams, shell?.projectId ?? null)?.team;
+    return team === undefined ? undefined : buildOnTopClaim(team.claims, card.files);
+  }, [teams, shell?.projectId, card.files]);
+  const buildBlocked =
+    shell !== null && shell.worktreePath === null
+      ? "this chat has no copy of its own"
+      : pushed === undefined
+        ? "not pushed yet"
+        : null;
+
+  const onChoose = (choice: TeamChooseAction, text?: string) => {
     setPending(choice);
     void choose({
       environmentId: props.environmentId,
-      input: { threadId: card.threadId, choiceId: card.choiceId, choice },
+      input: {
+        threadId: card.threadId,
+        choiceId: card.choiceId,
+        choice,
+        ...(text !== undefined && text.trim().length > 0 ? { text: text.trim() } : {}),
+      },
     }).then((result) => {
       setPending(null);
+      if (result._tag === "Success" && choice === "ask") setAsking(false);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         toastManager.add({
@@ -102,6 +141,29 @@ export const TeamChoiceCard = memo(function TeamChoiceCard(props: {
       }
     });
   };
+
+  const askedLine =
+    made?.ask === "asked" ? (
+      <p className="flex min-w-0 items-center gap-1.5 text-foreground">
+        <MessageCircleQuestionIcon
+          aria-hidden
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+        Asked {waitFor}
+        {made.askedAt === undefined ? null : ` ${formatRelativeTimeLabel(made.askedAt)}`}
+        <span className="text-muted-foreground">
+          · the answer comes here; you can still choose below
+        </span>
+      </p>
+    ) : made?.ask === "declined" && made.answer !== undefined ? (
+      <p className="flex min-w-0 items-center gap-1.5 text-foreground">
+        <XIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        {made.answer.by} said no
+        {made.answer.text === null ? null : (
+          <span className="text-muted-foreground">· "{made.answer.text}"</span>
+        )}
+      </p>
+    ) : null;
 
   return (
     <section
@@ -145,6 +207,7 @@ export const TeamChoiceCard = memo(function TeamChoiceCard(props: {
       <div className="border-t border-warning/20 px-3 py-2">
         {open ? (
           <div className="flex flex-col gap-1.5">
+            {askedLine}
             <div className="flex flex-wrap gap-1.5">
               {(["anotherWay", "goAnyway"] as const).map((choice) => (
                 <Button
@@ -167,22 +230,61 @@ export const TeamChoiceCard = memo(function TeamChoiceCard(props: {
                   {pending === "wait" ? "Sending…" : `Wait for ${waitFor}`}
                 </Button>
               )}
+              {teamChoices ? (
+                <Button
+                  size="compact"
+                  variant="outline"
+                  disabled={pending !== null || buildBlocked !== null}
+                  title={buildBlocked ?? `Move this chat onto ${pushed?.branch ?? "their branch"}`}
+                  onClick={() => onChoose("buildOnTop")}
+                >
+                  {pending === "buildOnTop"
+                    ? "Moving…"
+                    : `Build on top of ${names}'s work${buildBlocked === null ? "" : ` · ${buildBlocked}`}`}
+                </Button>
+              ) : null}
+              {teamChoices && made?.ask === undefined && !asking ? (
+                <Button
+                  size="compact"
+                  variant="outline"
+                  disabled={pending !== null}
+                  onClick={() => setAsking(true)}
+                >
+                  Ask {names}
+                </Button>
+              ) : null}
             </div>
-            {card.solo || card.edited === true ? null : (
-              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-                <span className="text-muted-foreground">Coming soon:</span>
-                {[
-                  `Build on top of ${names === null ? "their" : `${names}'s`} work`,
-                  `Ask ${names ?? "them"}`,
-                ].map((label) => (
-                  <Button key={label} size="compact" variant="ghost-muted" disabled>
-                    {label}
-                  </Button>
-                ))}
+            {asking && made?.ask === undefined ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Input
+                  size="compact"
+                  className="min-w-40 flex-1"
+                  placeholder={`A line for ${names} (optional)`}
+                  aria-label={`A line for ${names} (optional)`}
+                  value={askLine}
+                  disabled={pending !== null}
+                  onValueChange={setAskLine}
+                />
+                <Button
+                  size="compact"
+                  variant="outline"
+                  disabled={pending !== null}
+                  onClick={() => onChoose("ask", askLine)}
+                >
+                  {pending === "ask" ? "Sending…" : "Send question"}
+                </Button>
+                <Button
+                  size="compact"
+                  variant="ghost-muted"
+                  disabled={pending !== null}
+                  onClick={() => setAsking(false)}
+                >
+                  Cancel
+                </Button>
               </div>
-            )}
+            ) : null}
           </div>
-        ) : card.made?.wait === "waiting" ? (
+        ) : made?.wait === "waiting" ? (
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
             <p className="flex min-w-0 items-center gap-1.5 text-foreground">
               <HourglassIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
@@ -198,23 +300,41 @@ export const TeamChoiceCard = memo(function TeamChoiceCard(props: {
               {pending === "cancelWait" ? "Sending…" : "Stop waiting"}
             </Button>
           </div>
-        ) : card.made?.wait === "conflict" ? (
+        ) : made?.wait === "conflict" ? (
           <p className="flex items-center gap-1.5 text-foreground">
             <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0 text-warning" />
             {waitFor === "that chat" ? "That chat" : waitFor} let go, but this chat's copy could not
             be moved on top of their work: a conflict. Update it, then send a message.
           </p>
-        ) : card.made?.wait === "done" ? (
+        ) : made?.wait === "done" ? (
           <p className="flex items-center gap-1.5 text-foreground">
             <CheckIcon aria-hidden className="size-3.5 text-muted-foreground" />
             Waited for {waitFor}
             <span className="text-muted-foreground">· the chat went on as a new message</span>
           </p>
-        ) : card.made !== null && card.made.choice !== "wait" ? (
+        ) : made?.choice === "buildOnTop" && made.onTopOf !== undefined ? (
+          <p className="flex min-w-0 items-center gap-1.5 text-foreground">
+            <GitBranchIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+            Built on top of {made.onTopOf.name}'s work
+            <span className="truncate text-muted-foreground">
+              · on <code className="font-mono">{made.onTopOf.branch}</code>{" "}
+              {DELIVERY_WORDS[made.delivery]}
+            </span>
+          </p>
+        ) : made?.choice === "goAnyway" && made.answer?.yes === true ? (
+          <p className="flex min-w-0 items-center gap-1.5 text-foreground">
+            <CheckIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+            {made.answer.by} said yes: go anyway, agreed
+            <span className="truncate text-muted-foreground">
+              {made.answer.text === null ? "" : `· "${made.answer.text}" `}
+              {DELIVERY_WORDS[made.delivery]}
+            </span>
+          </p>
+        ) : made !== null && (made.choice === "anotherWay" || made.choice === "goAnyway") ? (
           <p className="flex items-center gap-1.5 text-foreground">
             <CheckIcon aria-hidden className="size-3.5 text-muted-foreground" />
-            You chose: {labels[card.made.choice]}
-            <span className="text-muted-foreground">{DELIVERY_WORDS[card.made.delivery]}</span>
+            You chose: {labels[made.choice]}
+            <span className="text-muted-foreground">{DELIVERY_WORDS[made.delivery]}</span>
           </p>
         ) : null}
       </div>

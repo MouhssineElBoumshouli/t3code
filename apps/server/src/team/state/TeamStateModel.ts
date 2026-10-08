@@ -8,18 +8,23 @@
  */
 import {
   type TeamActivity,
+  type TeamAnswer,
   type TeamClaim,
   type TeamClaimOverlap,
   type TeamHandoff,
   TeamMemberId,
+  type TeamQuestion,
   type TeamMemberRole,
   teamPathsOverlap,
   type TeamStateActivity,
   TeamStateActivity as TeamStateActivitySchema,
+  TeamStateAnswer as TeamStateAnswerSchema,
   type TeamStateClaim,
   TeamStateClaim as TeamStateClaimSchema,
   type TeamStateNote,
   TeamStateNote as TeamStateNoteSchema,
+  type TeamStateQuestion,
+  TeamStateQuestion as TeamStateQuestionSchema,
   type TeamStateTask,
   TeamStateTask as TeamStateTaskSchema,
   type TeamStateTeamFile,
@@ -81,6 +86,10 @@ export interface TeamStateView {
   readonly notes: ReadonlyArray<TeamHandoff>;
   /** Newest first. */
   readonly activity: ReadonlyArray<TeamActivity>;
+  /** Open questions ("Ask", slice 3d), oldest first. */
+  readonly questions: ReadonlyArray<TeamQuestion>;
+  /** Answers to them, oldest first. */
+  readonly answers: ReadonlyArray<TeamAnswer>;
 }
 
 /** Another writer's active claim that overlaps one of this server's, found after both were made. */
@@ -121,6 +130,8 @@ const WriterEnvelope = Schema.Struct({
   tasks: Schema.Array(Schema.Unknown),
   notes: Schema.Array(Schema.Unknown),
   activity: Schema.Array(Schema.Unknown),
+  questions: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  answers: Schema.optionalKey(Schema.Array(Schema.Unknown)),
 });
 const decodeEnvelope = Schema.decodeUnknownExit(WriterEnvelope);
 const decodeTeamFile = Schema.decodeUnknownExit(TeamStateTeamFileSchema);
@@ -192,7 +203,15 @@ export const parseTeamState = (files: ReadonlyMap<string, string>): ParsedTeamSt
     const tasks = decodeEntries(TeamStateTaskSchema, raw.tasks);
     const notes = decodeEntries(TeamStateNoteSchema, raw.notes);
     const activity = decodeEntries(TeamStateActivitySchema, raw.activity);
-    const skipped = claims.skipped + tasks.skipped + notes.skipped + activity.skipped;
+    const questions = decodeEntries(TeamStateQuestionSchema, raw.questions ?? []);
+    const answers = decodeEntries(TeamStateAnswerSchema, raw.answers ?? []);
+    const skipped =
+      claims.skipped +
+      tasks.skipped +
+      notes.skipped +
+      activity.skipped +
+      questions.skipped +
+      answers.skipped;
     if (skipped > 0) {
       warnings.push(
         `${path}: ${skipped} ${skipped === 1 ? "entry" : "entries"} not understood; skipped.`,
@@ -201,11 +220,17 @@ export const parseTeamState = (files: ReadonlyMap<string, string>): ParsedTeamSt
     writers.push({
       key: writerKey(raw.login, raw.environmentId),
       file: {
-        ...raw,
+        format: raw.format,
+        login: raw.login,
+        displayName: raw.displayName,
+        environmentId: raw.environmentId,
+        lastSyncAt: raw.lastSyncAt,
         claims: claims.kept,
         tasks: tasks.kept,
         notes: notes.kept,
         activity: activity.kept,
+        ...(raw.questions === undefined ? {} : { questions: questions.kept }),
+        ...(raw.answers === undefined ? {} : { answers: answers.kept }),
       },
     });
   }
@@ -302,7 +327,29 @@ export const buildTeamView = (
     )
     .map(({ writer, line }) => toActivity(team, writer.file.login, line));
 
-  return { team, members, activeClaims, tasks, notes, activity };
+  const byTime =
+    <A>(timeOfEntry: (entry: A) => string) =>
+    (a: A, b: A) =>
+      timeOf(timeOfEntry(a)) - timeOf(timeOfEntry(b));
+  const questions = ordered
+    .flatMap((writer) =>
+      (writer.file.questions ?? []).map((question): TeamQuestion => ({
+        ...question,
+        from: memberIdOf(writer.file.login),
+        to: question.to.map(memberIdOf),
+      })),
+    )
+    .toSorted(byTime((question) => question.askedAt));
+  const answers = ordered
+    .flatMap((writer) =>
+      (writer.file.answers ?? []).map((answer): TeamAnswer => ({
+        ...answer,
+        by: memberIdOf(writer.file.login),
+      })),
+    )
+    .toSorted(byTime((answer) => answer.answeredAt));
+
+  return { team, members, activeClaims, tasks, notes, activity, questions, answers };
 };
 
 const toClaim = (team: TeamStateTeamFile, login: TeamLogin, claim: TeamStateClaim): TeamClaim => ({
@@ -312,6 +359,8 @@ const toClaim = (team: TeamStateTeamFile, login: TeamLogin, claim: TeamStateClai
   thread: claim.thread,
   paths: claim.paths,
   note: claim.note,
+  ...(claim.branch === undefined ? {} : { branch: claim.branch }),
+  ...(claim.pushedCommit === undefined ? {} : { pushedCommit: claim.pushedCommit }),
   claimedAt: claim.claimedAt,
   releasedAt: claim.releasedAt,
 });
@@ -464,6 +513,20 @@ export const compactWriterFile = (file: TeamWriterFile, now: string): TeamWriter
     activity: keepNewest(file.activity, TEAM_STATE_LIMITS.activity, (line) =>
       timeOf(line.createdAt),
     ),
+    ...(file.questions === undefined
+      ? {}
+      : {
+          questions: keepNewest(file.questions, TEAM_STATE_LIMITS.questions, (question) =>
+            timeOf(question.askedAt),
+          ),
+        }),
+    ...(file.answers === undefined
+      ? {}
+      : {
+          answers: keepNewest(file.answers, TEAM_STATE_LIMITS.answers, (answer) =>
+            timeOf(answer.answeredAt),
+          ),
+        }),
   };
 };
 
@@ -490,6 +553,7 @@ export const addClaim = (
     readonly paths: ReadonlyArray<string>;
     readonly note: string | null;
     readonly branch?: string | undefined;
+    readonly pushedCommit?: string | undefined;
     readonly now: string;
   },
 ): { readonly file: TeamWriterFile; readonly claim: TeamStateClaim } => {
@@ -499,6 +563,9 @@ export const addClaim = (
     paths: input.paths,
     note: input.note,
     ...(input.branch === undefined ? {} : { branch: input.branch }),
+    ...(input.branch === undefined || input.pushedCommit === undefined
+      ? {}
+      : { pushedCommit: input.pushedCommit }),
     claimedAt: input.now,
     releasedAt: null,
   };
@@ -717,3 +784,70 @@ export const saveAutomaticNote = (
   );
   return { file: next, note };
 };
+
+/**
+ * Records where the thread's branch is on `origin` on its active claims with
+ * that branch (`undefined`: not pushed). Returns the same file when nothing
+ * changed, so callers can skip the write. No activity line.
+ */
+export const setClaimsPushed = (
+  file: TeamWriterFile,
+  input: {
+    readonly thread: TeamThreadRef;
+    readonly branch: string;
+    readonly pushedCommit: string | undefined;
+  },
+): TeamWriterFile => {
+  let changed = false;
+  const claims = file.claims.map((claim) => {
+    if (
+      claim.releasedAt !== null ||
+      claim.branch !== input.branch ||
+      !sameThread(claim.thread, input.thread) ||
+      claim.pushedCommit === input.pushedCommit
+    ) {
+      return claim;
+    }
+    changed = true;
+    const { pushedCommit: _old, ...rest } = claim;
+    return input.pushedCommit === undefined ? rest : { ...rest, pushedCommit: input.pushedCommit };
+  });
+  return changed ? { ...file, claims } : file;
+};
+
+/** Adds an open question ("Ask", slice 3d). `paths` must already be normalized. */
+export const addQuestion = (file: TeamWriterFile, question: TeamStateQuestion): TeamWriterFile =>
+  compactWriterFile(
+    { ...file, questions: [...(file.questions ?? []), question] },
+    question.askedAt,
+  );
+
+/** Drops a question once it is answered or no longer needed; the same file when it is not there. */
+export const removeQuestion = (file: TeamWriterFile, questionId: string): TeamWriterFile =>
+  file.questions?.some((question) => question.questionId === questionId) === true
+    ? {
+        ...file,
+        questions: file.questions.filter((question) => question.questionId !== questionId),
+      }
+    : file;
+
+/** Adds this writer's answer, replacing an earlier one to the same question. */
+export const addAnswer = (
+  file: TeamWriterFile,
+  answer: {
+    readonly questionId: string;
+    readonly yes: boolean;
+    readonly text: string | null;
+    readonly answeredAt: string;
+  },
+): TeamWriterFile =>
+  compactWriterFile(
+    {
+      ...file,
+      answers: [
+        ...(file.answers ?? []).filter((own) => own.questionId !== answer.questionId),
+        answer,
+      ],
+    },
+    answer.answeredAt,
+  );

@@ -47,7 +47,10 @@ import {
   TEAM_STATE_FORMAT,
   TEAM_STATE_TEAM_FILE,
   TeamMemberId,
+  type TeamAnswer,
+  type TeamQuestion,
   type TeamStateClaim,
+  type TeamStateQuestion,
   type TeamStateTask,
   TeamTaskId,
   type TeamThreadRef,
@@ -218,6 +221,8 @@ const toClaim = (teamId: TeamId, login: TeamLogin, claim: TeamStateClaim): TeamC
   thread: claim.thread,
   paths: claim.paths,
   note: claim.note,
+  ...(claim.branch === undefined ? {} : { branch: claim.branch }),
+  ...(claim.pushedCommit === undefined ? {} : { pushedCommit: claim.pushedCommit }),
   claimedAt: claim.claimedAt,
   releasedAt: claim.releasedAt,
 });
@@ -918,6 +923,8 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
           thread: input.thread,
           paths,
           note: optionalText(input.note),
+          branch: optionalText(input.branch) ?? undefined,
+          pushedCommit: optionalText(input.pushedCommit) ?? undefined,
           now,
         });
         yield* saveMyFile(entry, added.file);
@@ -987,6 +994,78 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
       }),
     );
     yield* scheduleSync(entry);
+  });
+
+  /** Changes this server's writer file with `change`; shares it when it changed. */
+  const changeMyFile = (
+    teamId: TeamId,
+    memberId: TeamMemberId,
+    change: (file: TeamWriterFile, now: string) => TeamWriterFile,
+  ) =>
+    Effect.gen(function* () {
+      const { entry } = yield* requireEntry(teamId);
+      const changed = yield* entry.lock.withPermits(1)(
+        Effect.gen(function* () {
+          const { file } = yield* requireMe(teamId, memberId);
+          const next = change(file, yield* nowIso);
+          if (next === file) return false;
+          yield* saveMyFile(entry, next);
+          return true;
+        }),
+      );
+      if (changed) yield* scheduleSync(entry);
+      return changed;
+    });
+
+  const setClaimsPushed = Effect.fn("GitTeamService.setClaimsPushed")(function* (
+    input: Parameters<TeamService["Service"]["setClaimsPushed"]>[0],
+  ) {
+    yield* changeMyFile(input.teamId, input.memberId, (file) => Model.setClaimsPushed(file, input));
+  });
+
+  const askQuestion = Effect.fn("GitTeamService.askQuestion")(function* (
+    input: Parameters<TeamService["Service"]["askQuestion"]>[0],
+  ) {
+    const paths = yield* normalizeClaimPaths(input.paths);
+    const questionId = yield* newId;
+    let asked: TeamStateQuestion | undefined;
+    yield* changeMyFile(input.teamId, input.memberId, (file, now) => {
+      asked = {
+        questionId,
+        to: input.to.map((memberId) => memberId as string as TeamLogin),
+        paths,
+        text: optionalText(input.text),
+        thread: input.thread,
+        askedAt: now,
+      };
+      return Model.addQuestion(file, asked);
+    });
+    return { ...asked!, from: input.memberId, to: input.to } satisfies TeamQuestion;
+  });
+
+  const withdrawQuestion = Effect.fn("GitTeamService.withdrawQuestion")(function* (
+    input: Parameters<TeamService["Service"]["withdrawQuestion"]>[0],
+  ) {
+    yield* changeMyFile(input.teamId, input.memberId, (file) =>
+      Model.removeQuestion(file, input.questionId),
+    );
+  });
+
+  const answerQuestion = Effect.fn("GitTeamService.answerQuestion")(function* (
+    input: Parameters<TeamService["Service"]["answerQuestion"]>[0],
+  ) {
+    let answer: TeamAnswer | undefined;
+    yield* changeMyFile(input.teamId, input.memberId, (file, now) => {
+      const saved = {
+        questionId: input.questionId,
+        yes: input.yes,
+        text: optionalText(input.text),
+        answeredAt: now,
+      };
+      answer = { ...saved, by: input.memberId };
+      return Model.addAnswer(file, saved);
+    });
+    return answer!;
   });
 
   const releaseThreadClaims = Effect.fn("GitTeamService.releaseThreadClaims")(function* (
@@ -1271,6 +1350,12 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
             .slice(0, listOptions?.limit ?? DEFAULT_LIST_LIMIT),
         ),
       ),
+    setClaimsPushed,
+    askQuestion,
+    withdrawQuestion,
+    answerQuestion,
+    listQuestions: (teamId) => view(teamId).pipe(Effect.map((found) => found.questions)),
+    listAnswers: (teamId) => view(teamId).pipe(Effect.map((found) => found.answers)),
     recordActivity,
     listActivity: (teamId, listOptions) =>
       view(teamId).pipe(

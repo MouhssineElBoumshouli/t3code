@@ -178,6 +178,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeTeamFeed]: AuthOrchestrationReadScope,
   // team-layer: answering the warning card steers the agent, like sending a message.
   [WS_METHODS.teamChoose]: AuthOrchestrationOperateScope,
+  // team-layer: answering a teammate's question steers their agent.
+  [WS_METHODS.teamAnswer]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

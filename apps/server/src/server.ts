@@ -101,6 +101,8 @@ import { TeamAutoNotesLive } from "./team/TeamAutoNotes.ts";
 import { TeamGuardLive } from "./team/TeamGuard.ts"; // team-layer
 import { TeamStaleViewLive } from "./team/TeamStaleView.ts"; // team-layer
 import { TeamWaitLive } from "./team/TeamWait.ts"; // team-layer
+import { TeamPushedBranchesLive } from "./team/TeamPushedBranches.ts"; // team-layer
+import * as TeamQuestions from "./team/TeamQuestions.ts"; // team-layer
 import { TeamClaimAutoReleaseLive } from "./team/TeamClaimAutoRelease.ts";
 import * as TeamWarmup from "./team/TeamWarmup.ts";
 import * as TeamFeed from "./team/TeamFeed.ts";
@@ -294,8 +296,9 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(TeamGuardLive),
   // team-layer: the stale-view line at the start of each turn (team/VISION.md 3.6).
   Layer.provideMerge(TeamStaleViewLive),
-  // team-layer: "Wait" on the warning card ends when the holder lets go (PREVENTION_PLAN.md 2).
-  Layer.provideMerge(TeamWaitLive),
+  // team-layer: the warning card's "Wait" (ends when the holder lets go), "Ask" (answers
+  // through the team state) and "Build on top" (whose branch is pushed); PREVENTION_PLAN.md 2.
+  Layer.provideMerge(Layer.mergeAll(TeamWaitLive, TeamQuestions.layer, TeamPushedBranchesLive)),
   // team-layer: open each project's team at start, so the first turn gets its briefing.
   Layer.provideMerge(TeamWarmup.layer),
   // team-layer: the read-only team feed for clients (team/UI_PLAN.md slice 0).

@@ -76,4 +76,33 @@ describe("team cards", () => {
     expect(folded).toEqual([open]);
     expect(teamCardOf(activity("d", "team.choice", { choiceId: "x" }))).toBeUndefined();
   });
+
+  it("folds a teammate's answer into the question card on the holder's chat", () => {
+    const question = {
+      questionId: "q1",
+      teamId: "team-1",
+      threadId: "thread-1",
+      from: { memberId: "sara", name: "Sara" },
+      paths: ["src/a.ts"],
+      text: "Only a param",
+      askedAt: "2026-10-08T00:00:00.000Z",
+    };
+    const shown = activity("a", "team.question", question);
+    expect(teamCardOf(shown)).toEqual({ kind: "question", card: { ...question, closed: null } });
+    const closed = activity("b", "team.question.closed", {
+      questionId: "q1",
+      threadId: "thread-1",
+      outcome: "yes",
+      text: "Go ahead",
+    });
+    const folded = foldTeamChoiceActivities([shown, closed]);
+    expect(folded.map((entry) => entry.id)).toEqual(["a"]);
+    expect(teamCardOf(folded[0]!)).toEqual({
+      kind: "question",
+      card: {
+        ...question,
+        closed: { questionId: "q1", threadId: "thread-1", outcome: "yes", text: "Go ahead" },
+      },
+    });
+  });
 });

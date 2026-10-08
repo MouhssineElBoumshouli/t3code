@@ -248,6 +248,27 @@ const make = Effect.gen(function* () {
     );
 
   /**
+   * The thread's own branch when it works in a worktree, and where that branch
+   * is on `origin` if pushed, so a teammate can build on top of it (slice 3d).
+   */
+  const ownBranchOf = (context: TeamContext) =>
+    Effect.gen(function* () {
+      const shell = Option.getOrUndefined(
+        yield* snapshots.getThreadShellById(context.thread.threadId),
+      );
+      if (context.solo || !shell?.worktreePath || !shell.branch) return {};
+      const pushed = yield* git.execute({
+        operation: "TeamTools.pushedBranch",
+        cwd: shell.worktreePath,
+        args: ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${shell.branch}^{commit}`],
+        allowNonZeroExit: true,
+        timeoutMs: 5_000,
+      });
+      const commit = pushed.exitCode === 0 ? pushed.stdout.trim() : "";
+      return { branch: shell.branch, ...(commit.length > 0 ? { pushedCommit: commit } : {}) };
+    }).pipe(Effect.orElseSucceed(() => ({})));
+
+  /**
    * Claims paths for this thread and words the overlaps for the agent; shared
    * by `team_claim` and `team_plan`.
    */
@@ -264,6 +285,7 @@ const make = Effect.gen(function* () {
           thread: context.thread,
           paths,
           note,
+          ...(yield* ownBranchOf(context)),
         })
         .pipe(Effect.mapError(fromService("claim")));
       const names = overlaps.length === 0 ? new Map<string, string>() : yield* namesOf(context);

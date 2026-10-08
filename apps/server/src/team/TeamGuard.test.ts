@@ -44,6 +44,7 @@ import {
   fakeTeamHost,
   makeTeamOrigin,
   TEST_TEAM_LOGIN,
+  TestTeamGitLayer,
   testTeamServiceLayer,
   useTeamOrigin,
 } from "./testing/teamState.ts";
@@ -142,6 +143,7 @@ const makeHarness = Effect.fn("makeTeamGuardHarness")(function* () {
       environmentId: ENVIRONMENT_ID,
       stateDirectory: yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-guard-state-" }),
     }),
+    TestTeamGitLayer,
     Layer.mock(ProjectionSnapshotQuery)({
       getThreadShellById: (threadId) =>
         Ref.get(turns).pipe(

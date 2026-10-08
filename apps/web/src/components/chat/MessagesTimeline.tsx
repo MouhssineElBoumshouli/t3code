@@ -159,6 +159,7 @@ import type { TeamCard } from "@t3tools/client-runtime/work-log/team-cards";
 import { TeamAppMessage } from "../team/TeamAppMessage";
 import { TeamChoiceCard } from "../team/TeamChoiceCard";
 import { TeamPlanCard } from "../team/TeamPlanCard";
+import { TeamQuestionCard } from "../team/TeamQuestionCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { useAtomValue } from "@effect/atom-react";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
@@ -1774,6 +1775,8 @@ function TeamCardTimelineRow({ card }: { card: TeamCard }) {
     <div className="min-w-0 px-1 py-0.5">
       {card.kind === "plan" ? (
         <TeamPlanCard plan={card.plan} resolvedTheme={ctx.resolvedTheme} />
+      ) : card.kind === "question" ? (
+        <TeamQuestionCard card={card.card} environmentId={ctx.activeThreadEnvironmentId} />
       ) : (
         <TeamChoiceCard
           card={card.card}

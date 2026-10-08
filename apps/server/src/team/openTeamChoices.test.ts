@@ -51,6 +51,16 @@ describe("countOpenTeamChoices", () => {
     assert.equal(countOpenTeamChoices([{ ...card("c1", "t1"), payload: { bad: 1 } }], "t1"), 0);
   });
 
+  it("does not count a card that asked a teammate, and counts it again after a no", () => {
+    const ask = (status: string) => ({
+      kind: TEAM_CHOICE_MADE_ACTIVITY_KIND,
+      turnId: null,
+      payload: { choiceId: "c1", choice: "ask", delivery: "held", ask: status, questionId: "q1" },
+    });
+    assert.equal(countOpenTeamChoices([card("c1", "t1"), ask("asked")], "t1"), 0);
+    assert.equal(countOpenTeamChoices([card("c1", "t1"), ask("asked"), ask("declined")], "t1"), 1);
+  });
+
   it("does not count a card that waits for its holder, and counts it again when the wait stops", () => {
     const wait = (status: string) => ({
       kind: TEAM_CHOICE_MADE_ACTIVITY_KIND,

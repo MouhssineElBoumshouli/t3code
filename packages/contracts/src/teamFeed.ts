@@ -17,6 +17,7 @@ import {
   TeamTask,
   TeamThreadRef,
 } from "./team.ts";
+import { TeamQuestion } from "./teamAsk.ts";
 
 /**
  * - `solo`: kept on this computer, nothing to sync.
@@ -73,6 +74,8 @@ export const TeamFeedTeam = Schema.Struct({
   tasks: Schema.Array(TeamTask),
   /** The newest written handoff notes, newest first, capped. */
   handoffs: Schema.Array(TeamFeedHandoff),
+  /** Questions to this server's person not answered yet, oldest first ("Ask", slice 3d). */
+  questions: Schema.optionalKey(Schema.Array(TeamQuestion)),
   sync: TeamFeedSync,
 });
 export type TeamFeedTeam = typeof TeamFeedTeam.Type;

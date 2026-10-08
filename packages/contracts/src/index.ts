@@ -50,3 +50,4 @@ export * from "./teamState.ts";
 export * from "./teamFeed.ts";
 export * from "./teamPlan.ts"; // team-layer: the plan card (UI_PLAN.md slice 2)
 export * from "./teamChoice.ts"; // team-layer: the warning card (PREVENTION_PLAN.md, slice 3a)
+export * from "./teamAsk.ts"; // team-layer: "Ask" on the warning card (slice 3d)

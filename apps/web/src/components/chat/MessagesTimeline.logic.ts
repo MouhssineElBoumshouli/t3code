@@ -36,7 +36,7 @@ import {
   type OrchestrationLatestTurn,
   type TurnId,
   type WorktreeSetupSnapshot,
-  teamChoiceIsOpen, // team-layer
+  teamChoiceAwaitsUser, // team-layer
 } from "@t3tools/contracts";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 
@@ -1109,7 +1109,7 @@ export function deriveMessagesTimelineRows(input: {
     (entry, index) =>
       entry.kind === "work" &&
       entry.entry.teamCard?.kind === "choice" &&
-      teamChoiceIsOpen(entry.entry.teamCard.card.made) &&
+      teamChoiceAwaitsUser(entry.entry.teamCard.card.made) &&
       entryBelongsToActiveTurn(entry, index),
   );
   const appendWorkingRow = () => {

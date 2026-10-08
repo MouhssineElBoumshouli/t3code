@@ -131,6 +131,7 @@ import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import * as TeamService from "./team/TeamService.ts"; // team-layer
 import * as TeamFeed from "./team/TeamFeed.ts"; // team-layer
 import * as TeamChoices from "./team/TeamChoices.ts"; // team-layer
+import * as TeamQuestions from "./team/TeamQuestions.ts"; // team-layer
 import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
@@ -1098,6 +1099,7 @@ const buildAppUnderTest = (options?: {
           // team-layer: the WebSocket team feed; these tests never subscribe to it.
           Layer.mock(TeamFeed.TeamFeed)({}),
           Layer.mock(TeamChoices.TeamChoices)({}), // team-layer
+          Layer.mock(TeamQuestions.TeamQuestions)({}), // team-layer
         ),
       ),
       Layer.provide(

@@ -284,6 +284,7 @@ import {
 import { VcsError } from "./vcs.ts";
 import { TeamFeedEvent } from "./teamFeed.ts"; // team-layer
 import { TeamChoiceError, TeamChooseInput, TeamChooseResult } from "./teamChoice.ts"; // team-layer
+import { TeamAnswerError, TeamAnswerInput, TeamAnswerResult } from "./teamAsk.ts"; // team-layer
 
 export const WS_METHODS = {
   // Project registry methods
@@ -462,6 +463,8 @@ export const WS_METHODS = {
   subscribeTeamFeed: "subscribeTeamFeed",
   // team-layer: the warning card's choice (PREVENTION_PLAN.md, slice 3a).
   teamChoose: "team.choose",
+  // team-layer: answering a teammate's question (PREVENTION_PLAN.md, slice 3d).
+  teamAnswer: "team.answer",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -1434,6 +1437,13 @@ const WsTeamChooseRpc = Rpc.make(WS_METHODS.teamChoose, {
   error: Schema.Union([TeamChoiceError, EnvironmentAuthorizationError]),
 });
 
+// team-layer: answering a teammate's question (fork-only, see team/PREVENTION_PLAN.md, slice 3d).
+const WsTeamAnswerRpc = Rpc.make(WS_METHODS.teamAnswer, {
+  payload: TeamAnswerInput,
+  success: TeamAnswerResult,
+  error: Schema.Union([TeamAnswerError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeBackgroundPolicyRpc = Rpc.make(WS_METHODS.subscribeBackgroundPolicy, {
   payload: Schema.Struct({}),
   success: BackgroundPolicySnapshot,
@@ -1591,6 +1601,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeResourceTelemetryRpc,
   WsSubscribeTeamFeedRpc, // team-layer
   WsTeamChooseRpc, // team-layer
+  WsTeamAnswerRpc, // team-layer
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,
