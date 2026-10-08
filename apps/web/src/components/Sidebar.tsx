@@ -242,7 +242,7 @@ import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarT
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
-import { TeamThreadMarks } from "./team/TeamHolderMarks"; // team-layer
+import { TeamThreadHoldersLine, TeamThreadMarks } from "./team/TeamHolderMarks"; // team-layer
 import {
   composerDraftHasUserContent,
   DraftId,
@@ -424,6 +424,11 @@ function SidebarThreadTooltip({
               <div className="min-w-0 truncate">Error occurred</div>
             </div>
           ) : null}
+          {/* team-layer: who else holds files this thread's claims cover */}
+          <TeamThreadHoldersLine
+            threadRef={{ environmentId: thread.environmentId, threadId: thread.id }}
+            className="flex min-w-0 items-start gap-2"
+          />
         </div>
         {supportsMultiplePullRequests && thread.pullRequests.length > 0 ? (
           <div className="border-t border-border/60 pt-2 pl-0.5 text-xs text-muted-foreground">

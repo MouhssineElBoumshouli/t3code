@@ -187,7 +187,7 @@ export const runTeamInit = Effect.fn("runTeamInit")(function* (input: TeamInitIn
         );
       }
       const location = TeamHost.parseTeamRemoteUrl(remoteUrl);
-      const login = yield* host.login(location);
+      const login = yield* host.login(remoteUrl, location);
       if (login.status !== "signedIn") return localOnly(login.detail.replace(/\.$/u, ""));
 
       let isPublic = false;

@@ -157,7 +157,7 @@ describe("TeamFeed", () => {
         team && {
           solo: team.solo,
           projects: team.projects,
-          members: team.members.map((member) => member.memberId),
+          members: team.members.map((member): string => member.memberId),
           sync: team.sync.status,
         },
         {

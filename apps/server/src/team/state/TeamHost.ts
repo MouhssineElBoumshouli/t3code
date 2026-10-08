@@ -23,7 +23,11 @@ import * as ServerConfig from "../../config.ts";
 import { parseGitHubAuthStatus } from "../../sourceControl/gitHubAuthStatus.ts";
 import * as VcsProcess from "../../vcs/VcsProcess.ts";
 
-/** Dev only: makes this server act as another GitHub login (two people on one laptop). */
+/**
+ * Dev only: makes this server act as another login (two people on one
+ * laptop). Used only for a remote on this computer ({@link isLocalTeamRemote}),
+ * so it can never write under a made-up name to a team on GitHub.
+ */
 export const TEAM_LOGIN_OVERRIDE_ENV = "T3CODE_TEAM_LOGIN_OVERRIDE";
 
 const GH_TIMEOUT_MS = 15_000;
@@ -70,11 +74,14 @@ export class TeamHost extends Context.Service<
   TeamHost,
   {
     /**
-     * The signed-in account for the repo's host. Null is a remote on this
-     * computer (a folder or `file://` URL, for tests and demos): it has no
-     * account, so only the dev override can name the person.
+     * The signed-in account for the remote's host. A remote on this computer
+     * (a folder or `file://` URL, for tests and demos) has no account, so only
+     * the dev override can name the person, and only there.
      */
-    readonly login: (repo: TeamRepoLocation | null) => Effect.Effect<TeamHostLogin>;
+    readonly login: (
+      remoteUrl: string,
+      repo: TeamRepoLocation | null,
+    ) => Effect.Effect<TeamHostLogin>;
     readonly repoAccess: (repo: TeamRepoLocation) => Effect.Effect<TeamHostRepoAccess>;
     /**
      * A conditional request for the state ref. Pass the ETag of the last
@@ -119,6 +126,21 @@ export const parseTeamRemoteUrl = (url: string): TeamRepoLocation | null => {
     .split("/");
   if (parts.length !== 2 || parts.some((part) => !/^[A-Za-z0-9._-]+$/u.test(part))) return null;
   return { host: host.toLowerCase(), owner: parts[0]!, name: parts[1]! };
+};
+
+/**
+ * True for a remote on this computer: a `file:` URL or a folder path. Git
+ * reads `host:path` (a colon before any slash) as SSH, except a drive letter.
+ */
+export const isLocalTeamRemote = (url: string): boolean => {
+  const trimmed = url.trim();
+  if (trimmed === "") return false;
+  if (/^file:/iu.test(trimmed)) return true;
+  if (trimmed.includes("://")) return false;
+  if (/^[A-Za-z]:[\\/]/u.test(trimmed)) return true;
+  const colon = trimmed.indexOf(":");
+  const slash = trimmed.search(/[\\/]/u);
+  return colon === -1 || (slash !== -1 && slash < colon);
 };
 
 export interface HttpResponse {
@@ -169,7 +191,7 @@ const firstLine = (text: string) => text.trim().split("\n").at(-1)?.trim() || "n
 export interface TeamHostOptions {
   /** The value of {@link TEAM_LOGIN_OVERRIDE_ENV}, if set. */
   readonly loginOverride?: string | undefined;
-  /** The override is used only when this is true. */
+  /** The override is used only when this is true, and only for local remotes. */
   readonly devMode: boolean;
   /** Where `gh` runs; it reads nothing from there. */
   readonly cwd: string;
@@ -214,32 +236,41 @@ export const make = Effect.fn("TeamHost.make")(function* (options: TeamHostOptio
   /** Signed-in answers by host. Other answers are not kept: signing in works at once. */
   const loginCache = new Map<string, { readonly login: TeamHostLogin; readonly at: number }>();
 
-  const login: TeamHost["Service"]["login"] = Effect.fn("TeamHost.login")(function* (repo) {
-    if (override !== "" && options.devMode) {
-      const parsed = decodeLogin(override);
-      return Option.isSome(parsed)
-        ? ({ status: "signedIn", login: parsed.value, override: true } as const)
-        : ({
-            status: "unavailable",
-            detail: `${TEAM_LOGIN_OVERRIDE_ENV} is not a GitHub login: "${override}".`,
-          } as const);
-    }
-    if (repo === null) {
-      return {
-        status: "signedOut",
-        detail: `This project's remote is a folder on this computer, which has no GitHub account. Dev servers can set ${TEAM_LOGIN_OVERRIDE_ENV}.`,
-      } as const;
-    }
-    const now = yield* Clock.currentTimeMillis;
-    const cached = loginCache.get(repo.host);
-    if (cached !== undefined && now - cached.at < Duration.toMillis(TEAM_LOGIN_CACHE_TTL)) {
-      return cached.login;
-    }
-    const answer = yield* askLogin(repo);
-    if (answer.status === "signedIn") loginCache.set(repo.host, { login: answer, at: now });
-    else loginCache.delete(repo.host);
-    return answer;
-  });
+  const login: TeamHost["Service"]["login"] = Effect.fn("TeamHost.login")(
+    function* (remoteUrl, repo) {
+      const local = isLocalTeamRemote(remoteUrl);
+      if (local && override !== "" && options.devMode) {
+        const parsed = decodeLogin(override);
+        return Option.isSome(parsed)
+          ? ({ status: "signedIn", login: parsed.value, override: true } as const)
+          : ({
+              status: "unavailable",
+              detail: `${TEAM_LOGIN_OVERRIDE_ENV} is not a GitHub login: "${override}".`,
+            } as const);
+      }
+      if (local) {
+        return {
+          status: "signedOut",
+          detail: `This project's remote is a folder on this computer, which has no GitHub account. Dev servers can set ${TEAM_LOGIN_OVERRIDE_ENV}.`,
+        } as const;
+      }
+      if (repo === null) {
+        return {
+          status: "signedOut",
+          detail: "This project's remote is not a GitHub repo address this app can read.",
+        } as const;
+      }
+      const now = yield* Clock.currentTimeMillis;
+      const cached = loginCache.get(repo.host);
+      if (cached !== undefined && now - cached.at < Duration.toMillis(TEAM_LOGIN_CACHE_TTL)) {
+        return cached.login;
+      }
+      const answer = yield* askLogin(repo);
+      if (answer.status === "signedIn") loginCache.set(repo.host, { login: answer, at: now });
+      else loginCache.delete(repo.host);
+      return answer;
+    },
+  );
 
   const askLogin = Effect.fnUntraced(function* (
     repo: TeamRepoLocation,

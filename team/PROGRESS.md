@@ -2,6 +2,34 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-08 — The dev login override stays on local origins; holder names in the row and tab tooltips
+
+**What changed**
+
+- **`T3CODE_TEAM_LOGIN_OVERRIDE` applies only to an origin on this computer** (a `file://` URL or a folder path; `TeamHost.isLocalTeamRemote`). For a remote on GitHub (or any host) the gh login is always used, even on a dev server with the override set, so the override can never write a made-up name to a GitHub team's state ref. `TeamHost.login` now takes the remote URL as well as its parsed location, so a host URL this app cannot parse (`git://…`) is not mistaken for a local one: it answers "signed out" without the override. The `writers/mouhssine` file in `t3-team-scratch` was left alone, as asked.
+- **Holder names on hover in the sidebar row and the file tab.** A tooltip inside another tooltip's trigger never opens, so there the marks no longer carry their own tooltip; the row's tooltip (the thread details card) gets a line "Also held by …" with the chips, and the file tab's title tooltip gets the same line under the file name. Both lines render only while that tooltip is open. The file tree's marks keep their own tooltip (no outer one there). The holder lookups moved into two hooks (`useThreadHolders`, `useFileHolders`) shared by the mark and the line.
+- `TeamFeed.test.ts`: a typing fix (`memberId` is branded); the server typecheck had 1 error before this change.
+
+**Files touched**
+
+- `apps/server/src/team/state/TeamHost.ts` (+ test), `GitTeamService.ts`, `apps/server/src/cli/team.ts` (callers), `apps/server/src/team/TeamFeed.test.ts`.
+- `apps/web/src/components/team/TeamHolderMarks.tsx`; `team-layer:` edits in `Sidebar.tsx` (the line in `SidebarThreadTooltip`) and `RightPanelTabs.tsx` (the line in the tab tooltip).
+- `team/WORKING_RULES.md` (one line), `team/STORAGE_PLAN.md` (the override line rewritten).
+
+**How it was checked**
+
+- `apps/server`: `vp test run src/team/ src/cli/team.test.ts src/mcp/toolkits/team/`: 17 files, **165 passed**. New `isLocalTeamRemote` test (file URLs, POSIX, relative, Windows drive and UNC paths are local; HTTPS, SSH, scp-style, `host:path`, `git://` are not); the override test now checks a GitHub remote gets the gh login (`sara`) with the override set in dev mode, a `git://` remote is signed out, and a local remote outside dev mode asks no gh. Mutation: without the local check, the test fails (`expected { status: 'signedIn', … } to deeply equal …`).
+- `apps/web`: `RightPanelTabs.test.tsx`, `Sidebar.logic.test.ts`: 188 passed. `tsc --noEmit` server and web: 0 errors. `vp lint` on the changed files: no errors (the Sidebar warnings were there before).
+- The tooltips are checked live in the slice 2 self-test (next entry).
+
+**What's left**
+
+- Nothing for these two items.
+
+**Unsure about / notes**
+
+- Slice 8's way of testing two people on GitHub (`Yassine-T3Test` through the override) no longer works; it needs a second gh account now (written in WORKING_RULES.md).
+
 ## 2026-10-08 — First visible slice: holder marks and the presence chip (UI_PLAN.md slice 1)
 
 **What changed**

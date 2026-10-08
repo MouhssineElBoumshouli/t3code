@@ -21,6 +21,7 @@ This repo is a fork of T3 Code. We are adding a team layer: a shared Brain, shar
 - Never use `~/.t3/userdata` (the real T3 install) for tests.
 - Dev runs must never add `apps/server` as a project called "server" (a chat there would edit this repo). `vp run dev` turns that off by itself since M2.3 (`scripts/dev-runner.ts`); a repo-root `.env.local` with `T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD=0` (gitignored, never committed) also works. Never set it to 1 here.
 - Two dev servers from this checkout (host and member) each get their own Vite cache, `apps/web/node_modules/.vite-dev-<web port>`. If a page ever fails with "error loading dynamically imported module", stop that server and delete its cache folder.
+- `T3CODE_TEAM_LOGIN_OVERRIDE` works only on a dev server and only for a team whose origin is on this computer (a folder or `file://` URL). A team on GitHub always uses the gh login, so the override can never write to a real team; testing two people on GitHub needs a second gh account.
 - Each round uses a fresh project (`~/code/team-demo4`, then `team-demo5`...). Control tests use a separate plain folder, never this repo.
 
 ## Self-testing

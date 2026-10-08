@@ -620,7 +620,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
         null;
       // Not checked yet: the next call checks again.
       const unchecked = (login: TeamLogin) => ({ ok: true, login, checkedAt: 0 }) as const;
-      const login = yield* host.login(entry.location);
+      const login = yield* host.login(entry.remoteUrl ?? "", entry.location);
       if (login.status !== "signedIn") {
         return lastLogin === null ? { ok: false, membership: login } : unchecked(lastLogin);
       }

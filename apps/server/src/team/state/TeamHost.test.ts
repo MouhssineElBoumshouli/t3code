@@ -11,6 +11,7 @@ import * as TeamHost from "./TeamHost.ts";
 const toJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const repo = { host: "github.com", owner: "sara", name: "school-project" };
+const repoUrl = "https://github.com/sara/school-project.git";
 
 type Reply =
   | { readonly exitCode?: number; readonly stdout?: string; readonly stderr?: string }
@@ -110,7 +111,7 @@ describe("TeamHost.login", () => {
           account("Sara-Dev", { active: true }),
         ]),
       }));
-      assert.deepEqual(yield* host.login(repo), {
+      assert.deepEqual(yield* host.login(repoUrl, repo), {
         status: "signedIn",
         login: "Sara-Dev",
         override: false,
@@ -127,22 +128,22 @@ describe("TeamHost.login", () => {
           ? { stdout: authStatus([account("Sara-Dev", { active: true })]) }
           : { exitCode: 1, stdout: authStatus([]) },
       );
-      assert.equal((yield* host.login(repo)).status, "signedIn");
-      assert.equal((yield* host.login(repo)).status, "signedIn");
+      assert.equal((yield* host.login(repoUrl, repo)).status, "signedIn");
+      assert.equal((yield* host.login(repoUrl, repo)).status, "signedIn");
       assert.lengthOf(calls, 1);
 
       // Signed out since: the cached answer stands until it is 10 minutes old.
       signedIn = false;
       yield* TestClock.adjust("9 minutes");
-      assert.equal((yield* host.login(repo)).status, "signedIn");
+      assert.equal((yield* host.login(repoUrl, repo)).status, "signedIn");
       assert.lengthOf(calls, 1);
       yield* TestClock.adjust("1 minute");
-      assert.equal((yield* host.login(repo)).status, "signedOut");
+      assert.equal((yield* host.login(repoUrl, repo)).status, "signedOut");
       assert.lengthOf(calls, 2);
 
       // A signed-out answer is not kept: signing in works on the next call.
       signedIn = true;
-      assert.equal((yield* host.login(repo)).status, "signedIn");
+      assert.equal((yield* host.login(repoUrl, repo)).status, "signedIn");
       assert.lengthOf(calls, 3);
     }),
   );
@@ -156,7 +157,7 @@ describe("TeamHost.login", () => {
           account("yassine", { active: false }),
         ]),
       }));
-      const result = yield* host.login(repo);
+      const result = yield* host.login(repoUrl, repo);
       assert.equal(result.status, "signedOut");
       assert.include(result.status === "signedOut" ? result.detail : "", "token expired");
     }),
@@ -165,48 +166,85 @@ describe("TeamHost.login", () => {
   it.effect("is signed out with no account, and unavailable without gh", () =>
     Effect.gen(function* () {
       const signedOut = yield* hostWith(() => ({ exitCode: 1, stdout: authStatus([]) }));
-      assert.equal((yield* signedOut.host.login(repo)).status, "signedOut");
+      assert.equal((yield* signedOut.host.login(repoUrl, repo)).status, "signedOut");
 
       const missing = yield* hostWith(() => "not-installed");
-      assert.deepEqual(yield* missing.host.login(repo), {
+      assert.deepEqual(yield* missing.host.login(repoUrl, repo), {
         status: "unavailable",
         detail: "The GitHub CLI (gh) is not installed.",
       });
 
       const garbled = yield* hostWith(() => ({ exitCode: 1, stderr: "unknown flag: --json" }));
-      const result = yield* garbled.host.login(repo);
+      const result = yield* garbled.host.login(repoUrl, repo);
       assert.equal(result.status, "unavailable");
     }),
   );
 
-  it.effect("uses the dev override only in dev mode", () =>
+  it.effect("uses the dev override only in dev mode, and only for a remote on this computer", () =>
     Effect.gen(function* () {
       const gh = () => ({ stdout: authStatus([account("sara", { active: true })]) });
+      const local = "file:///home/sara/school-project-remote.git";
 
       const dev = yield* hostWith(gh, { devMode: true, loginOverride: "yassine" });
-      assert.deepEqual(yield* dev.host.login(repo), {
+      assert.deepEqual(yield* dev.host.login(local, null), {
         status: "signedIn",
         login: "yassine",
         override: true,
       } as TeamHost.TeamHostLogin);
+      assert.equal(
+        (yield* dev.host.login("/home/sara/school-project-remote.git", null)).status,
+        "signedIn",
+      );
       assert.deepEqual(dev.calls, [], "the override does not ask gh");
 
-      const notDev = yield* hostWith(gh, { devMode: false, loginOverride: "yassine" });
-      assert.deepEqual(yield* notDev.host.login(repo), {
+      // A GitHub team always gets the gh login: the override never writes there.
+      assert.deepEqual(yield* dev.host.login(repoUrl, repo), {
         status: "signedIn",
         login: "sara",
         override: false,
       } as TeamHost.TeamHostLogin);
+      assert.lengthOf(dev.calls, 1);
+      // Not even a GitHub remote this app cannot locate.
+      assert.equal(
+        (yield* dev.host.login("git://github.com/sara/school-project.git", null)).status,
+        "signedOut",
+      );
+
+      const notDev = yield* hostWith(gh, { devMode: false, loginOverride: "yassine" });
+      assert.equal((yield* notDev.host.login(local, null)).status, "signedOut");
+      assert.deepEqual(notDev.calls, [], "no gh call for a local remote");
 
       const invalid = yield* hostWith(gh, { devMode: true, loginOverride: "../sara" });
-      assert.equal((yield* invalid.host.login(repo)).status, "unavailable");
-
-      // A remote on this computer has no account: only the dev override names the person.
-      assert.equal((yield* dev.host.login(null)).status, "signedIn");
-      assert.equal((yield* notDev.host.login(null)).status, "signedOut");
-      assert.lengthOf(notDev.calls, 1, "no gh call for a local remote");
+      assert.equal((yield* invalid.host.login(local, null)).status, "unavailable");
     }),
   );
+});
+
+describe("isLocalTeamRemote", () => {
+  it("is true only for file URLs and folder paths", () => {
+    for (const url of [
+      "file:///home/sara/remote.git",
+      "FILE:///C:/remote.git",
+      "/home/sara/remote.git",
+      "../remote.git",
+      "remote.git",
+      "C:\\Users\\sara\\remote.git",
+      "D:/remote.git",
+      "\\\\server\\share\\remote.git",
+    ]) {
+      assert.isTrue(TeamHost.isLocalTeamRemote(url), url);
+    }
+    for (const url of [
+      "https://github.com/sara/school-project.git",
+      "ssh://git@github.com/sara/school-project.git",
+      "git@github.com:sara/school-project.git",
+      "github.com:sara/school-project.git",
+      "git://github.com/sara/school-project.git",
+      "",
+    ]) {
+      assert.isFalse(TeamHost.isLocalTeamRemote(url), url);
+    }
+  });
 });
 
 describe("TeamHost.repoAccess", () => {

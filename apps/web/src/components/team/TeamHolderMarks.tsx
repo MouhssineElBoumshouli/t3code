@@ -56,9 +56,30 @@ const holderKey = (holder: TeamHolder) =>
     ? `member:${holder.memberId}`
     : `chat:${holder.environmentId}/${holder.threadId}`;
 
-/** Up to three holders, teammates first, with who they are in a tooltip. */
+/** "Also held by Yassine, your chat "Search page"", for a tooltip. */
+export function TeamHoldersText(props: { readonly holders: ReadonlyArray<TeamHolder> }) {
+  return (
+    <>
+      Also held by{" "}
+      {props.holders.map((holder, index) => (
+        <span key={holderKey(holder)}>
+          {index > 0 ? ", " : null}
+          {holder.kind === "member" ? holder.name : <ChatName holder={holder} />}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Up to three holders, teammates first. With `tooltip`, who they are shows on
+ * hover; inside another tooltip's trigger (a sidebar row, a tab title) a
+ * nested tooltip never opens, so there the outer tooltip carries
+ * {@link TeamHoldersText} instead.
+ */
 export function TeamHolderMarks(props: {
   readonly holders: ReadonlyArray<TeamHolder>;
+  readonly tooltip?: boolean;
   readonly className?: string;
 }) {
   if (props.holders.length === 0) return null;
@@ -70,75 +91,118 @@ export function TeamHolderMarks(props: {
     ...members.map((holder) => holder.name),
     ...(chats > 0 ? [chats === 1 ? "another of your chats" : `${chats} of your chats`] : []),
   ].join(", ")}`;
+  const chips = (
+    <>
+      {shown.map((holder) =>
+        holder.kind === "member" ? (
+          <TeamFace key={holderKey(holder)} initials={holder.initials} hue={holder.hue} />
+        ) : (
+          <span
+            key={holderKey(holder)}
+            aria-hidden
+            className="inline-block size-2 shrink-0 rounded-xs"
+            style={{ backgroundColor: holderColor(holder.hue) }}
+          />
+        ),
+      )}
+      {more > 0 ? <span className="text-3xs text-muted-foreground">+{more}</span> : null}
+    </>
+  );
+  const marksProps = {
+    role: "img",
+    "aria-label": label,
+    "data-team-holders": true,
+    className: cn("inline-flex shrink-0 items-center gap-0.5", props.className),
+  };
+  if (props.tooltip === false) return <span {...marksProps}>{chips}</span>;
   return (
     <Tooltip>
-      <TooltipTrigger
-        render={
-          <span
-            role="img"
-            aria-label={label}
-            data-team-holders
-            className={cn("inline-flex shrink-0 items-center gap-0.5", props.className)}
-          />
-        }
-      >
-        {shown.map((holder) =>
-          holder.kind === "member" ? (
-            <TeamFace key={holderKey(holder)} initials={holder.initials} hue={holder.hue} />
-          ) : (
-            <span
-              key={holderKey(holder)}
-              aria-hidden
-              className="inline-block size-2 shrink-0 rounded-xs"
-              style={{ backgroundColor: holderColor(holder.hue) }}
-            />
-          ),
-        )}
-        {more > 0 ? <span className="text-3xs text-muted-foreground">+{more}</span> : null}
-      </TooltipTrigger>
+      <TooltipTrigger render={<span {...marksProps} />}>{chips}</TooltipTrigger>
       <TooltipPopup side="top">
-        Also held by{" "}
-        {props.holders.map((holder, index) => (
-          <span key={holderKey(holder)}>
-            {index > 0 ? ", " : null}
-            {holder.kind === "member" ? holder.name : <ChatName holder={holder} />}
-          </span>
-        ))}
+        <TeamHoldersText holders={props.holders} />
       </TooltipPopup>
     </Tooltip>
   );
 }
 
-/** A sidebar thread's mark: who else holds files its claims cover. */
-export const TeamThreadMarks = memo(function TeamThreadMarks(props: {
-  readonly threadRef: ScopedThreadRef;
-}) {
-  const { environmentId, threadId } = props.threadRef;
+/** Who else holds files a thread's claims cover. */
+export function useThreadHolders(threadRef: ScopedThreadRef): ReadonlyArray<TeamHolder> {
+  const { environmentId, threadId } = threadRef;
   const teams = useTeamFeed(environmentId);
-  const holders = useMemo(() => {
+  return useMemo(() => {
     for (const team of teams) {
       const found = threadHolders(team, { environmentId, threadId });
       if (found.length > 0) return found;
     }
     return [];
   }, [teams, environmentId, threadId]);
-  return <TeamHolderMarks holders={holders} />;
+}
+
+/** Who else holds a file of the thread's project. */
+export function useFileHolders(
+  threadRef: ScopedThreadRef,
+  relativePath: string,
+): ReadonlyArray<TeamHolder> {
+  const { environmentId, threadId } = threadRef;
+  const teams = useTeamFeed(environmentId);
+  const shell = useThreadShell(threadRef);
+  const projectId = shell?.projectId ?? null;
+  return useMemo(() => {
+    const projectTeam = findProjectTeam(teams, projectId);
+    return projectTeam === null
+      ? []
+      : fileHolders(projectTeam, relativePath, { environmentId, threadId });
+  }, [teams, projectId, relativePath, environmentId, threadId]);
+}
+
+/** A sidebar thread's mark. The row's own tooltip names the holders ({@link TeamThreadHoldersLine}). */
+export const TeamThreadMarks = memo(function TeamThreadMarks(props: {
+  readonly threadRef: ScopedThreadRef;
+}) {
+  return <TeamHolderMarks holders={useThreadHolders(props.threadRef)} tooltip={false} />;
 });
 
-/** An open file's tab mark: who else holds that file. */
+/** The holders line in a sidebar row's tooltip; rendered only while it is open. */
+export function TeamThreadHoldersLine(props: {
+  readonly threadRef: ScopedThreadRef;
+  readonly className?: string;
+}) {
+  const holders = useThreadHolders(props.threadRef);
+  if (holders.length === 0) return null;
+  return (
+    <div className={props.className}>
+      <TeamHolderMarks holders={holders} tooltip={false} />
+      <div className="min-w-0 wrap-break-word text-foreground/75">
+        <TeamHoldersText holders={holders} />
+      </div>
+    </div>
+  );
+}
+
+/** An open file's tab mark. The tab's own tooltip names the holders ({@link TeamFileHoldersLine}). */
 export const TeamFileMarks = memo(function TeamFileMarks(props: {
   readonly threadRef: ScopedThreadRef;
   readonly relativePath: string;
 }) {
-  const { environmentId, threadId } = props.threadRef;
-  const teams = useTeamFeed(environmentId);
-  const shell = useThreadShell(props.threadRef);
-  const projectId = shell?.projectId ?? null;
-  const holders = useMemo(() => {
-    const projectTeam = findProjectTeam(teams, projectId);
-    return projectTeam === null
-      ? []
-      : fileHolders(projectTeam, props.relativePath, { environmentId, threadId });
-  }, [teams, projectId, props.relativePath, environmentId, threadId]);
-  return <TeamHolderMarks holders={holders} className="ml-1" />;
+  return (
+    <TeamHolderMarks
+      holders={useFileHolders(props.threadRef, props.relativePath)}
+      tooltip={false}
+      className="ml-1"
+    />
+  );
 });
+
+/** The holders line in a file tab's tooltip; rendered only while it is open. */
+export function TeamFileHoldersLine(props: {
+  readonly threadRef: ScopedThreadRef;
+  readonly relativePath: string;
+}) {
+  const holders = useFileHolders(props.threadRef, props.relativePath);
+  if (holders.length === 0) return null;
+  return (
+    <div className="text-muted-foreground">
+      <TeamHoldersText holders={holders} />
+    </div>
+  );
+}

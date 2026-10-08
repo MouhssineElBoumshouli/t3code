@@ -62,7 +62,7 @@ import {
 import { useBrowserDefaults } from "~/browser/browserDefaults";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { PanelTabCloseButton } from "~/components/ui/panel-tab-close-button";
-import { TeamFileMarks } from "~/components/team/TeamHolderMarks"; // team-layer
+import { TeamFileHoldersLine, TeamFileMarks } from "~/components/team/TeamHolderMarks"; // team-layer
 import { faviconUrlForOrigin } from "~/lib/favicon";
 import { useTheme } from "~/hooks/useTheme";
 import { useDeviceState } from "~/state/device";
@@ -1263,7 +1263,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                             title={title}
                           />
                         ) : (
-                          title
+                          <>
+                            {title}
+                            {/* team-layer: who else holds this file */}
+                            {surface.kind === "file" &&
+                            surface.attachment === undefined &&
+                            props.teamThreadRef ? (
+                              <TeamFileHoldersLine
+                                threadRef={props.teamThreadRef}
+                                relativePath={surface.relativePath}
+                              />
+                            ) : null}
+                          </>
                         )}
                       </TooltipPopup>
                     </Tooltip>
