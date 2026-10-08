@@ -50,6 +50,27 @@ describe("countOpenTeamChoices", () => {
     assert.equal(countOpenTeamChoices([card("c1", "t1"), card("c1", "t1")], "t1"), 1);
     assert.equal(countOpenTeamChoices([{ ...card("c1", "t1"), payload: { bad: 1 } }], "t1"), 0);
   });
+
+  it("does not count a card that waits for its holder, and counts it again when the wait stops", () => {
+    const wait = (status: string) => ({
+      kind: TEAM_CHOICE_MADE_ACTIVITY_KIND,
+      turnId: null,
+      payload: { choiceId: "c1", choice: "wait", delivery: "held", wait: status },
+    });
+    assert.equal(countOpenTeamChoices([card("c1", "t1"), wait("waiting")], "t1"), 0);
+    assert.equal(
+      countOpenTeamChoices([card("c1", "t1"), wait("waiting"), wait("cancelled")], "t1"),
+      1,
+    );
+    // The newest record wins: waiting again after the cancel.
+    assert.equal(
+      countOpenTeamChoices(
+        [card("c1", "t1"), wait("waiting"), wait("cancelled"), wait("waiting")],
+        "t1",
+      ),
+      0,
+    );
+  });
 });
 
 const TestLayer = OrchestrationProjectionPipelineLive.pipe(

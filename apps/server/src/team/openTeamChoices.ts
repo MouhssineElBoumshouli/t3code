@@ -6,7 +6,9 @@
  * does not auto-settle.
  *
  * A card is open until the user picks a choice, or until a newer turn starts
- * (the user moved on with a message; the card still takes a click).
+ * (the user moved on with a message; the card still takes a click). A card
+ * that waits for its holder waits on them, not on the user; cancelling the
+ * wait opens it again.
  *
  * @module openTeamChoices
  */
@@ -15,6 +17,7 @@ import {
   TEAM_CHOICE_MADE_ACTIVITY_KIND,
   TeamChoiceActivityPayload,
   TeamChoiceMadePayload,
+  teamChoiceIsOpen,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -36,17 +39,18 @@ export function countOpenTeamChoices(
   }>,
   latestTurnId: string | null,
 ): number {
-  const made = new Set<string>();
+  // Oldest first: the newest record of each card wins. A cancelled wait opens it again.
+  const made = new Map<string, TeamChoiceMadePayload>();
   for (const activity of activities) {
     if (activity.kind !== TEAM_CHOICE_MADE_ACTIVITY_KIND) continue;
     const payload = decodeMade(activity.payload);
-    if (Option.isSome(payload)) made.add(payload.value.choiceId);
+    if (Option.isSome(payload)) made.set(payload.value.choiceId, payload.value);
   }
   const open = new Set<string>();
   for (const activity of activities) {
     if (activity.kind !== TEAM_CHOICE_ACTIVITY_KIND) continue;
     const payload = decodeChoice(activity.payload);
-    if (Option.isNone(payload) || made.has(payload.value.choiceId)) continue;
+    if (Option.isNone(payload) || !teamChoiceIsOpen(made.get(payload.value.choiceId))) continue;
     // A card shown with no running turn has no turn to be overtaken by.
     if (activity.turnId !== null && activity.turnId !== latestTurnId) continue;
     open.add(payload.value.choiceId);

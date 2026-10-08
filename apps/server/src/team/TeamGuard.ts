@@ -61,6 +61,9 @@ export const heldEditReason = (files: ReadonlyArray<TeamPlanFile>) => {
 export const openCardEditReason = (paths: ReadonlyArray<string>) =>
   `The user has not chosen yet on the card for ${quoted(paths)}. Do not edit ${paths.length === 1 ? "it" : "them"}. Tell the user to pick a choice on the card, and end your turn.`;
 
+export const waitingEditReason = (paths: ReadonlyArray<string>) =>
+  `The user chose to wait until the holder of ${quoted(paths)} lets go of ${paths.length === 1 ? "it" : "them"}. Do not edit ${paths.length === 1 ? "it" : "them"}; end your turn. T3 starts your next turn then.`;
+
 interface Interval {
   readonly start: number;
   readonly end: number;
@@ -145,8 +148,11 @@ export const make = Effect.gen(function* () {
       const paths = toTeamPaths(context, raws);
       if (paths.length === 0) return undefined;
       const open = yield* choices.openPaths(threadId);
-      const waiting = paths.filter((file) => open.has(file));
-      if (waiting.length > 0) return openCardEditReason(waiting);
+      const unanswered = paths.filter((file) => open.has(file));
+      if (unanswered.length > 0) return openCardEditReason(unanswered);
+      const waitedOn = yield* choices.waitingPaths(threadId);
+      const waiting = paths.filter((file) => waitedOn.has(file));
+      if (waiting.length > 0) return waitingEditReason(waiting);
       const shell = Option.getOrUndefined(yield* snapshots.getThreadShellById(threadId));
       const running = shell?.latestTurn?.state === "running" ? shell.latestTurn.turnId : null;
       const held = yield* heldFor(context, paths, running);
@@ -231,11 +237,12 @@ export const make = Effect.gen(function* () {
         repoRoot,
         context.teamRoot,
       ) as ReadonlyArray<TeamPath>;
-      // A file already on an unanswered card of this chat waits on that card.
+      // A file already on an unanswered or waiting card of this chat waits on that card.
       const open = yield* choices.openPaths(payload.threadId);
+      const waitedOn = yield* choices.waitingPaths(payload.threadId);
       const held = yield* heldFor(
         context,
-        changed.filter((file) => !open.has(file)),
+        changed.filter((file) => !open.has(file) && !waitedOn.has(file)),
         payload.turnId,
       );
       if (held.length === 0) return;

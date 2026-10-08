@@ -45,6 +45,26 @@ describe("team cards", () => {
     expect(foldTeamChoiceActivities([open, other, made])[0]).toBe(first[0]);
   });
 
+  it("shows a card's newest record: waiting, then stopped, then waiting again", () => {
+    const open = activity("a", "team.choice", card);
+    const record = (id: string, wait: string) =>
+      activity(id, "team.choice.made", {
+        choiceId: "team-choice:1",
+        choice: "wait",
+        delivery: "none",
+        wait,
+      });
+    const waitOf = (activities: ReadonlyArray<OrchestrationThreadActivity>) => {
+      const drawn = teamCardOf(foldTeamChoiceActivities(activities)[0]!);
+      return drawn?.kind === "choice" ? drawn.card.made?.wait : undefined;
+    };
+    expect(waitOf([open, record("b", "waiting")])).toBe("waiting");
+    expect(waitOf([open, record("b", "waiting"), record("c", "cancelled")])).toBe("cancelled");
+    expect(
+      waitOf([open, record("b", "waiting"), record("c", "cancelled"), record("d", "waiting")]),
+    ).toBe("waiting");
+  });
+
   it("ignores a choice for another card and draws nothing for a malformed card", () => {
     const open = activity("a", "team.choice", card);
     const stray = activity("c", "team.choice.made", {

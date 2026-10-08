@@ -93,7 +93,7 @@ export const TeamPlanResult = Schema.Struct({
   planned: Schema.Array(Schema.String),
   overlaps: Schema.Array(ClaimSummary),
   /** Set when a planned file is held by someone else: the user's choice on the warning card. */
-  choice: Schema.optionalKey(Schema.Literals(["anotherWay", "goAnyway", "notYet"])),
+  choice: Schema.optionalKey(Schema.Literals(["anotherWay", "goAnyway", "wait", "notYet"])),
   /** Teammates' claims that overlap this thread's earlier claims, found since; each told once. */
   lateOverlaps: Schema.optionalKey(Schema.Array(Schema.String)),
   message: Schema.String,

@@ -28,6 +28,8 @@ import {
   type TeamChoiceDelivery,
   TeamChoiceError,
   TeamChoiceMadePayload,
+  teamChoiceIsOpen,
+  teamChoiceIsWaiting,
   teamChoiceMadeSummary,
   teamChoiceSummary,
   type TeamChooseInput,
@@ -83,6 +85,14 @@ export interface AskInput {
   readonly providerInstanceId: ProviderInstanceId;
 }
 
+export interface EndWaitInput {
+  readonly threadId: ThreadId;
+  readonly choiceId: string;
+  readonly outcome: "done" | "conflict";
+  /** The new turn's message, for "done". */
+  readonly text: string;
+}
+
 export interface ShowEditedInput {
   readonly context: TeamContext;
   /** The files the turn changed that someone else holds and this chat did not plan. */
@@ -107,6 +117,15 @@ export class TeamChoices extends Context.Service<
     readonly undoRequests: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<UndoRequest>>;
     /** Paths on this thread's cards the user has not answered yet. */
     readonly openPaths: (threadId: ThreadId) => Effect.Effect<ReadonlySet<string>>;
+    /** Paths on this thread's cards that wait for their holder (slice 3c). */
+    readonly waitingPaths: (threadId: ThreadId) => Effect.Effect<ReadonlySet<string>>;
+    /** Every card that waits for its holder, in any thread. */
+    readonly waitingCards: Effect.Effect<ReadonlyArray<TeamChoiceActivityPayload>>;
+    /**
+     * Ends a wait: "done" starts a turn with `text`; "conflict" starts none
+     * (the card tells the user). False when the card no longer waits.
+     */
+    readonly endWait: (input: EndWaitInput) => Effect.Effect<boolean, TeamChoiceError>;
     /** The card for files a finished turn already changed (the guard's after-the-turn check). */
     readonly showEdited: (input: ShowEditedInput) => Effect.Effect<void>;
     /** The click: side effect, delivery to the agent, and the record on the card. */
@@ -133,6 +152,39 @@ export const holderWords = (files: ReadonlyArray<TeamPlanFile>) => {
     : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 };
 
+/** Who a wait is for: "Omar", "Sara and Omar", or "the other chat". */
+export const waiteeWords = (files: ReadonlyArray<TeamPlanFile>) =>
+  files.some((file) => file.holders.some((holder) => holder.kind === "member"))
+    ? holderWords(
+        files.map((file) => ({
+          ...file,
+          holders: file.holders.filter((holder) => holder.kind === "member"),
+        })),
+      )
+    : "the other chat";
+
+const itOrThem = (files: ReadonlyArray<unknown>) => (files.length === 1 ? "it" : "them");
+
+/**
+ * The turn that ends a wait. `copy`: "updated" when this chat's worktree was
+ * moved on top of the holder's merged work, "unknown" when it was not touched.
+ */
+export const waitDoneInstruction = (
+  files: ReadonlyArray<TeamPlanFile>,
+  copy: { readonly status: "updated"; readonly base: string } | { readonly status: "unknown" },
+) => {
+  const paths = quoted(files.map((file) => file.path));
+  const who = waiteeWords(files);
+  const it = itOrThem(files);
+  const where =
+    copy.status === "updated"
+      ? ` Your copy is now on top of \`${copy.base}\`, with their work.`
+      : who === "the other chat"
+        ? ""
+        : " Their work may not be in your copy yet.";
+  return `Done waiting: ${who} let go of ${paths}.${where} Re-read ${it}, then continue the task. Call team_plan before editing.`;
+};
+
 /** What the agent is told: as the held call's answer, or as the user's next message. */
 export const choiceInstruction = (
   choice: TeamChoice,
@@ -142,6 +194,10 @@ export const choiceInstruction = (
 ) => {
   const paths = quoted(files.map((file) => file.path));
   const who = holderWords(files);
+  if (choice === "wait") {
+    const waitee = waiteeWords(files);
+    return `User chose: wait for ${waitee}. Do not edit ${paths}. End your turn now; T3 starts your next turn when ${waitee} ${waitee.includes(" and ") ? "let" : "lets"} go of ${itOrThem(files)}.`;
+  }
   if (choice === "anotherWay" && edited) {
     const it = files.length === 1 ? "it" : "them";
     return `Find another way: you changed ${paths} without planning it, and ${who} ${files.length === 1 ? "holds it" : "hold them"}. Undo only your own changes to ${it} (no team_plan needed for that; others may have changed ${it} too, so do not restore the whole file), then do the task without changing ${it}. Call team_plan with your new plan before other edits.`;
@@ -154,6 +210,13 @@ export const choiceInstruction = (
   return voice === "tool"
     ? `User chose: go anyway. You may edit ${paths}; ${who} will see that you went ahead. Mention these files in your team_handoff.`
     : `Go anyway: you may edit ${paths}; ${who} will see that you went ahead. Continue the task, and mention these files in your team_handoff.`;
+};
+
+/** For an edit or a plan that touches files the user chose to wait on. */
+export const waitingInstruction = (files: ReadonlyArray<TeamPlanFile>) => {
+  const waitee = waiteeWords(files);
+  const it = itOrThem(files);
+  return `The user chose to wait for ${waitee} on ${quoted(files.map((file) => file.path))}. Do not edit ${it}; end your turn. T3 starts your next turn when ${waitee} ${waitee.includes(" and ") ? "let" : "lets"} go of ${it}.`;
 };
 
 export const notYetInstruction = (files: ReadonlyArray<TeamPlanFile>) => {
@@ -273,15 +336,30 @@ export const make = Effect.gen(function* () {
       const made = yield* madeChoices;
       return (yield* listChoices(threadId)).findLast(
         (card) =>
-          !made.has(card.choiceId) &&
+          teamChoiceIsOpen(made.get(card.choiceId)) &&
           files.every((file) => card.files.some((shown) => shown.path === file.path)),
       )?.choiceId;
+    });
+
+  /** A card of this thread that waits on one of `files`. */
+  const waitingCardFor = (threadId: ThreadId, files: ReadonlyArray<TeamPlanFile>) =>
+    Effect.gen(function* () {
+      const made = yield* madeChoices;
+      return (yield* listChoices(threadId)).findLast(
+        (card) =>
+          teamChoiceIsWaiting(made.get(card.choiceId)) &&
+          files.some((file) => card.files.some((shown) => shown.path === file.path)),
+      );
     });
 
   const ask = (input: AskInput): Effect.Effect<AskOutcome> => {
     const notYet: AskOutcome = { _tag: "NotYet", instruction: notYetInstruction(input.files) };
     const threadId = input.context.thread.threadId;
     return Effect.gen(function* () {
+      const waitingCard = yield* waitingCardFor(threadId, input.files);
+      if (waitingCard !== undefined) {
+        return { _tag: "NotYet", instruction: waitingInstruction(waitingCard.files) } as const;
+      }
       const reused = yield* openCardFor(threadId, input.files);
       const choiceId = reused ?? `team-choice:${yield* crypto.randomUUIDv4}`;
       const cap = yield* capFor(threadId, input.providerInstanceId);
@@ -322,7 +400,7 @@ export const make = Effect.gen(function* () {
         } else {
           // Answered between the lookup and the registration: that click started a turn.
           const made = (yield* madeChoices).get(choiceId);
-          if (made !== undefined) return Option.some(made.choice);
+          if (!teamChoiceIsOpen(made)) return Option.some(made!.choice);
         }
         yield* PubSub.publish(holds, choiceId);
         return yield* Deferred.await(waiter.deferred);
@@ -375,7 +453,8 @@ export const make = Effect.gen(function* () {
       });
     });
 
-  const startTurn = (threadId: ThreadId, choiceId: string, text: string) =>
+  /** A turn whose message comes from the card; `key` keeps each card's turns apart. */
+  const startTurn = (threadId: ThreadId, key: string, text: string) =>
     Effect.gen(function* () {
       const thread = yield* snapshots.getThreadShellById(threadId);
       if (Option.isNone(thread)) {
@@ -383,10 +462,10 @@ export const make = Effect.gen(function* () {
       }
       yield* engine.dispatch({
         type: "thread.turn.start",
-        commandId: CommandId.make(`server:${choiceId}:turn`),
+        commandId: CommandId.make(`server:${key}:turn`),
         threadId,
         message: {
-          messageId: choiceTurnMessageId(choiceId),
+          messageId: choiceTurnMessageId(key),
           role: "user",
           text,
           attachments: [],
@@ -394,6 +473,19 @@ export const make = Effect.gen(function* () {
         runtimeMode: thread.value.runtimeMode,
         interactionMode: thread.value.interactionMode,
         createdAt: yield* nowIso,
+      });
+    });
+
+  /** Records a choice, or a wait's change, on the card. A card can get several. */
+  const recordMade = (threadId: ThreadId, made: TeamChoiceMadePayload) =>
+    Effect.gen(function* () {
+      const first = !(yield* madeChoices).has(made.choiceId);
+      yield* appendActivity({
+        threadId,
+        kind: TEAM_CHOICE_MADE_ACTIVITY_KIND,
+        summary: teamChoiceMadeSummary(made.choice, made.wait),
+        payload: made,
+        id: first ? `${made.choiceId}:made` : `${made.choiceId}:made:${yield* crypto.randomUUIDv4}`,
       });
     });
 
@@ -407,57 +499,114 @@ export const make = Effect.gen(function* () {
         if (card === undefined) {
           return yield* new TeamChoiceError({ detail: "This warning card was not found." });
         }
-        if ((yield* madeChoices.pipe(Effect.catch(unreadable))).has(input.choiceId)) {
+        const latest = (yield* madeChoices.pipe(Effect.catch(unreadable))).get(input.choiceId);
+        const notRecorded = failed("The choice was sent, but not recorded on the card.");
+        if (input.choice === "cancelWait") {
+          if (!teamChoiceIsWaiting(latest)) {
+            return yield* new TeamChoiceError({ detail: "This card is not waiting." });
+          }
+          yield* recordMade(input.threadId, {
+            choiceId: input.choiceId,
+            choice: "wait",
+            delivery: "none",
+            wait: "cancelled",
+          }).pipe(Effect.catchCause(notRecorded));
+          return { delivery: "none" } satisfies TeamChooseResult;
+        }
+        if (!teamChoiceIsOpen(latest)) {
           return yield* new TeamChoiceError({ detail: "This card was already answered." });
         }
-        yield* sideEffect(input.choice, input.threadId, card.files).pipe(
-          Effect.catchCause(failed("The choice could not be saved to the team.")),
-        );
+        const edited = card.edited === true;
+        const choice = input.choice;
+        if (choice === "wait" && edited) {
+          return yield* new TeamChoiceError({ detail: "A change already made cannot wait." });
+        }
+        if (choice !== "wait") {
+          yield* sideEffect(choice, input.threadId, card.files).pipe(
+            Effect.catchCause(failed("The choice could not be saved to the team.")),
+          );
+        }
         // A call whose cap just passed is done already, and one whose turn was stopped
         // is still waiting but nobody reads its answer (Codex does not cancel it): then
         // a turn carries the choice. The stopped one is freed with "not yet".
         // An edited card holds no call; "Go anyway" there keeps the change as it is.
+        // "Wait" with no call to answer tells the agent nothing now: the wait's end does.
         const running = yield* runningTurn(input.threadId);
-        const edited = card.edited === true;
-        let delivery: TeamChoiceDelivery = edited && input.choice === "goAnyway" ? "none" : "turn";
+        let delivery: TeamChoiceDelivery =
+          choice === "wait" || (edited && choice === "goAnyway") ? "none" : "turn";
         for (const waiter of waiting.get(input.choiceId) ?? []) {
           const live = running !== null && (waiter.turnId ?? running) === running;
-          const answer = live ? Option.some(input.choice) : Option.none();
+          const answer = live ? Option.some(choice) : Option.none();
           if ((yield* Deferred.succeed(waiter.deferred, answer)) && live) delivery = "held";
         }
         if (delivery === "turn") {
           yield* startTurn(
             input.threadId,
             input.choiceId,
-            choiceInstruction(input.choice, card.files, "message", edited),
+            choiceInstruction(choice, card.files, "message", edited),
           ).pipe(
             Effect.catchCause(failed("The choice was saved, but the agent could not be started.")),
           );
         }
-        yield* appendActivity({
-          threadId: input.threadId,
-          kind: TEAM_CHOICE_MADE_ACTIVITY_KIND,
-          summary: teamChoiceMadeSummary(input.choice),
-          payload: {
-            choiceId: input.choiceId,
-            choice: input.choice,
-            delivery,
-          } satisfies TeamChoiceMadePayload,
-          id: `${input.choiceId}:made`,
-        }).pipe(Effect.catchCause(failed("The choice was sent, but not recorded on the card.")));
+        yield* recordMade(input.threadId, {
+          choiceId: input.choiceId,
+          choice,
+          delivery,
+          ...(choice === "wait" ? { wait: "waiting" as const } : {}),
+        }).pipe(Effect.catchCause(notRecorded));
         return { delivery } satisfies TeamChooseResult;
       }),
     );
 
-  const openPaths = (threadId: ThreadId) =>
+  const endWait = (input: EndWaitInput) =>
+    clicks.withPermits(1)(
+      Effect.gen(function* () {
+        const latest = (yield* madeChoices.pipe(
+          Effect.catch(failed("The warning card could not be read.")),
+        )).get(input.choiceId);
+        if (!teamChoiceIsWaiting(latest)) return false;
+        if (input.outcome === "done") {
+          yield* startTurn(input.threadId, `${input.choiceId}:wait`, input.text).pipe(
+            Effect.catchCause(failed("The wait ended, but the agent could not be started.")),
+          );
+        }
+        yield* recordMade(input.threadId, {
+          choiceId: input.choiceId,
+          choice: "wait",
+          delivery: input.outcome === "done" ? "turn" : "none",
+          wait: input.outcome,
+        }).pipe(Effect.catchCause(failed("The wait ended, but it was not recorded on the card.")));
+        return true;
+      }),
+    );
+
+  const pathsWhere = (
+    threadId: ThreadId,
+    state: (made: TeamChoiceMadePayload | undefined) => boolean,
+  ) =>
     Effect.gen(function* () {
       const made = yield* madeChoices;
       return new Set(
         (yield* listChoices(threadId))
-          .filter((card) => !made.has(card.choiceId))
+          .filter((card) => state(made.get(card.choiceId)))
           .flatMap((card) => card.files.map((file) => file.path)),
       );
     }).pipe(Effect.orElseSucceed((): ReadonlySet<string> => new Set()));
+
+  const openPaths = (threadId: ThreadId) => pathsWhere(threadId, teamChoiceIsOpen);
+  const waitingPaths = (threadId: ThreadId) => pathsWhere(threadId, teamChoiceIsWaiting);
+
+  const waitingCards = Effect.gen(function* () {
+    const made = yield* madeChoices;
+    return (yield* snapshots.listActivitiesByKind(TEAM_CHOICE_ACTIVITY_KIND)).flatMap(
+      (activity) => {
+        const card = decodeChoice(activity.payload);
+        return Option.isSome(card) && teamChoiceIsWaiting(made.get(card.value.choiceId))
+          ? [card.value]
+          : [];
+      },
+    );
+  }).pipe(Effect.orElseSucceed((): ReadonlyArray<TeamChoiceActivityPayload> => []));
 
   const showEdited = (input: ShowEditedInput) =>
     Effect.gen(function* () {
@@ -484,14 +633,7 @@ export const make = Effect.gen(function* () {
     );
 
   const wentAhead = (threadId: ThreadId) =>
-    Effect.gen(function* () {
-      const made = yield* madeChoices;
-      return new Set(
-        (yield* listChoices(threadId))
-          .filter((card) => made.get(card.choiceId)?.choice === "goAnyway")
-          .flatMap((card) => card.files.map((file) => file.path)),
-      );
-    }).pipe(Effect.orElseSucceed((): ReadonlySet<string> => new Set()));
+    pathsWhere(threadId, (made) => made?.choice === "goAnyway");
 
   // The undo edits the held file: the guard lets the undo turn through, and its diff asks nothing.
   const undoRequests = (threadId: ThreadId) =>
@@ -516,6 +658,9 @@ export const make = Effect.gen(function* () {
     wentAhead,
     undoRequests,
     openPaths,
+    waitingPaths,
+    waitingCards,
+    endWait,
     showEdited,
     choose,
   });

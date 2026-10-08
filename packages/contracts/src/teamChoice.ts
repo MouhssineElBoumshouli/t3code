@@ -15,8 +15,17 @@ export const TEAM_CHOICE_ACTIVITY_KIND = "team.choice";
 export const TEAM_CHOICE_MADE_ACTIVITY_KIND = "team.choice.made";
 
 /** The choices built so far; the card shows the others as coming soon. */
-export const TeamChoice = Schema.Literals(["anotherWay", "goAnyway"]);
+export const TeamChoice = Schema.Literals(["anotherWay", "goAnyway", "wait"]);
 export type TeamChoice = typeof TeamChoice.Type;
+
+/**
+ * Where a "Wait" stands (PREVENTION_PLAN.md section 2, slice 3c): waiting for
+ * the holder; cancelled by the user (the card is open again); done (the
+ * holder let go, and a turn continued the task); conflict (the holder let go,
+ * but this chat's copy could not be updated on top of their work).
+ */
+export const TeamWaitStatus = Schema.Literals(["waiting", "cancelled", "done", "conflict"]);
+export type TeamWaitStatus = typeof TeamWaitStatus.Type;
 
 export const TeamChoiceActivityPayload = Schema.Struct({
   choiceId: TrimmedNonEmptyString,
@@ -40,10 +49,16 @@ export type TeamChoiceActivityPayload = typeof TeamChoiceActivityPayload.Type;
 export const TeamChoiceDelivery = Schema.Literals(["held", "turn", "none"]);
 export type TeamChoiceDelivery = typeof TeamChoiceDelivery.Type;
 
+/**
+ * A card can get several of these: "Wait", then its end or a cancel, then
+ * (after a cancel) another choice. The newest one is the card's state.
+ */
 export const TeamChoiceMadePayload = Schema.Struct({
   choiceId: TrimmedNonEmptyString,
   choice: TeamChoice,
   delivery: TeamChoiceDelivery,
+  /** Only for "wait". */
+  wait: Schema.optionalKey(TeamWaitStatus),
 });
 export type TeamChoiceMadePayload = typeof TeamChoiceMadePayload.Type;
 
@@ -51,13 +66,36 @@ export type TeamChoiceMadePayload = typeof TeamChoiceMadePayload.Type;
 export const teamChoiceSummary = (fileCount: number, edited = false) =>
   `${fileCount} ${edited ? "changed" : "planned"} ${fileCount === 1 ? "file is" : "files are"} held: your choice`;
 
-export const teamChoiceMadeSummary = (choice: TeamChoice) =>
-  choice === "anotherWay" ? "Chose: find another way" : "Chose: go anyway";
+export const teamChoiceMadeSummary = (choice: TeamChoice, wait?: TeamWaitStatus) => {
+  if (choice === "anotherWay") return "Chose: find another way";
+  if (choice === "goAnyway") return "Chose: go anyway";
+  switch (wait) {
+    case "cancelled":
+      return "Stopped waiting";
+    case "done":
+      return "Done waiting";
+    case "conflict":
+      return "Done waiting: the copy could not be updated";
+    default:
+      return "Chose: wait";
+  }
+};
+
+/** No choice yet, or the user cancelled a wait: the card takes a click. */
+export const teamChoiceIsOpen = (made: TeamChoiceMadePayload | null | undefined) =>
+  made === null || made === undefined || made.wait === "cancelled";
+
+export const teamChoiceIsWaiting = (made: TeamChoiceMadePayload | null | undefined) =>
+  made?.wait === "waiting";
+
+/** A choice, or "cancelWait" to stop waiting (the card is open again). */
+export const TeamChooseAction = Schema.Literals(["anotherWay", "goAnyway", "wait", "cancelWait"]);
+export type TeamChooseAction = typeof TeamChooseAction.Type;
 
 export const TeamChooseInput = Schema.Struct({
   threadId: ThreadId,
   choiceId: TrimmedNonEmptyString,
-  choice: TeamChoice,
+  choice: TeamChooseAction,
 });
 export type TeamChooseInput = typeof TeamChooseInput.Type;
 
