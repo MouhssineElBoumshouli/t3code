@@ -2,6 +2,43 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-08 — The warning card, slice 3a (PREVENTION_PLAN.md section 5): code and tests; live runs not done
+
+**What changed**
+
+- **`team_plan` holds the call** when a planned file is held by someone else (a teammate, or another chat). `apps/server/src/team/TeamChoices.ts` adds a `team.choice` activity (the card) in the running turn and waits for the click, up to a cap per provider, taken from the thread's session driver: Claude 24 h, Codex 55 min, the others 45 s. The waiter is registered before the card shows, and the cap timer is armed before it too, so a fast click always finds the call.
+- **Codex:** `CodexAdapter` passes `-c mcp_servers.t3-code.tool_timeout_sec=3600` next to its two `-c` args (default 60 s).
+- **The click:** new WebSocket method `team.choose` (scope `orchestration:operate`, like sending a message). "Find another way" releases this chat's claims on the held files; "Go anyway" writes an `overlap.accepted` line to the team activity ("Mouhssine went ahead on src/a.ts, held by Omar.") and is not asked again for those files in that chat. Then delivery: to the held call if one is waiting, else **a new turn whose message is the choice** (cap reached, server restarted, turn stopped). Then a `team.choice.made` activity, so the choice stays on the card. A second click, or a click naming another chat, is refused.
+- **What the agent is told:** chosen: "User chose: find another way. Do the task without changing `src/auth/login.ts`; your claims on them are released. Call team_plan again with your new plan before editing." At the cap: "Paused: … held by Omar, and the user has not chosen yet. Do not edit it. End your turn now; the user's choice comes as the next message." Planning again before the user chose holds on the same card (no second card).
+- **The card** (`apps/web/src/components/team/TeamChoiceCard.tsx`): "Omar holds a file in this plan" (solo: "Another chat holds …"), the held files with the holder chips, "Find another way" and "Go anyway", and, disabled under "Coming soon:", "Wait for Omar", "Build on top of Omar's work", "Ask Omar" (solo: only "Wait for that chat"). After the click: "You chose: Go anyway · sent to the agent" (or "· sent as a new message").
+- **Client:** `packages/client-runtime/src/work-log/teamCards.ts` folds the choice into its card at the card's place (cached, so the row is not redrawn) and decodes both team cards; the work entry's `teamPlan` field became `teamCard` (plan or choice), so the timeline's five team-layer conditions cover both. `teamFeed.choose` is the command.
+- `TeamService.recordActivity` (new) and the `overlap.accepted` activity kind.
+
+**Files touched**
+
+- New: `packages/contracts/src/teamChoice.ts`, `apps/server/src/team/TeamChoices.ts`, `apps/web/src/components/team/TeamChoiceCard.tsx`, `packages/client-runtime/src/work-log/teamCards.ts` (+ test).
+- `apps/server/src/mcp/toolkits/team/handlers.ts` (+ test), `tools.ts` (`choice` in the result), `apps/server/src/team/TeamService.ts`, `state/GitTeamService.ts`, `packages/contracts/src/team.ts`, `packages/client-runtime/src/state/teamFeed.ts`, `package.json` (export).
+- `team-layer:` edits in upstream files: `packages/contracts/src/index.ts`, `rpc.ts` (method and RPC), `apps/server/src/auth/RpcAuthorization.ts`, `ws.ts` (handler), `server.ts` (layer next to `TeamFeed`), `server.test.ts` (mock), `provider/Layers/CodexAdapter.ts` (2 args), `apps/web/src/session-logic.ts` (fold + decode), `MessagesTimeline.logic.ts` (the 5 conditions renamed), `MessagesTimeline.tsx` (the row), `MessagesTimeline.logic.test.ts` (1 test).
+
+**How it was checked**
+
+- `apps/server`: `vp test run src/team/ src/mcp/toolkits/team/ src/cli/team.test.ts src/provider/Layers/CodexTeamBriefing.test.ts src/auth/ChatGptRpcScopes.test.ts`: 19 files, **178 passed**. New or rewritten: team hold and click (plan card then warning card with only the held files; refused click from another chat; "Find another way" answers the held call, releases the held files and keeps the free one; no turn started; second click refused); solo "Go anyway" (activity line written; planning the same file again does not ask again); Codex cap with the test clock (still held at 54 min, "Paused" at 55; planning again holds on the same card; the click then starts a turn with the choice as its message, recorded as `delivery: "turn"`); the cap per provider. The tests wait on receipts (the card's dispatch, a hold notice), never on sleeps. Mutation: skipping the release fails the hold test.
+- `CodexSessionRuntime.test.ts` and `server.test.ts`: 253 passed. `packages/client-runtime`: `teamCards.test.ts` + `teamMarkers.test.ts` 9 passed. `apps/web`: `MessagesTimeline.logic.test.ts`, `session-logic.test.ts` 205 passed (new: the choice folds into the card, which keeps its own row after the turn folds).
+- `tsc --noEmit`: server, web, contracts, client-runtime, mobile: 0 errors. `vp lint` on the changed files: no errors (warnings in `MessagesTimeline.tsx` were there before).
+- **Not done: the live check of step 1 and the live self-test of 3a.** The dev server started, but this session's permission checker refused to let me read the `pairingUrl:` line from the dev log, so the Playwright browser could not pair. I stopped the server by its PIDs (ports free). No screenshots yet.
+
+**What's left**
+
+- Step 1: live check, in `~/code/team-demo8` (seeded; its rulebook's "Claim files with team_claim" line removed so nothing names the tools), Claude and Codex each given a normal task on a held file, without naming team_plan.
+- 3a live: Claude and Codex, solo and team, light and dark; the Codex hold past 60 s (the raised `tool_timeout_sec`); screenshots to `test-screenshots`.
+- Mobile: the card shows there as a plain row with its summary ("1 planned file is held: your choice"), no buttons yet.
+
+**Unsure about / notes**
+
+- `overlap.accepted` is a new value in the writer files: a teammate on an older build would fail to read the file that holds it. Nobody runs an older build yet.
+- The cap comes from the session's `providerName`; with no session yet, the instance id is used, so a custom instance of Claude with no session would get 45 s.
+- A turn started by the click while the old turn still runs (the agent ignored "end your turn") goes through the same path as a message sent during a turn.
+
 ## 2026-10-08 — VISION.md 3.6: working on the same files often (research)
 
 **What changed**
