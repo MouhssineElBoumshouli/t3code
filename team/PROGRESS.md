@@ -2,6 +2,16 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-08 — Small fixes: refused edits, the undo pass, Claude holds 55 min
+
+- **A refused edit is not a change.** The tool group summary counted a failed or refused edit (Claude's hook answers `deny`, the tool ends `failed`) as "Changed 1 file". Now such an edit reads "Could not change 1 file" (and "Could not change 1 file and changed 1 file" in a mixed group). Shared by web and mobile (`packages/client-runtime/src/work-log/presentation.ts`, `team-layer:` edit in an upstream file).
+- **The undo pass lasts one turn.** "Undo it, find another way" let the chat edit those files for the rest of its life. Now the guard lets through only the turn the click started: the turn row whose starting message is the click's (`pendingMessageId` = `<choiceId>:message`, `ProjectionTurnRepository`). The next turn is stopped again. `TeamChoices.undoPaths` became `undoRequests` (message id and paths); `TeamGuard` checks the running turn (before the write) or the diff's turn (after it).
+- **Claude waits on the card up to 55 min.** Found in the Claude Code 2.1.293 binary: its HTTP MCP fetch aborts at `max(timeout ?? MCP_TOOL_TIMEOUT, 60 s)`, 60 s by default (the 499 at 60001 ms), and it has a 5 min idle timeout for HTTP servers that the same setting raises. The SDK's `McpHttpServerConfig` takes that setting per server (`timeout`, ms), so `ClaudeAdapter` sets 1 h on the `t3-code` server only (the user's other MCP servers keep their limits). `holdCap("claudeAgent")` is 55 min, like Codex. PREVENTION_PLAN.md's Claude row and cap list are rewritten.
+- Files: `packages/client-runtime/src/work-log/presentation.ts` (+ test), `apps/server/src/team/TeamChoices.ts`, `TeamGuard.ts` (+ test), `teamEditCheck.ts` (the timeout constant), `provider/Layers/ClaudeAdapter.ts` (`team-layer:`, one field), `mcp/toolkits/team/handlers.test.ts` (cap), `team/PREVENTION_PLAN.md`.
+- Checked: `vp test run src/team/ src/mcp/toolkits/team/` (server): 18 files, 165 passed. New: the next turn after the undo turn is refused again; a mutation that grants the pass to every turn fails it. `presentation.test.ts` 74 passed (new: refused, mixed, two made); `MessagesTimeline.logic.test.ts` 122 passed. `tsc --noEmit` server and client-runtime: 0 errors. Lint clean on the changed files.
+- **Live** (`team-demo10`, fresh seed, Claude Sonnet 5.5, screenshots in this round's folder): Claude planned Omar's `session.ts`; the card held the `team_plan` call from 17:22:06 to the click at 17:28:19 (6 min 12 s; no HTTP 499 in the server log, no second `team_plan`); "Go anyway" was `delivery: "held"` on the same tool call, and Claude edited and finished ("Worked for 6m 40s"). A Claude chat told to Edit Sara's `search.ts` without team tools was refused, and the timeline read "Used 1 tool and could not change 1 file".
+- Not live-tested: the one-turn undo pass (tests only). Claude's auto-background of long MCP calls (`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`, 2 min) looks off for non-interactive (SDK) sessions in this build, from reading the minified code; the 6 min hold agrees. A later Claude Code could change that.
+
 ## 2026-10-08 — Honest status while the card waits; token fixes; the guard (3b); shared files
 
 **Step 1: "Awaiting Input" while the card waits**

@@ -171,6 +171,29 @@ describe("summarizeToolGroup", () => {
     },
   );
 
+  it("does not count a refused or failed edit as a change", () => {
+    const refused = {
+      label: "File change",
+      tone: "tool",
+      itemType: "file_change",
+      toolLifecycleStatus: "failed",
+      changedFiles: ["src/auth/session.ts"],
+    } satisfies WorkLogPresentationEntry;
+    const made = {
+      label: "File change",
+      tone: "tool",
+      itemType: "file_change",
+      toolLifecycleStatus: "completed",
+      changedFiles: ["src/a.ts"],
+    } satisfies WorkLogPresentationEntry;
+
+    expect(summarizeToolGroup([refused])).toBe("Could not change 1 file");
+    expect(summarizeToolGroup([refused, made])).toBe("Could not change 1 file and changed 1 file");
+    expect(summarizeToolGroup([made, { ...made, changedFiles: ["src/b.ts"] }])).toBe(
+      "Changed 2 files",
+    );
+  });
+
   it("deduplicates named sources ahead of ordinary actions", () => {
     const source = { key: "browser-use:chrome", name: "Chrome", kind: "integration" as const };
     expect(

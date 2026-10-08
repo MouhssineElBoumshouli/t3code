@@ -18,7 +18,13 @@
  *
  * @module TeamGuard
  */
-import type { OrchestrationEvent, TeamPath, TeamPlanFile, ThreadId } from "@t3tools/contracts";
+import type {
+  OrchestrationEvent,
+  TeamPath,
+  TeamPlanFile,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -31,6 +37,8 @@ import { makeTeamResolver, type TeamContext } from "../mcp/toolkits/team/resolve
 import { isSharedPath, readSharedFiles } from "../mcp/toolkits/team/rulebook.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectionTurnRepositoryLive } from "../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { forkParked } from "../serverActivation.ts";
 import { heldElsewhere } from "./heldElsewhere.ts";
 import { diffToTeamPaths } from "./TeamAutoNotes.ts";
@@ -65,6 +73,7 @@ export const make = Effect.gen(function* () {
   const choices = yield* TeamChoices.TeamChoices;
   const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+  const turnRows = yield* ProjectionTurnRepository;
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
@@ -78,8 +87,23 @@ export const make = Effect.gen(function* () {
       Effect.map((resolved) => (resolved._tag === "InTeam" ? resolved.context : undefined)),
     );
 
+  /**
+   * The paths `turnId` may change back: it is the turn an "Undo it, find
+   * another way" click started. Later turns get no pass.
+   */
+  const undoPathsOf = (threadId: ThreadId, turnId: TurnId | null) =>
+    Effect.gen(function* () {
+      if (turnId === null) return [];
+      const requests = yield* choices.undoRequests(threadId);
+      if (requests.length === 0) return [];
+      const row = Option.getOrUndefined(yield* turnRows.getByTurnId({ threadId, turnId }));
+      return requests.flatMap((request) =>
+        request.messageId === row?.pendingMessageId ? request.paths : [],
+      );
+    });
+
   /** The paths in `paths` someone else holds and this thread did not plan, claim, go ahead on or undo. */
-  const heldFor = (context: TeamContext, paths: ReadonlyArray<TeamPath>) =>
+  const heldFor = (context: TeamContext, paths: ReadonlyArray<TeamPath>, turnId: TurnId | null) =>
     Effect.gen(function* () {
       // The rulebook's shared files never stop anyone (VISION.md 3.6).
       const shared = yield* readSharedFiles(context).pipe(
@@ -93,7 +117,7 @@ export const make = Effect.gen(function* () {
         teams.listActiveClaims(teamId),
         teams.listMembers(teamId),
         choices.wentAhead(context.thread.threadId),
-        choices.undoPaths(context.thread.threadId),
+        undoPathsOf(context.thread.threadId, turnId),
       ]);
       return heldElsewhere({
         paths: checked,
@@ -123,7 +147,9 @@ export const make = Effect.gen(function* () {
       const open = yield* choices.openPaths(threadId);
       const waiting = paths.filter((file) => open.has(file));
       if (waiting.length > 0) return openCardEditReason(waiting);
-      const held = yield* heldFor(context, paths);
+      const shell = Option.getOrUndefined(yield* snapshots.getThreadShellById(threadId));
+      const running = shell?.latestTurn?.state === "running" ? shell.latestTurn.turnId : null;
+      const held = yield* heldFor(context, paths, running);
       return held.length === 0 ? undefined : heldEditReason(held);
     }).pipe(
       Effect.timeoutOption(EDIT_CHECK_TIMEOUT),
@@ -210,6 +236,7 @@ export const make = Effect.gen(function* () {
       const held = yield* heldFor(
         context,
         changed.filter((file) => !open.has(file)),
+        payload.turnId,
       );
       if (held.length === 0) return;
       const shell = Option.getOrUndefined(yield* snapshots.getThreadShellById(payload.threadId));
@@ -247,4 +274,6 @@ export const make = Effect.gen(function* () {
   return { checkEdit, afterTurn };
 });
 
-export const TeamGuardLive = Layer.effectDiscard(make);
+export const TeamGuardLive = Layer.effectDiscard(make).pipe(
+  Layer.provide(ProjectionTurnRepositoryLive),
+);

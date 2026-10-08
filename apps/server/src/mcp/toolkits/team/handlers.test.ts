@@ -1296,7 +1296,7 @@ describe("team toolkit", () => {
   );
 
   it("holds each provider's call only as long as it waits", () => {
-    assert.equal(Duration.toMillis(TeamChoices.holdCap("claudeAgent")), 50 * 1000);
+    assert.equal(Duration.toMillis(TeamChoices.holdCap("claudeAgent")), 55 * 60 * 1000);
     assert.equal(Duration.toMillis(TeamChoices.holdCap("codex")), 55 * 60 * 1000);
     for (const driver of ["cursor", "grok", "opencode", "antigravity"]) {
       assert.equal(Duration.toMillis(TeamChoices.holdCap(driver)), 45 * 1000, driver);

@@ -10,6 +10,13 @@ import type { Options as ClaudeQueryOptions } from "@anthropic-ai/claude-agent-s
 import type { ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
+/**
+ * Claude Code's limit on a call to T3's MCP server (the per-server `timeout`,
+ * which overrides MCP_TOOL_TIMEOUT for that server only). Its default drops an
+ * HTTP call at 60 s; the warning card holds `team_plan` up to 55 minutes.
+ */
+export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 60 * 60 * 1000;
+
 /** Why the write must wait (told to the agent), or `undefined` to let it through. Never fails. */
 export type TeamEditCheck = (
   threadId: ThreadId,

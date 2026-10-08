@@ -546,11 +546,17 @@ export function resolveViewedImageAsset(
   return { resource: media.resource, alt: media.name, srcFragment: media.srcFragment };
 }
 
+// team-layer: an edit that failed or was refused (the team guard) changed nothing.
+type ToolGroupLabelAction = ToolGroupAction | "edit-failed";
+
+const editChangedNothing = (entry: WorkLogPresentationEntry) =>
+  entry.toolLifecycleStatus === "failed" || entry.toolLifecycleStatus === "declined";
+
 function toolGroupActionCount(
-  action: ToolGroupAction,
+  action: ToolGroupLabelAction,
   entries: ReadonlyArray<WorkLogPresentationEntry>,
 ): number {
-  if (action !== "edit") return entries.length;
+  if (action !== "edit" && action !== "edit-failed") return entries.length;
 
   const changedFiles = new Set<string>();
   let editsWithoutFileDetails = 0;
@@ -564,8 +570,10 @@ function toolGroupActionCount(
   return changedFiles.size + editsWithoutFileDetails;
 }
 
-function toolGroupActionLabel(action: ToolGroupAction, count: number): string {
+function toolGroupActionLabel(action: ToolGroupLabelAction, count: number): string {
   switch (action) {
+    case "edit-failed":
+      return `Could not change ${count} ${count === 1 ? "file" : "files"}`;
     case "link-pr":
       return `Linked ${count} ${count === 1 ? "pull request" : "pull requests"}`;
     case "unlink-pr":
@@ -598,13 +606,14 @@ function toolGroupActionLabel(action: ToolGroupAction, count: number): string {
 export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEntry>): string {
   const summaryEntries = omitSupersededLifecycleMarkers(entries, (entry) => entry);
   const sources = new Map<string, ToolActivitySource>();
-  const groupedEntries = new Map<ToolGroupAction, WorkLogPresentationEntry[]>();
+  const groupedEntries = new Map<ToolGroupLabelAction, WorkLogPresentationEntry[]>();
   for (const entry of summaryEntries) {
     if (entry.toolSource && resolveWorkEntryToolPresentation(entry)?.icon !== "pull-request") {
       sources.set(entry.toolSource.key, entry.toolSource);
       continue;
     }
-    const action = toolGroupAction(entry);
+    const kind = toolGroupAction(entry);
+    const action = kind === "edit" && editChangedNothing(entry) ? "edit-failed" : kind;
     const group = groupedEntries.get(action);
     if (group) group.push(entry);
     else groupedEntries.set(action, [entry]);

@@ -96,7 +96,7 @@ import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 // team-layer: team briefing for runtime instructions (see team/DESIGN.md D4).
 import { readTeamBriefing } from "../../team/TeamBriefing.ts";
-import { claudeTeamEditHooks } from "../../team/teamEditCheck.ts"; // team-layer
+import { CLAUDE_T3_MCP_TOOL_TIMEOUT_MS, claudeTeamEditHooks } from "../../team/teamEditCheck.ts"; // team-layer
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   type ClaudeModelCatalog,
@@ -4963,6 +4963,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                   headers: {
                     Authorization: mcpSession.authorizationHeader,
                   },
+                  // team-layer: Claude Code drops an HTTP MCP call after 60 s by default; the
+                  // warning card holds team_plan longer (team/PREVENTION_PLAN.md section 1).
+                  timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
                 },
               },
             }

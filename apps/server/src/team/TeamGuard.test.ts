@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   TEAM_CHOICE_ACTIVITY_KIND,
@@ -33,6 +34,7 @@ import * as Stream from "effect/Stream";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { heldElsewhere } from "./heldElsewhere.ts";
 import * as TeamChoices from "./TeamChoices.ts";
 import { checkTeamEdit, claudeTeamEditHooks } from "./teamEditCheck.ts";
@@ -114,7 +116,28 @@ const makeHarness = Effect.fn("makeTeamGuardHarness")(function* () {
     [THREAD_A]: turn("turn-a", 10, null),
   });
   const events = yield* PubSub.unbounded<OrchestrationEvent>();
+  /** The message each turn started with, by turn id. */
+  const turnMessages = new Map<string, MessageId>();
   const dependencies = Layer.mergeAll(
+    Layer.mock(ProjectionTurnRepository)({
+      getByTurnId: ({ threadId, turnId }) =>
+        Effect.succeedSome({
+          threadId,
+          turnId,
+          pendingMessageId: turnMessages.get(turnId) ?? null,
+          sourceProposedPlanThreadId: null,
+          sourceProposedPlanId: null,
+          assistantMessageId: null,
+          state: "running" as const,
+          requestedAt: at(0),
+          startedAt: at(0),
+          completedAt: null,
+          checkpointTurnCount: null,
+          checkpointRef: null,
+          checkpointStatus: null,
+          checkpointFiles: [],
+        }),
+    }),
     testTeamServiceLayer({
       environmentId: ENVIRONMENT_ID,
       stateDirectory: yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-guard-state-" }),
@@ -226,7 +249,32 @@ const makeHarness = Effect.fn("makeTeamGuardHarness")(function* () {
       files: files.map((path) => ({ path })),
       completedAt: at(end),
     });
-  return { root, guard, choices, cards, dispatched, turns, omarClaims, claimAs, turnDiff };
+  /** The click's turn starts: it runs with the click's message. */
+  const startClickTurn = (threadId: ThreadId, turnId: string, start: number) =>
+    Effect.gen(function* () {
+      const started = (yield* Ref.get(dispatched)).findLast(
+        (command) => command.type === "thread.turn.start" && command.threadId === threadId,
+      );
+      if (started?.type === "thread.turn.start") {
+        turnMessages.set(turnId, started.message.messageId);
+      }
+      yield* Ref.update(turns, (byThread) => ({
+        ...byThread,
+        [threadId]: turn(turnId, start, null),
+      }));
+    });
+  return {
+    root,
+    guard,
+    choices,
+    cards,
+    dispatched,
+    turns,
+    omarClaims,
+    claimAs,
+    turnDiff,
+    startClickTurn,
+  };
 }, Effect.provide(NodeServices.layer));
 
 describe("heldElsewhere", () => {
@@ -324,8 +372,17 @@ describe("TeamGuard", () => {
     "shows the card for a held file a finished turn changed; another way starts a turn, keeping it does not",
     () =>
       Effect.gen(function* () {
-        const { root, guard, choices, cards, dispatched, omarClaims, turnDiff } =
-          yield* makeHarness();
+        const {
+          root,
+          guard,
+          choices,
+          cards,
+          dispatched,
+          turns,
+          omarClaims,
+          turnDiff,
+          startClickTurn,
+        } = yield* makeHarness();
         yield* omarClaims(["src/auth/"]);
         // A python heredoc through Bash: no edit tool saw it, the diff does.
         yield* turnDiff(THREAD_A, "turn-a", ["src/auth/login.ts", "src/free.ts"], 12);
@@ -361,12 +418,18 @@ describe("TeamGuard", () => {
           started?.type === "thread.turn.start" ? started.message.text : "",
           "Undo only your own changes to it (no team_plan needed for that",
         );
-        // The undo edits the held file: let through, and its diff asks nothing.
-        assert.isUndefined(
-          yield* guard.checkEdit(THREAD_A, [NodePath.join(root, "src/auth/login.ts")]),
-        );
+        // The undo turn edits the held file: let through, and its diff asks nothing.
+        const login = NodePath.join(root, "src/auth/login.ts");
+        yield* startClickTurn(THREAD_A, "turn-a-undo", 13);
+        assert.isUndefined(yield* guard.checkEdit(THREAD_A, [login]));
         yield* turnDiff(THREAD_A, "turn-a-undo", ["src/auth/login.ts"], 13);
         assert.lengthOf(yield* cards, 1);
+        // Only that turn: the next one is stopped again.
+        yield* Ref.update(turns, (byThread) => ({
+          ...byThread,
+          [THREAD_A]: turn("turn-a-next", 14, null),
+        }));
+        assert.include(yield* guard.checkEdit(THREAD_A, [login]), "held by Omar");
 
         // Another turn changes another of Omar's files; this time the user keeps the change: no turn.
         yield* turnDiff(THREAD_A, "turn-a3", ["src/auth/session.ts"], 14);

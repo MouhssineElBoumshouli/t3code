@@ -58,14 +58,13 @@ import * as TeamService from "./TeamService.ts";
 
 /**
  * How long each provider lets a tool call wait (PREVENTION_PLAN.md section 1).
- * Codex gets `tool_timeout_sec=3600` from CodexAdapter. Claude Code drops the
- * MCP request after 60 s (seen live, 2026-10-08), and the rest are not known,
- * so they get less than that.
+ * Codex gets `tool_timeout_sec=3600` from CodexAdapter, Claude a 1 h `timeout`
+ * on T3's MCP server from ClaudeAdapter (its default drops the call at 60 s).
+ * The rest are not known, so they get less than 60 s.
  */
 export const holdCap = (driver: ProviderDriverKind | string): Duration.Duration => {
   switch (driver) {
     case "claudeAgent":
-      return Duration.seconds(50);
     case "codex":
       return Duration.minutes(55);
     default:
@@ -101,8 +100,11 @@ export class TeamChoices extends Context.Service<
     readonly subscribeHolds: Effect.Effect<PubSub.Subscription<string>, never, Scope.Scope>;
     /** Paths this thread's user already chose "Go anyway" for. */
     readonly wentAhead: (threadId: ThreadId) => Effect.Effect<ReadonlySet<string>>;
-    /** Paths of changes made without a plan that the user asked this thread to undo. */
-    readonly undoPaths: (threadId: ThreadId) => Effect.Effect<ReadonlySet<string>>;
+    /**
+     * Each "Undo it, find another way" click of this thread: the message that
+     * started the undo turn, and the paths that turn may change back.
+     */
+    readonly undoRequests: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<UndoRequest>>;
     /** Paths on this thread's cards the user has not answered yet. */
     readonly openPaths: (threadId: ThreadId) => Effect.Effect<ReadonlySet<string>>;
     /** The card for files a finished turn already changed (the guard's after-the-turn check). */
@@ -158,6 +160,14 @@ export const notYetInstruction = (files: ReadonlyArray<TeamPlanFile>) => {
   const paths = files.map((file) => file.path);
   return `Paused: ${quoted(paths)} ${paths.length === 1 ? "is" : "are"} held by ${holderWords(files)}, and the user has not chosen yet. Do not edit ${paths.length === 1 ? "it" : "them"}. End your turn now; the user's choice comes as the next message.`;
 };
+
+/** The message a click's new turn starts with; its turn is the one that carries the choice. */
+export const choiceTurnMessageId = (choiceId: string) => MessageId.make(`${choiceId}:message`);
+
+export interface UndoRequest {
+  readonly messageId: MessageId;
+  readonly paths: ReadonlyArray<string>;
+}
 
 interface Waiter {
   readonly threadId: ThreadId;
@@ -376,7 +386,7 @@ export const make = Effect.gen(function* () {
         commandId: CommandId.make(`server:${choiceId}:turn`),
         threadId,
         message: {
-          messageId: MessageId.make(`${choiceId}:message`),
+          messageId: choiceTurnMessageId(choiceId),
           role: "user",
           text,
           attachments: [],
@@ -473,34 +483,38 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const pathsChosen = (
-    threadId: ThreadId,
-    chosen: (card: TeamChoiceActivityPayload, choice: TeamChoice) => boolean,
-  ) =>
+  const wentAhead = (threadId: ThreadId) =>
     Effect.gen(function* () {
       const made = yield* madeChoices;
       return new Set(
         (yield* listChoices(threadId))
-          .filter((card) => {
-            const choice = made.get(card.choiceId)?.choice;
-            return choice !== undefined && chosen(card, choice);
-          })
+          .filter((card) => made.get(card.choiceId)?.choice === "goAnyway")
           .flatMap((card) => card.files.map((file) => file.path)),
       );
     }).pipe(Effect.orElseSucceed((): ReadonlySet<string> => new Set()));
 
-  const wentAhead = (threadId: ThreadId) =>
-    pathsChosen(threadId, (_card, choice) => choice === "goAnyway");
-
-  // The undo edits the held file: the guard lets it through, and its diff asks nothing.
-  const undoPaths = (threadId: ThreadId) =>
-    pathsChosen(threadId, (card, choice) => card.edited === true && choice === "anotherWay");
+  // The undo edits the held file: the guard lets the undo turn through, and its diff asks nothing.
+  const undoRequests = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const made = yield* madeChoices;
+      return (yield* listChoices(threadId)).flatMap((card): Array<UndoRequest> => {
+        const answer = made.get(card.choiceId);
+        return card.edited === true && answer?.choice === "anotherWay" && answer.delivery === "turn"
+          ? [
+              {
+                messageId: choiceTurnMessageId(card.choiceId),
+                paths: card.files.map((file) => file.path),
+              },
+            ]
+          : [];
+      });
+    }).pipe(Effect.orElseSucceed((): ReadonlyArray<UndoRequest> => []));
 
   return TeamChoices.of({
     ask,
     subscribeHolds: PubSub.subscribe(holds),
     wentAhead,
-    undoPaths,
+    undoRequests,
     openPaths,
     showEdited,
     choose,
