@@ -1,6 +1,6 @@
 # Porting the team layer to upstream's new orchestrator
 
-Status: plan, waiting for approval (2026-10-11). Branch `sync/upstream-2026-10-11`. `main` is untouched and tagged `pre-upstream-sync-2026-10-11` (004f283df).
+Status: approved 2026-10-11, all five decisions, with the two additions in D1 and D3. Branch `sync/upstream-2026-10-11`. `main` is untouched and tagged `pre-upstream-sync-2026-10-11` (004f283df).
 
 ## 1. What happened
 
@@ -17,7 +17,7 @@ Upstream target for this round: `ed0f7b908` (upstream/main fetched 2026-10-11). 
 
 ## 2. Decisions to approve
 
-**D1. Where cards live.** A team-owned store: one small JSON file per chat under the server's state folder (`<T3 home>/userdata/team/cards/<threadId>.json`), written atomically, read through a new `team/TeamCards.ts`. The team feed (`subscribeTeamFeed`, our own RPC) carries each chat's cards to the client, sending only changed chats. The web timeline draws them among the chat's items by time.
+**D1. Where cards live.** A team-owned store: one small JSON file per chat under the server's state folder (`<T3 home>/userdata/team/cards/<threadId>.json`), written atomically, read through a new `team/TeamCards.ts`. The team feed (`subscribeTeamFeed`, our own RPC) carries each chat's cards to the client, sending only changed chats. The web timeline draws them among the chat's items by time. When a chat is deleted, or archived and cleaned up, its card file is deleted too.
 _Not chosen:_ a new item type in upstream's turn-item union. Every sync would conflict there, and events saved with it must stay readable forever, by upstream's rules too.
 
 **D2. App-sent messages.** "Omar said yes", "Wait is over", "Build on top": sent the way upstream sends its own restart message (`orchestration-v2/RestartContinuation.ts`): a `message.dispatch` with a `system` notification. The chat shows it as a work-log row with a short summary ("Omar agreed · continuing"), and the prompt the agent got as its detail. This replaces our "Sent by T3 Code" bubble.
@@ -26,7 +26,7 @@ _Not chosen:_ a new item type in upstream's turn-item union. Every sync would co
 
 - Claude: appended to the system prompt once per session, as before (one marked edit in `ClaudeAdapterV2.ts`).
 - Codex: its own `t3_code_team` application-context key, as before, which Codex resends only when it changes (one marked edit in `CodexAdapterV2.ts`). Not through the turn's `appContext`: upstream marks those entries as untrusted text.
-- Cursor, Grok, OpenCode, Pi, Antigravity and other ACP agents: put in front of each prompt, as v1 did for the ACP providers (same edit in `RunExecutionService.ts`; native `/commands` are left alone).
+- Cursor, Grok, OpenCode, Pi, Antigravity and other ACP agents: put in front of the prompt on a provider session's first turn, and again only when the briefing text changes, to save tokens (same edit in `RunExecutionService.ts`; native `/commands` are left alone). The turn note stays per turn.
 
 **D4. "Awaiting input".** V2 decides it in the client, from the chat shell. An open warning card or question adds to it there: one marked edit in `packages/client-runtime`, so web and mobile agree. No server projection edit any more.
 
