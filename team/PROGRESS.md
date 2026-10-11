@@ -19,7 +19,14 @@ Newest entries first. See team/WORKING_RULES.md for what each entry needs.
   - `TeamPushedBranches`: `getThreadShell`.
   - `TeamStaleView`: the chat's own run checkpoints from `getThreadRecords` (not subagent scopes), the newest ready one by run ordinal, its scope's folder, "since" from `capturedAt`.
 - Checked: `vp test run` of TeamCards, TeamFeed, TeamWarmup, briefing, TeamClaimAutoRelease, TeamAutoNotes, TeamStaleView: 7 files, 32 passed. Mutation: releasing on merge without the merge time also releases a claim made after it, and the test fails. Team typecheck: these files are clean.
-- **Left in step 2:** 2c part 2: TeamChoices, TeamQuestions, TeamWait, TeamGuard, TeamStaleView, TeamFeed, TeamAutoNotes, TeamClaimAutoRelease, TeamPushedBranches, TeamWarmup on v2, their tests, `server.ts` wiring.
+- **2c, part 2** (this commit), step 2 done:
+  - `TeamChoices`: cards in `TeamCards` (filed under the chat's `activeRunId`, was the running turn); the hold cap's driver from upstream's `ProviderInstanceRegistry`; the app's turn is `ThreadManagementService.dispatch` of a `message.dispatch` with a `system` notification (summary from `teamChoiceMadeSummary`, the prompt as detail), `createdBy: "agent"`, `creationSource: "server"`, queued after a run still going: upstream refuses a notification any other way (D2).
+  - `TeamQuestions`, `TeamWait` (a chat with an `activeRunId` is checked later), `TeamGuard` (the undo run is the run whose `userMessageId` is the click's message; run times from the shell's latest-run fields; `checkpoint.captured` from the stored events).
+  - `openTeamChoices` moved from the server to contracts (`countOpenTeamChoices` in `teamCards.ts`, by run), for the client's "awaiting input" (D4, step 5).
+  - New `team/teamServerLayer.ts`: every team layer in one; `server.ts` gets one `team-layer:` line. The runtime's `EventSinkV2` is internal, so the team layer is given `RuntimeLayer.layerEventSink` itself, the same layer reference upstream's own tests share (built once per server, so the same live stream); to confirm live in step 6.
+  - Testkit: `setRun` (a run in `running` or `completed`, with times and its first message, through the event sink) and `layerRecordingDispatch` (records the team's turns; must come after the orchestration's own context in a merge, or the real one wins: found when no turn was recorded).
+- Checked: `vp test run src/team/ src/cli/team.test.ts src/mcp/toolkits/team/briefing.test.ts`: 18 files, 142 passed (TeamWait 5, TeamAsk 5 with real Git between two servers, TeamGuard 6). Contracts `teamCards.test.ts` 3 passed. Mutations: the cleanup on `thread.archived` fails the delete test; release without the merge time fails "not after"; the guard ignoring an overlapping run in the same checkout fails its test. Full server `tsc`: 87 errors left, all in step 3 and 4 files (`mcp/toolkits/team/handlers*.ts`, `auth/ChatGptRpcScopes.test.ts`, `provider/CodexTeamBriefing.test.ts`).
+- **Left:** step 3 (team MCP tools), 4 (provider hooks), 5 (web), 6 (checks, live run, merge).
 
 ## 2026-10-11 — Upstream sync: stopped at a plan (upstream replaced its orchestrator)
 

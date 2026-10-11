@@ -180,6 +180,7 @@ import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
 import * as ServerActivation from "./serverActivation.ts";
+import * as TeamServerLayer from "./team/teamServerLayer.ts"; // team-layer
 
 // MCP handoff thread IDs include escaped provenance and can exceed find-my-way's
 // 100-character default for one path segment.
@@ -578,6 +579,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
   ReplayMarkers.layer,
+  // team-layer: the team state, cards, feed and background work (team/V2_PORT_PLAN.md).
+  // The event sink is the runtime's own (same layer, built once), for its stored events.
+  TeamServerLayer.layer.pipe(
+    Layer.provide(layerPullRequestService),
+    Layer.provide(RuntimeLayer.layerEventSink),
+  ),
 ).pipe(
   // Core Services
   Layer.provideMerge(layerOrchestrationApplication),

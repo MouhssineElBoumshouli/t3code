@@ -8,8 +8,8 @@
  *   is refused with a reason that sends the agent to `team_plan`, which shows
  *   the warning card.
  * - After the turn, for every provider: edits made through a shell (`sed`, a
- *   script) or by a provider T3 cannot stop show up in the turn's diff. The
- *   same card then shows, marked as already changed.
+ *   script) or by a provider T3 cannot stop show up in the run's checkpoint
+ *   (`checkpoint.captured`). The same card then shows, marked as already changed.
  *
  * In a checkout shared with the holder's chat (solo chats by default), a
  * turn's diff also holds the holder's own edits. A file is left out when that
@@ -19,12 +19,14 @@
  * @module TeamGuard
  */
 import type {
-  OrchestrationEvent,
+  OrchestrationV2StoredEvent,
+  OrchestrationV2ThreadShell,
+  RunId,
   TeamPath,
   TeamPlanFile,
   ThreadId,
-  TurnId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -35,10 +37,9 @@ import * as Stream from "effect/Stream";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { makeTeamResolver, type TeamContext } from "../mcp/toolkits/team/resolve.ts";
 import { isSharedPath, readSharedFiles } from "../mcp/toolkits/team/rulebook.ts";
-import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ProjectionTurnRepositoryLive } from "../persistence/Layers/ProjectionTurns.ts";
-import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import { forkParked } from "../serverActivation.ts";
 import { heldElsewhere } from "./heldElsewhere.ts";
 import { diffToTeamPaths } from "./TeamAutoNotes.ts";
@@ -74,16 +75,20 @@ const overlaps = (a: Interval, b: Interval) => a.start <= b.end && b.start <= a.
 export const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
   const choices = yield* TeamChoices.TeamChoices;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
-  const turnRows = yield* ProjectionTurnRepository;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const eventSink = yield* EventSink.EventSinkV2;
+  const projects = yield* ProjectService.ProjectService;
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
   const { resolve } = yield* makeTeamResolver;
 
-  // Subscribe now, so no event published before activation is missed.
-  const events = yield* engine.subscribeDomainEvents;
+  // From the sequence read now, so no checkpoint before activation is missed.
+  const fromSequence = yield* eventSink.latestSequence().pipe(Effect.orElseSucceed(() => 0));
+  const events = eventSink.stream({
+    afterSequence: fromSequence,
+    eventType: "checkpoint.captured",
+  });
 
   const contextOf = (threadId: ThreadId) =>
     resolve({ environmentId, threadId }).pipe(
@@ -91,22 +96,23 @@ export const make = Effect.gen(function* () {
     );
 
   /**
-   * The paths `turnId` may change back: it is the turn an "Undo it, find
-   * another way" click started. Later turns get no pass.
+   * The paths `runId` may change back: it is the run an "Undo it, find
+   * another way" click started (its message is the click's). Later runs get no pass.
    */
-  const undoPathsOf = (threadId: ThreadId, turnId: TurnId | null) =>
+  const undoPathsOf = (threadId: ThreadId, runId: RunId | null) =>
     Effect.gen(function* () {
-      if (turnId === null) return [];
+      if (runId === null) return [];
       const requests = yield* choices.undoRequests(threadId);
       if (requests.length === 0) return [];
-      const row = Option.getOrUndefined(yield* turnRows.getByTurnId({ threadId, turnId }));
+      const { runs } = yield* orchestrator.getThreadRecords(threadId, ["runs"]);
+      const run = runs.find((candidate) => candidate.id === runId);
       return requests.flatMap((request) =>
-        request.messageId === row?.pendingMessageId ? request.paths : [],
+        request.messageId === run?.userMessageId ? request.paths : [],
       );
     });
 
   /** The paths in `paths` someone else holds and this thread did not plan, claim, go ahead on or undo. */
-  const heldFor = (context: TeamContext, paths: ReadonlyArray<TeamPath>, turnId: TurnId | null) =>
+  const heldFor = (context: TeamContext, paths: ReadonlyArray<TeamPath>, runId: RunId | null) =>
     Effect.gen(function* () {
       // The rulebook's shared files never stop anyone (VISION.md 3.6).
       const shared = yield* readSharedFiles(context).pipe(
@@ -120,7 +126,7 @@ export const make = Effect.gen(function* () {
         teams.listActiveClaims(teamId),
         teams.listMembers(teamId),
         choices.wentAhead(context.thread.threadId),
-        undoPathsOf(context.thread.threadId, turnId),
+        undoPathsOf(context.thread.threadId, runId),
       ]);
       return heldElsewhere({
         paths: checked,
@@ -153,9 +159,8 @@ export const make = Effect.gen(function* () {
       const waitedOn = yield* choices.waitingPaths(threadId);
       const waiting = paths.filter((file) => waitedOn.has(file));
       if (waiting.length > 0) return waitingEditReason(waiting);
-      const shell = Option.getOrUndefined(yield* snapshots.getThreadShellById(threadId));
-      const running = shell?.latestTurn?.state === "running" ? shell.latestTurn.turnId : null;
-      const held = yield* heldFor(context, paths, running);
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      const held = yield* heldFor(context, paths, shell?.activeRunId ?? null);
       return held.length === 0 ? undefined : heldEditReason(held);
     }).pipe(
       Effect.timeoutOption(EDIT_CHECK_TIMEOUT),
@@ -172,23 +177,15 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const turnInterval = (
-    turn:
-      | {
-          readonly requestedAt: string;
-          readonly startedAt: string | null;
-          readonly completedAt: string | null;
-          readonly state: string;
-        }
-      | null
-      | undefined,
-  ): Interval | undefined => {
-    if (turn === null || turn === undefined) return undefined;
-    const start = Date.parse(turn.startedAt ?? turn.requestedAt);
+  /** When the chat's latest run went; still going, it has no end yet. */
+  const latestRunInterval = (shell: OrchestrationV2ThreadShell): Interval | undefined => {
+    const started = shell.latestRunStartedAt ?? shell.latestRunRequestedAt;
+    if (shell.latestRunId === null || started == null) return undefined;
+    const start = DateTime.toEpochMillis(started);
     const end =
-      turn.completedAt !== null
-        ? Date.parse(turn.completedAt)
-        : turn.state === "running"
+      shell.latestRunCompletedAt != null
+        ? DateTime.toEpochMillis(shell.latestRunCompletedAt)
+        : shell.activeRunId !== null
           ? Number.POSITIVE_INFINITY
           : start;
     return { start, end };
@@ -200,16 +197,13 @@ export const make = Effect.gen(function* () {
       const here = path.resolve(context.workingFolder);
       for (const holder of file.holders) {
         if (holder.kind !== "chat" || holder.thread.environmentId !== environmentId) continue;
-        const shell = Option.getOrUndefined(
-          yield* snapshots.getThreadShellById(holder.thread.threadId),
-        );
-        if (shell === undefined) continue;
+        const shell = yield* orchestrator.getThreadShell(holder.thread.threadId);
+        if (shell === null) continue;
         const folder =
           shell.worktreePath ??
-          Option.getOrUndefined(yield* snapshots.getProjectShellById(shell.projectId))
-            ?.workspaceRoot;
+          Option.getOrUndefined(yield* projects.getById(shell.projectId))?.workspaceRoot;
         if (folder === undefined || path.resolve(folder) !== here) continue;
-        const theirs = turnInterval(shell.latestTurn);
+        const theirs = latestRunInterval(shell);
         if (theirs !== undefined && overlaps(theirs, turn)) return true;
       }
       return false;
@@ -217,9 +211,9 @@ export const make = Effect.gen(function* () {
 
   const afterTurn = (payload: {
     readonly threadId: ThreadId;
-    readonly turnId: TeamChoices.ShowEditedInput["turnId"];
+    readonly runId: TeamChoices.ShowEditedInput["runId"];
     readonly files: ReadonlyArray<{ readonly path: string }>;
-    readonly completedAt: string;
+    readonly completedAt: DateTime.Utc;
   }) =>
     Effect.gen(function* () {
       const context = yield* contextOf(payload.threadId);
@@ -243,13 +237,13 @@ export const make = Effect.gen(function* () {
       const held = yield* heldFor(
         context,
         changed.filter((file) => !open.has(file) && !waitedOn.has(file)),
-        payload.turnId,
+        payload.runId,
       );
       if (held.length === 0) return;
-      const shell = Option.getOrUndefined(yield* snapshots.getThreadShellById(payload.threadId));
-      const end = Date.parse(payload.completedAt);
-      const turn = (shell?.latestTurn?.turnId === payload.turnId
-        ? turnInterval(shell.latestTurn)
+      const shell = yield* orchestrator.getThreadShell(payload.threadId);
+      const end = DateTime.toEpochMillis(payload.completedAt);
+      const turn = (shell !== null && shell.latestRunId === payload.runId
+        ? latestRunInterval(shell)
         : undefined) ?? { start: end, end };
       const files = yield* Effect.filter(held, (file) =>
         editedAlongside(context, file, { start: turn.start, end }).pipe(
@@ -257,21 +251,27 @@ export const make = Effect.gen(function* () {
         ),
       );
       if (files.length === 0) return;
-      yield* choices.showEdited({ context, files, turnId: payload.turnId });
+      yield* choices.showEdited({ context, files, runId: payload.runId });
     }).pipe(
       Effect.catchCause((cause) =>
-        Effect.logWarning("Team guard skipped a turn's diff.", {
+        Effect.logWarning("Team guard skipped a run's checkpoint.", {
           threadId: payload.threadId,
           cause,
         }),
       ),
     );
 
-  const onEvent = (event: OrchestrationEvent) =>
-    event.type === "thread.turn-diff-completed" &&
+  const onEvent = ({ event }: OrchestrationV2StoredEvent) =>
+    event.type === "checkpoint.captured" &&
+    event.payload.runId !== null &&
     event.payload.status === "ready" &&
     event.payload.files.length > 0
-      ? afterTurn(event.payload)
+      ? afterTurn({
+          threadId: event.threadId,
+          runId: event.payload.runId,
+          files: event.payload.files,
+          completedAt: event.payload.capturedAt,
+        })
       : Effect.void;
 
   const uninstall = installTeamEditCheck(checkEdit);
@@ -281,6 +281,4 @@ export const make = Effect.gen(function* () {
   return { checkEdit, afterTurn };
 });
 
-export const TeamGuardLive = Layer.effectDiscard(make).pipe(
-  Layer.provide(ProjectionTurnRepositoryLive),
-);
+export const TeamGuardLive = Layer.effectDiscard(make);

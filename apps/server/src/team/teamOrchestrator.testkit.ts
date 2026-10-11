@@ -6,26 +6,36 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
+  EventId,
+  MessageId,
   type ModelSelection,
+  NodeId,
+  type OrchestrationV2ServerCommand,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
+  type RunId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderTurnStartServiceTestkit from "../orchestration-v2/ProviderTurnStartService.testkit.ts";
 import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -99,7 +109,7 @@ const noEnrichment = {
   repositoryIdentityResolved: false,
 };
 
-/** The orchestrator, the project service, the event sink, MCP sessions, the server config and Node's platform. */
+/** The orchestrator, the project service, the event sink, MCP sessions, the provider registry, the server config and Node's platform. */
 export const layer = Layer.mergeAll(RuntimeLayer.layer, RuntimeLayer.layerEventSink).pipe(
   Layer.provideMerge(RuntimeLayer.layerProjectService),
   Layer.provide(
@@ -123,7 +133,7 @@ export const layer = Layer.mergeAll(RuntimeLayer.layer, RuntimeLayer.layerEventS
   Layer.provide(layerCheckpointStore),
   Layer.provideMerge(layerServerConfig),
   Layer.provide(ServerSettings.layerTest()),
-  Layer.provide(layerProviderInstanceRegistry),
+  Layer.provideMerge(layerProviderInstanceRegistry),
   Layer.provideMerge(layerPlatform),
 );
 
@@ -161,4 +171,104 @@ export const seedThread = (input: {
       branch: input.branch ?? null,
       worktreePath: input.worktreePath ?? null,
     });
+  });
+
+/** The chat's provider thread, which a run needs before it can be projected. */
+const providerThreadIdOf = (threadId: ThreadId) =>
+  ProviderThreadId.make(`provider-thread:${threadId}`);
+
+/**
+ * Puts a run of `threadId` in `status`, the way the run executor records it:
+ * "running" makes it the chat's `activeRunId`, "completed" ends it.
+ */
+export const setRun = (input: {
+  readonly threadId: ThreadId;
+  readonly runId: RunId;
+  readonly ordinal: number;
+  readonly status: "running" | "completed";
+  /** ISO times; now when left out. */
+  readonly startedAt?: string;
+  readonly completedAt?: string;
+  /** The message the run started with. */
+  readonly userMessageId?: MessageId;
+}) =>
+  Effect.gen(function* () {
+    const eventSink = yield* EventSink.EventSinkV2;
+    const now = yield* DateTime.now;
+    const startedAt = input.startedAt === undefined ? now : DateTime.makeUnsafe(input.startedAt);
+    const completedAt =
+      input.completedAt === undefined ? now : DateTime.makeUnsafe(input.completedAt);
+    const providerThreadId = providerThreadIdOf(input.threadId);
+    const rootNodeId = NodeId.make(`node:${input.runId}`);
+    const commandId = CommandId.make(`command:team-run:${input.runId}:${input.status}`);
+    yield* eventSink.write({
+      commandId,
+      events: [
+        {
+          id: EventId.make(`event:team-provider-thread:${input.runId}:${input.status}`),
+          type: "provider-thread.updated",
+          threadId: input.threadId,
+          driver,
+          providerInstanceId: modelSelection.instanceId,
+          occurredAt: now,
+          payload: {
+            id: providerThreadId,
+            driver,
+            providerInstanceId: modelSelection.instanceId,
+            providerSessionId: null,
+            appThreadId: input.threadId,
+            ownerNodeId: rootNodeId,
+            nativeThreadRef: { driver, nativeId: `native:${input.threadId}`, strength: "strong" },
+            nativeConversationHeadRef: null,
+            status: "active",
+            firstRunOrdinal: 1,
+            lastRunOrdinal: input.ordinal,
+            handoffIds: [],
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+        {
+          id: EventId.make(`event:team-run:${input.runId}:${input.status}`),
+          type: "run.updated",
+          threadId: input.threadId,
+          runId: input.runId,
+          nodeId: rootNodeId,
+          providerInstanceId: modelSelection.instanceId,
+          occurredAt: now,
+          payload: {
+            id: input.runId,
+            threadId: input.threadId,
+            ordinal: input.ordinal,
+            providerInstanceId: modelSelection.instanceId,
+            modelSelection,
+            providerThreadId,
+            userMessageId: input.userMessageId ?? MessageId.make(`message:${input.runId}`),
+            rootNodeId,
+            activeAttemptId: null,
+            status: input.status,
+            requestedAt: startedAt,
+            startedAt,
+            completedAt: input.status === "completed" ? completedAt : null,
+            checkpointId: null,
+            contextHandoffId: null,
+          },
+        },
+      ],
+    });
+  });
+
+/**
+ * `ThreadManagementService` that only records what it is asked to dispatch:
+ * the team layer's turns stop at the dispatch, since tests open no provider.
+ */
+export const layerRecordingDispatch = (
+  dispatched: Ref.Ref<ReadonlyArray<OrchestrationV2ServerCommand>>,
+) =>
+  Layer.mock(ThreadManagementService.ThreadManagementService)({
+    dispatch: (command) =>
+      Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+        Effect.as({ sequence: 1, storedEvents: [] }),
+      ),
   });

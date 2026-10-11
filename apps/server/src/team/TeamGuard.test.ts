@@ -6,39 +6,34 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
-  MessageId,
+  type MessageId,
+  type OrchestrationV2ServerCommand,
   ProjectId,
-  ProviderInstanceId,
+  RunId,
   TEAM_CHOICE_ACTIVITY_KIND,
-  type OrchestrationCommand,
-  type OrchestrationEvent,
-  type OrchestrationLatestTurn,
-  type OrchestrationThreadShell,
-  type TeamChoiceActivityPayload,
+  TeamChoiceActivityPayload,
   TeamFile,
   TeamId,
   TeamMemberId,
   type TeamPath,
   ThreadId,
-  TurnId,
 } from "@t3tools/contracts";
 import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
-import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { heldElsewhere } from "./heldElsewhere.ts";
+import * as TeamCards from "./TeamCards.ts";
 import * as TeamChoices from "./TeamChoices.ts";
 import { checkTeamEdit, claudeTeamEditHooks } from "./teamEditCheck.ts";
 import * as TeamGuard from "./TeamGuard.ts";
+import * as TeamOrchestrator from "./teamOrchestrator.testkit.ts";
 import * as TeamService from "./TeamService.ts";
 import {
   fakeTeamHost,
@@ -66,40 +61,7 @@ beforeEach(() => {
 });
 afterEach(() => NodeFS.rmSync(originRoot, { recursive: true, force: true }));
 
-const turn = (id: string, start: number, end: number | null): OrchestrationLatestTurn => ({
-  turnId: TurnId.make(id),
-  state: end === null ? "running" : "completed",
-  requestedAt: at(start),
-  startedAt: at(start),
-  completedAt: end === null ? null : at(end),
-  assistantMessageId: null,
-});
-
-const shell = (
-  id: ThreadId,
-  latestTurn: OrchestrationLatestTurn | null,
-): OrchestrationThreadShell => ({
-  id,
-  projectId: PROJECT_ID,
-  title: "Thread",
-  modelSelection: { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" },
-  runtimeMode: "full-access",
-  interactionMode: "default",
-  branch: null,
-  worktreePath: null,
-  pullRequests: [],
-  latestTurn,
-  createdAt: at(0),
-  updatedAt: at(0),
-  archivedAt: null,
-  settledOverride: null,
-  settledAt: null,
-  session: null,
-  latestUserMessageAt: null,
-  hasPendingApprovals: false,
-  hasPendingUserInput: false,
-  hasActionableProposedPlan: false,
-});
+const decodeChoice = Schema.decodeUnknownOption(TeamChoiceActivityPayload);
 
 /** One team project folder on this test's origin; this server is a member, Omar is a teammate. */
 const makeHarness = Effect.fn("makeTeamGuardHarness")(function* () {
@@ -112,76 +74,49 @@ const makeHarness = Effect.fn("makeTeamGuardHarness")(function* () {
   );
   useTeamOrigin(root, originUrl);
 
-  const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
-  const turns = yield* Ref.make<Partial<Record<ThreadId, OrchestrationLatestTurn>>>({
-    [THREAD_A]: turn("turn-a", 10, null),
-  });
-  const events = yield* PubSub.unbounded<OrchestrationEvent>();
-  /** The message each turn started with, by turn id. */
-  const turnMessages = new Map<string, MessageId>();
+  // The real v2 orchestrator: chat A (in a run from minute 10) and chat B, same checkout.
+  const orchestration = yield* Layer.build(TeamOrchestrator.layer);
+  for (const threadId of [THREAD_A, THREAD_B]) {
+    yield* TeamOrchestrator.seedThread({
+      projectId: PROJECT_ID,
+      threadId,
+      workspaceRoot: root,
+    }).pipe(Effect.provide(orchestration));
+  }
+  const ordinals = new Map<ThreadId, number>();
+  /** A run of the chat, from `start` to `end` (minutes; null while it goes). */
+  const run = (
+    threadId: ThreadId,
+    runId: string,
+    start: number,
+    end: number | null,
+    userMessageId?: MessageId,
+  ) => {
+    const ordinal = (ordinals.get(threadId) ?? 0) + 1;
+    ordinals.set(threadId, ordinal);
+    return TeamOrchestrator.setRun({
+      threadId,
+      runId: RunId.make(runId),
+      ordinal,
+      status: end === null ? "running" : "completed",
+      startedAt: at(start),
+      ...(end === null ? {} : { completedAt: at(end) }),
+      ...(userMessageId === undefined ? {} : { userMessageId }),
+    }).pipe(Effect.provide(orchestration));
+  };
+  yield* run(THREAD_A, "turn-a", 10, null);
+
+  const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
   const dependencies = Layer.mergeAll(
-    Layer.mock(ProjectionTurnRepository)({
-      getByTurnId: ({ threadId, turnId }) =>
-        Effect.succeedSome({
-          threadId,
-          turnId,
-          pendingMessageId: turnMessages.get(turnId) ?? null,
-          sourceProposedPlanThreadId: null,
-          sourceProposedPlanId: null,
-          assistantMessageId: null,
-          state: "running" as const,
-          requestedAt: at(0),
-          startedAt: at(0),
-          completedAt: null,
-          checkpointTurnCount: null,
-          checkpointRef: null,
-          checkpointStatus: null,
-          checkpointFiles: [],
-        }),
-    }),
     testTeamServiceLayer({
       environmentId: ENVIRONMENT_ID,
       stateDirectory: yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-guard-state-" }),
     }),
     TestTeamGitLayer,
-    Layer.mock(ProjectionSnapshotQuery)({
-      getThreadShellById: (threadId) =>
-        Ref.get(turns).pipe(
-          Effect.map((byThread) => Option.some(shell(threadId, byThread[threadId] ?? null))),
-        ),
-      getProjectShellById: () =>
-        Effect.succeed(
-          Option.some({
-            id: PROJECT_ID,
-            title: "Project",
-            workspaceRoot: root,
-            defaultModelSelection: null,
-            scripts: [],
-            repositoryIdentity: null,
-            createdAt: at(0),
-            updatedAt: at(0),
-          }),
-        ),
-      listActivitiesByKind: (kind) =>
-        Ref.get(dispatched).pipe(
-          Effect.map((commands) =>
-            commands.flatMap((command) =>
-              command.type === "thread.activity.append" && command.activity.kind === kind
-                ? [command.activity]
-                : [],
-            ),
-          ),
-        ),
-    }),
-    Layer.mock(OrchestrationEngineService)({
-      dispatch: (command) =>
-        Ref.update(dispatched, (commands) => [...commands, command]).pipe(
-          Effect.as({ sequence: 1 }),
-        ),
-      subscribeDomainEvents: PubSub.subscribe(events).pipe(
-        Effect.map((subscription) => Stream.fromSubscription(subscription)),
-      ),
-    }),
+    TeamCards.layer.pipe(Layer.provide(Layer.succeedContext(orchestration))),
+    Layer.succeedContext(orchestration),
+    // After the orchestration's own: the team's turns stop at the recorded dispatch.
+    TeamOrchestrator.layerRecordingDispatch(dispatched),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
       getDescriptor: Effect.succeed({
@@ -224,46 +159,40 @@ const makeHarness = Effect.fn("makeTeamGuardHarness")(function* () {
       thread: { environmentId: ENVIRONMENT_ID, threadId },
       paths: paths as ReadonlyArray<TeamPath>,
     });
-  const cards = Ref.get(dispatched).pipe(
-    Effect.map((commands) =>
-      commands.flatMap((command) =>
-        command.type === "thread.activity.append" &&
-        command.activity.kind === TEAM_CHOICE_ACTIVITY_KIND
-          ? [
-              {
-                ...(command.activity.payload as TeamChoiceActivityPayload),
-                turnId: command.activity.turnId,
-              },
-            ]
+  const teamCards = yield* TeamCards.TeamCards.pipe(Effect.provide(context));
+  const cards = teamCards.forThread(THREAD_A).pipe(
+    Effect.map((entries) =>
+      entries.flatMap((entry) =>
+        entry.kind === TEAM_CHOICE_ACTIVITY_KIND
+          ? Option.toArray(decodeChoice(entry.payload)).map((card) => ({
+              ...card,
+              runId: entry.runId,
+            }))
           : [],
       ),
     ),
   );
-  const turnDiff = (
-    threadId: ThreadId,
-    turnId: string,
-    files: ReadonlyArray<string>,
-    end: number,
-  ) =>
+  /** The run's checkpoint: what it changed, at minute `end`. */
+  const turnDiff = (threadId: ThreadId, runId: string, files: ReadonlyArray<string>, end: number) =>
     guard.afterTurn({
       threadId,
-      turnId: TurnId.make(turnId),
+      runId: RunId.make(runId),
       files: files.map((path) => ({ path })),
-      completedAt: at(end),
+      completedAt: DateTime.makeUnsafe(at(end)),
     });
-  /** The click's turn starts: it runs with the click's message. */
-  const startClickTurn = (threadId: ThreadId, turnId: string, start: number) =>
+  /** The click's turn starts: its run starts with the click's message. */
+  const startClickTurn = (threadId: ThreadId, runId: string, start: number) =>
     Effect.gen(function* () {
       const started = (yield* Ref.get(dispatched)).findLast(
-        (command) => command.type === "thread.turn.start" && command.threadId === threadId,
+        (command) => command.type === "message.dispatch" && command.threadId === threadId,
       );
-      if (started?.type === "thread.turn.start") {
-        turnMessages.set(turnId, started.message.messageId);
-      }
-      yield* Ref.update(turns, (byThread) => ({
-        ...byThread,
-        [threadId]: turn(turnId, start, null),
-      }));
+      yield* run(
+        threadId,
+        runId,
+        start,
+        null,
+        started?.type === "message.dispatch" ? started.messageId : undefined,
+      );
     });
   return {
     root,
@@ -271,7 +200,7 @@ const makeHarness = Effect.fn("makeTeamGuardHarness")(function* () {
     choices,
     cards,
     dispatched,
-    turns,
+    run,
     omarClaims,
     claimAs,
     turnDiff,
@@ -380,7 +309,7 @@ describe("TeamGuard", () => {
           choices,
           cards,
           dispatched,
-          turns,
+          run,
           omarClaims,
           turnDiff,
           startClickTurn,
@@ -391,7 +320,7 @@ describe("TeamGuard", () => {
         const [card] = yield* cards;
         assert.isDefined(card);
         assert.isTrue(card!.edited);
-        assert.equal(card!.turnId, "turn-a");
+        assert.equal(card!.runId, "turn-a");
         assert.deepEqual(
           card!.files.map((file) => file.path),
           ["src/auth/login.ts"],
@@ -414,10 +343,10 @@ describe("TeamGuard", () => {
           { delivery: "turn" },
         );
         const started = (yield* Ref.get(dispatched)).find(
-          (command) => command.type === "thread.turn.start",
+          (command) => command.type === "message.dispatch",
         );
         assert.include(
-          started?.type === "thread.turn.start" ? started.message.text : "",
+          started?.type === "message.dispatch" ? started.text : "",
           "Undo only your own changes to it (no team_plan needed for that",
         );
         // The undo turn edits the held file: let through, and its diff asks nothing.
@@ -427,10 +356,7 @@ describe("TeamGuard", () => {
         yield* turnDiff(THREAD_A, "turn-a-undo", ["src/auth/login.ts"], 13);
         assert.lengthOf(yield* cards, 1);
         // Only that turn: the next one is stopped again.
-        yield* Ref.update(turns, (byThread) => ({
-          ...byThread,
-          [THREAD_A]: turn("turn-a-next", 14, null),
-        }));
+        yield* run(THREAD_A, "turn-a-next", 14, null);
         assert.include(yield* guard.checkEdit(THREAD_A, [login]), "held by Omar");
 
         // Another turn changes another of Omar's files; this time the user keeps the change: no turn.
@@ -446,7 +372,7 @@ describe("TeamGuard", () => {
           { delivery: "none" },
         );
         const turnStarts = (yield* Ref.get(dispatched)).filter(
-          (command) => command.type === "thread.turn.start",
+          (command) => command.type === "message.dispatch",
         );
         assert.lengthOf(turnStarts, 1);
         // Kept: not asked again in this chat.
@@ -462,21 +388,16 @@ describe("TeamGuard", () => {
     "leaves out a file another chat in the same checkout may have changed during the turn",
     () =>
       Effect.gen(function* () {
-        const { cards, turns, claimAs, turnDiff } = yield* makeHarness();
+        const { cards, run, claimAs, turnDiff } = yield* makeHarness();
         // Chat B, mine, same checkout, holds src/format.ts.
         yield* claimAs(THREAD_B, ["src/format.ts"]);
         // B worked from minute 5 to 11; A's turn ran from 10 to 12: B's edits are in A's diff too.
-        yield* Ref.set(turns, {
-          [THREAD_A]: turn("turn-a", 10, 12),
-          [THREAD_B]: turn("turn-b", 5, 11),
-        });
+        yield* run(THREAD_A, "turn-a", 10, 12);
+        yield* run(THREAD_B, "turn-b", 5, 11);
         yield* turnDiff(THREAD_A, "turn-a", ["src/format.ts"], 12);
         assert.lengthOf(yield* cards, 0);
         // B was idle during A's next turn: the change is A's.
-        yield* Ref.set(turns, {
-          [THREAD_A]: turn("turn-a2", 20, 22),
-          [THREAD_B]: turn("turn-b", 5, 11),
-        });
+        yield* run(THREAD_A, "turn-a2", 20, 22);
         yield* turnDiff(THREAD_A, "turn-a2", ["src/format.ts"], 22);
         const [card] = yield* cards;
         assert.deepEqual(card?.files, [
