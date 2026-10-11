@@ -18,6 +18,7 @@ import {
   TeamThreadRef,
 } from "./team.ts";
 import { TeamQuestion } from "./teamAsk.ts";
+import { TeamThreadCards } from "./teamCards.ts";
 
 /**
  * - `solo`: kept on this computer, nothing to sync.
@@ -81,12 +82,20 @@ export const TeamFeedTeam = Schema.Struct({
 export type TeamFeedTeam = typeof TeamFeedTeam.Type;
 
 export const TeamFeedEvent = Schema.Union([
-  /** First event: every team the server has open with a project on it. */
-  Schema.TaggedStruct("snapshot", { teams: Schema.Array(TeamFeedTeam) }),
+  /**
+   * First event: every team the server has open with a project on it, and the
+   * cards of every chat that has some (V2_PORT_PLAN.md D1).
+   */
+  Schema.TaggedStruct("snapshot", {
+    teams: Schema.Array(TeamFeedTeam),
+    threadCards: Schema.optionalKey(Schema.Array(TeamThreadCards)),
+  }),
   /** One team changed, or appeared. */
   Schema.TaggedStruct("team", { team: TeamFeedTeam }),
   /** A team no longer has a project on this server. */
   Schema.TaggedStruct("removed", { teamId: TeamId }),
+  /** One chat's cards changed; empty entries when it has none left. */
+  Schema.TaggedStruct("threadCards", { cards: TeamThreadCards }),
 ]);
 export type TeamFeedEvent = typeof TeamFeedEvent.Type;
 
@@ -108,5 +117,7 @@ export const applyTeamFeedEvent = (
       );
     case "removed":
       return teams.filter((team) => team.teamId !== event.teamId);
+    case "threadCards":
+      return teams;
   }
 };
