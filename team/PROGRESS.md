@@ -2,7 +2,7 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
-## 2026-10-11 — v2 port, step 2 (server core), in progress
+## 2026-10-11 — v2 port, step 2 (server core): done
 
 - **Step 1 done** (57bf47722, pushed): merge of upstream `ed0f7b908`; see that commit's message. After the laptop restart: tree clean, branch equal to origin, install re-run (fine).
 - **2a, foundations** (this commit): our files follow upstream's moves: `effect/unstable/*` → `effect/*`, `effect/Arbitrary`; `@t3tools/shared/HostProcess` as a namespace (`HostProcess.Platform`, `.WorkingDirectory`); `atomicWrite` from `@t3tools/shared`; `gitHubAuthStatus` from `@t3tools/source-control-github`; `runtimeInstructions` from `@t3tools/provider-core`; `ServerEnvironment.layerIdentity`; `cli` from `binCli.ts`; the team id brand helper in the new `Schema.brand<Brand>` form. `team-layer:` edits: team RPCs in `RpcInstrumentation.ts` (aggregate "team") and in `CLIENT_GUARDED_RPC_SCOPES` (`teamChoose`, `teamAnswer`: operate).

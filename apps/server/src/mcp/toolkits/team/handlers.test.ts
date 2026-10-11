@@ -6,18 +6,16 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
+  type OrchestrationV2ServerCommand,
   ProjectId,
   ProviderInstanceId,
+  RunId,
   TeamFile,
   TeamId,
   TeamMemberId,
   ThreadId,
-  TurnId,
   TEAM_CHOICE_ACTIVITY_KIND,
-  type TeamChoiceActivityPayload,
-  type OrchestrationCommand,
-  type OrchestrationProjectShell,
-  type OrchestrationThreadShell,
+  TeamChoiceActivityPayload,
 } from "@t3tools/contracts";
 import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -30,16 +28,17 @@ import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import type { Tool } from "effect/ai";
 
 import * as ServerConfig from "../../../config.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
-import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { TEAM_RULEBOOK_TEMPLATE } from "../../../team/TeamProjectFiles.ts";
+import * as TeamCards from "../../../team/TeamCards.ts";
 import * as TeamChoices from "../../../team/TeamChoices.ts";
+import * as TeamOrchestrator from "../../../team/teamOrchestrator.testkit.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../../../vcs/VcsProcess.ts";
@@ -54,12 +53,13 @@ import {
 import { soloTeamIdOf } from "../../../team/state/SoloTeam.ts";
 import type * as TeamHost from "../../../team/state/TeamHost.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import {
   CLAIM_NOT_SHARED_MESSAGE,
   CLAIM_WHERE,
   HANDOFF_NOTHING_CHANGED_MESSAGE,
   TEAM_STATUS_LIMITS,
-  TeamToolkitHandlersLive,
+  layer as TeamHandlersLayer,
 } from "./handlers.ts";
 import { type NotInTeamResult, TeamToolkit } from "./tools.ts";
 
@@ -68,7 +68,10 @@ const PROJECT_ID = ProjectId.make("project-1");
 const THREAD_A = ThreadId.make("thread-a");
 const THREAD_B = ThreadId.make("thread-b");
 const THREAD_C = ThreadId.make("thread-c");
-const RUNNING_TURN = TurnId.make("turn-running");
+/** Each thread's run while the test calls its tools: tools act only while it is live. */
+const runOf = (threadId: ThreadId) => RunId.make(`run:${threadId}`);
+const RUNNING_TURN = runOf(ThreadId.make("thread-a"));
+const decodeChoice = Schema.decodeUnknownOption(TeamChoiceActivityPayload);
 const TEAM_ID = TeamId.make("team-1");
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const TEAM_FILE = TeamFile.make({ teamId: TEAM_ID, name: "Core" });
@@ -89,67 +92,6 @@ afterEach(() => NodeFS.rmSync(originRoot, { recursive: true, force: true }));
 
 type ToolName = keyof typeof TeamToolkit.tools;
 type ToolResult<Name extends ToolName> = Tool.Success<(typeof TeamToolkit.tools)[Name]>;
-
-function makeProject(workspaceRoot: string): OrchestrationProjectShell {
-  return {
-    id: PROJECT_ID,
-    title: "Project",
-    workspaceRoot,
-    defaultModelSelection: null,
-    scripts: [],
-    repositoryIdentity: null,
-    createdAt: "2026-09-01T00:00:00.000Z",
-    updatedAt: "2026-09-01T00:00:00.000Z",
-  };
-}
-
-function makeThread(
-  id: ThreadId,
-  worktreePath: string | null,
-  providerName: string | null = null,
-  turnState: "running" | "interrupted" = "running",
-): OrchestrationThreadShell {
-  return {
-    id,
-    projectId: PROJECT_ID,
-    title: "Thread",
-    modelSelection: { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath,
-    pullRequests: [],
-    latestTurn: {
-      turnId: RUNNING_TURN,
-      state: turnState,
-      requestedAt: "2026-09-01T00:00:00.000Z",
-      startedAt: "2026-09-01T00:00:00.000Z",
-      completedAt: turnState === "running" ? null : "2026-09-01T00:01:00.000Z",
-      assistantMessageId: null,
-    },
-    createdAt: "2026-09-01T00:00:00.000Z",
-    updatedAt: "2026-09-01T00:00:00.000Z",
-    archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
-    session:
-      providerName === null
-        ? null
-        : {
-            threadId: id,
-            status: "running",
-            providerName,
-            runtimeMode: "full-access",
-            activeTurnId: RUNNING_TURN,
-            lastError: null,
-            updatedAt: "2026-09-01T00:00:00.000Z",
-          },
-    latestUserMessageAt: null,
-    hasPendingApprovals: false,
-    hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
-  };
-}
 
 const writeTeamFile = (root: string) =>
   Effect.gen(function* () {
@@ -175,8 +117,6 @@ interface HarnessOptions {
   readonly startsTeam?: boolean;
   /** Default: {@link ME}, signed in with push access. */
   readonly host?: TeamHost.TeamHost["Service"];
-  /** The running session's driver, which sets how long a plan is held. Default none. */
-  readonly providerName?: string;
 }
 
 const RealGitLayer = GitVcsDriver.layer.pipe(
@@ -187,12 +127,29 @@ const RealGitLayer = GitVcsDriver.layer.pipe(
 
 const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: HarnessOptions) {
   const gitCalls = yield* Ref.make<ReadonlyArray<GitVcsDriver.ExecuteGitInput>>([]);
-  const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+  /** The app's turns (T3 Code's own messages); they stop here, as tests open no provider. */
+  const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
   /** Each warning card, as it is added: the held call is waiting by then. */
   const cards = yield* Queue.unbounded<TeamChoiceActivityPayload>();
-  /** Threads whose turn the user stopped. */
-  const stopped = yield* Ref.make<ReadonlySet<ThreadId>>(new Set());
   const fs = yield* FileSystem.FileSystem;
+  // The real v2 orchestrator (one Codex instance): threads A, B and C, each in a run.
+  const orchestration = yield* Layer.build(TeamOrchestrator.layer);
+  for (const [ordinal, threadId] of [THREAD_A, THREAD_B, THREAD_C].entries()) {
+    yield* Effect.gen(function* () {
+      yield* TeamOrchestrator.seedThread({
+        projectId: PROJECT_ID,
+        threadId,
+        workspaceRoot: options.workspaceRoot,
+        worktreePath: options.worktrees?.[threadId] ?? options.worktreePath ?? null,
+      });
+      yield* TeamOrchestrator.setRun({
+        threadId,
+        runId: runOf(threadId),
+        ordinal: ordinal + 1,
+        status: "running",
+      });
+    }).pipe(Effect.provide(orchestration));
+  }
   // The team service always runs real Git: its state is a Git repo.
   const teamLayer = testTeamServiceLayer({
     environmentId: ENVIRONMENT_ID,
@@ -201,47 +158,10 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
   });
   const dependencies = Layer.mergeAll(
     teamLayer,
-    Layer.mock(ProjectionSnapshotQuery)({
-      getThreadShellById: (threadId) =>
-        Ref.get(stopped).pipe(
-          Effect.map((stoppedThreads) =>
-            threadId === THREAD_A || threadId === THREAD_B || threadId === THREAD_C
-              ? Option.some(
-                  makeThread(
-                    threadId,
-                    options.worktrees?.[threadId] ?? options.worktreePath ?? null,
-                    options.providerName ?? null,
-                    stoppedThreads.has(threadId) ? "interrupted" : "running",
-                  ),
-                )
-              : Option.none(),
-          ),
-        ),
-      getProjectShellById: () => Effect.succeed(Option.some(makeProject(options.workspaceRoot))),
-      // The activities this test dispatched, as the projection would store them.
-      listActivitiesByKind: (kind) =>
-        Ref.get(dispatched).pipe(
-          Effect.map((commands) =>
-            commands.flatMap((command) =>
-              command.type === "thread.activity.append" && command.activity.kind === kind
-                ? [command.activity]
-                : [],
-            ),
-          ),
-        ),
-    }),
-    Layer.mock(OrchestrationEngineService)({
-      dispatch: (command) =>
-        Ref.update(dispatched, (commands) => [...commands, command]).pipe(
-          Effect.andThen(
-            command.type === "thread.activity.append" &&
-              command.activity.kind === TEAM_CHOICE_ACTIVITY_KIND
-              ? Queue.offer(cards, command.activity.payload as TeamChoiceActivityPayload)
-              : Effect.void,
-          ),
-          Effect.as({ sequence: 1 }),
-        ),
-    }),
+    TeamCards.layer.pipe(Layer.provide(Layer.succeedContext(orchestration))),
+    Layer.succeedContext(orchestration),
+    // After the orchestration's own: the team's turns stop at the recorded dispatch.
+    TeamOrchestrator.layerRecordingDispatch(dispatched, orchestration),
     options.realGit === true
       ? RealGitLayer
       : Layer.mock(GitVcsDriver.GitVcsDriver)({
@@ -268,14 +188,30 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
     }),
   ).pipe(Layer.provideMerge(NodeServices.layer));
   const context = yield* Layer.build(TeamChoices.layer.pipe(Layer.provideMerge(dependencies)));
+  const teamCards = yield* TeamCards.TeamCards.pipe(Effect.provide(context));
+  // Each new warning card, in the order they are added.
+  const seenCards = new Set<string>();
+  yield* Stream.fromSubscription(yield* teamCards.subscribeChanges).pipe(
+    Stream.runForEach((change) =>
+      Effect.forEach(change.entries, (entry) => {
+        if (entry.kind !== TEAM_CHOICE_ACTIVITY_KIND || seenCards.has(entry.id)) return Effect.void;
+        seenCards.add(entry.id);
+        const card = decodeChoice(entry.payload);
+        return Option.isSome(card) ? Queue.offer(cards, card.value) : Effect.void;
+      }),
+    ),
+    Effect.forkScoped,
+  );
+  /** A thread's card records, oldest first. */
+  const entries = (threadId: ThreadId = THREAD_A) => teamCards.forThread(threadId);
   const toolkit = yield* TeamToolkit.pipe(
-    Effect.provide(TeamToolkitHandlersLive),
+    Effect.provide(McpToolAccess.HandlersLayer.layer(TeamHandlersLayer)),
     Effect.provide(context),
   );
   const call = <Name extends ToolName>(
     name: Name,
     params: Parameters<typeof toolkit.handle<Name>>[1],
-    threadId: ThreadId = THREAD_A,
+    threadId: ThreadId | null = THREAD_A,
   ) =>
     toolkit.handle(name, params).pipe(
       Stream.unwrap,
@@ -284,11 +220,19 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
       Effect.map((chunk) => chunk.at(-1)!.result as ToolResult<Name>),
       Effect.provideService(McpInvocationContext.McpInvocationContext, {
         environmentId: ENVIRONMENT_ID,
-        threadId,
-        providerSessionId: "provider-session-1",
-        providerInstanceId: ProviderInstanceId.make("claude"),
         capabilities: new Set<McpInvocationContext.McpCapability>(),
         issuedAt: 1,
+        requestNamespace: "team-test",
+        // null: an outside MCP client, not an agent in a T3 chat.
+        thread:
+          threadId === null
+            ? undefined
+            : {
+                threadId,
+                providerSessionId: "provider-session-1",
+                providerInstanceId: TeamOrchestrator.modelSelection.instanceId,
+              },
+        client: undefined,
       }),
       Effect.provide(context),
     );
@@ -301,9 +245,15 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
     assert.equal(started.membership.status, "member");
   }
   const choices = yield* TeamChoices.TeamChoices.pipe(Effect.provide(context));
+  /** The user stops the thread's run. */
   const stopTurn = (threadId: ThreadId) =>
-    Ref.update(stopped, (threads) => new Set([...threads, threadId]));
-  return { call, teams, gitCalls, dispatched, cards, choices, stopTurn };
+    TeamOrchestrator.setRun({
+      threadId,
+      runId: runOf(threadId),
+      ordinal: [THREAD_A, THREAD_B, THREAD_C].indexOf(threadId) + 1,
+      status: "completed",
+    }).pipe(Effect.provide(orchestration));
+  return { call, teams, gitCalls, dispatched, cards, entries, choices, stopTurn };
 }, Effect.provide(NodeServices.layer));
 
 /**
@@ -1002,7 +952,7 @@ describe("team toolkit", () => {
     () =>
       Effect.gen(function* () {
         const root = yield* makeProjectFolder(true);
-        const { call, dispatched, cards, choices, teams } = yield* makeHarness({
+        const { call, dispatched, cards, entries, choices, teams } = yield* makeHarness({
           workspaceRoot: root,
         });
         // Another of my chats holds the notes; Sara (a teammate) holds src/auth/.
@@ -1024,11 +974,9 @@ describe("team toolkit", () => {
         const card = yield* Queue.take(cards);
 
         // The plan card first, then the warning card with only the held files.
-        const appended = (yield* Ref.get(dispatched)).flatMap((command) =>
-          command.type === "thread.activity.append" ? [command.activity] : [],
-        );
+        const appended = yield* entries();
         assert.deepEqual(
-          appended.map((activity) => [activity.kind, activity.summary, activity.turnId]),
+          appended.map((entry) => [entry.kind, entry.summary, entry.runId]),
           [
             ["team.plan", "3 files planned, checked against claims", RUNNING_TURN],
             ["team.choice", "2 planned files are held: your choice", RUNNING_TURN],
@@ -1092,13 +1040,10 @@ describe("team toolkit", () => {
           .flatMap((claim) => claim.paths);
         assert.deepEqual(mine, ["src/search.ts"]);
         // The choice stays on the card; no turn was started.
-        const commands = yield* Ref.get(dispatched);
-        assert.isFalse(commands.some((command) => command.type === "thread.turn.start"));
-        const made = commands.at(-1)!;
-        assert.equal(made.type, "thread.activity.append");
-        if (made.type !== "thread.activity.append") return;
-        assert.equal(made.activity.kind, "team.choice.made");
-        assert.deepEqual(made.activity.payload, {
+        assert.deepEqual(yield* Ref.get(dispatched), []);
+        const made = (yield* entries()).at(-1)!;
+        assert.equal(made.kind, "team.choice.made");
+        assert.deepEqual(made.payload, {
           choiceId: card.choiceId,
           choice: "anotherWay",
           delivery: "held",
@@ -1114,7 +1059,7 @@ describe("team toolkit", () => {
     () =>
       Effect.gen(function* () {
         const root = yield* makeProjectFolder(false);
-        const { call, cards, choices, teams, dispatched } = yield* makeHarness({
+        const { call, cards, choices, teams, entries } = yield* makeHarness({
           workspaceRoot: root,
           startsTeam: false,
           host: fakeTeamHost(null),
@@ -1160,10 +1105,7 @@ describe("team toolkit", () => {
           again.message,
           "Planned and claimed 1 file; the user sees the plan. The user already chose to go ahead on the files others hold.",
         );
-        const choiceCards = (yield* Ref.get(dispatched)).filter(
-          (command) =>
-            command.type === "thread.activity.append" && command.activity.kind === "team.choice",
-        );
+        const choiceCards = (yield* entries()).filter((entry) => entry.kind === "team.choice");
         assert.lengthOf(choiceCards, 1);
       }),
   );
@@ -1173,18 +1115,17 @@ describe("team toolkit", () => {
     () =>
       Effect.gen(function* () {
         const root = yield* makeProjectFolder(false);
-        const { call, cards, choices, dispatched } = yield* makeHarness({
+        const { call, cards, choices, dispatched, entries } = yield* makeHarness({
           workspaceRoot: root,
           startsTeam: false,
           host: fakeTeamHost(null),
-          providerName: "codex",
         });
         inTeam(yield* call("team_plan", { files: ["src/a.ts"] }, THREAD_B));
         const holds = yield* choices.subscribeHolds;
         const planning = yield* call("team_plan", { files: ["src/a.ts"] }).pipe(Effect.forkChild);
         const card = yield* Queue.take(cards);
         assert.equal(yield* PubSub.take(holds), card.choiceId);
-        // Codex waits up to 55 minutes (CodexAdapter raises its tool timeout to an hour).
+        // Codex waits up to 55 minutes (CodexAdapterV2 raises its tool timeout to an hour).
         yield* TestClock.adjust(Duration.minutes(54));
         assert.isUndefined(planning.pollUnsafe());
         yield* TestClock.adjust(Duration.minutes(1));
@@ -1210,18 +1151,20 @@ describe("team toolkit", () => {
           }),
           { delivery: "turn" },
         );
-        const commands = yield* Ref.get(dispatched);
-        const turn = commands.find((command) => command.type === "thread.turn.start");
+        const turn = (yield* Ref.get(dispatched)).find(
+          (command) => command.type === "message.dispatch",
+        );
         assert.isDefined(turn);
-        if (turn?.type !== "thread.turn.start") return;
+        if (turn?.type !== "message.dispatch") return;
         assert.equal(turn.threadId, THREAD_A);
+        assert.equal(turn.notification?.source.kind, "system", "sent as T3 Code's own");
         assert.equal(
-          turn.message.text,
+          turn.text,
           "Go anyway: you may edit `src/a.ts`; another chat will see that you went ahead. Continue the task, and mention these files in your team_handoff.",
         );
-        const made = commands.at(-1)!;
-        if (made.type !== "thread.activity.append") return assert.fail("expected the record");
-        assert.deepEqual(made.activity.payload, {
+        const made = (yield* entries()).at(-1)!;
+        assert.equal(made.kind, "team.choice.made");
+        assert.deepEqual(made.payload, {
           choiceId: card.choiceId,
           choice: "goAnyway",
           delivery: "turn",
@@ -1238,7 +1181,6 @@ describe("team toolkit", () => {
           workspaceRoot: root,
           startsTeam: false,
           host: fakeTeamHost(null),
-          providerName: "codex",
         });
         inTeam(yield* call("team_plan", { files: ["src/a.ts"] }, THREAD_B));
         const planning = yield* call("team_plan", { files: ["src/a.ts"] }).pipe(Effect.forkChild);
@@ -1256,17 +1198,17 @@ describe("team toolkit", () => {
         // The dead call is freed, and the choice goes to the new turn instead.
         assert.equal(inTeam(yield* Fiber.join(planning)).choice, "notYet");
         const turn = (yield* Ref.get(dispatched)).find(
-          (command) => command.type === "thread.turn.start",
+          (command) => command.type === "message.dispatch",
         );
-        if (turn?.type !== "thread.turn.start") return assert.fail("expected a new turn");
-        assert.match(turn.message.text, /^Go anyway: you may edit `src\/a.ts`/);
+        if (turn?.type !== "message.dispatch") return assert.fail("expected a new turn");
+        assert.match(turn.text, /^Go anyway: you may edit `src\/a.ts`/);
       }),
   );
 
   it.effect("does not ask about a shared file from the rulebook, and says so", () =>
     Effect.gen(function* () {
       const root = yield* makeProjectFolder(true);
-      const { call, dispatched } = yield* makeHarness({ workspaceRoot: root });
+      const { call, entries } = yield* makeHarness({ workspaceRoot: root });
       writeFile(
         root,
         ".team/rulebook.md",
@@ -1288,10 +1230,22 @@ describe("team toolkit", () => {
         "Planned and claimed 1 file; the user sees the plan. Others also hold `src/api/routes.ts`, shared files in the rulebook: no need to ask; keep your change there small.",
       );
       // The plan card still shows who is in there; no warning card.
-      const kinds = (yield* Ref.get(dispatched)).flatMap((command) =>
-        command.type === "thread.activity.append" ? [command.activity.kind] : [],
-      );
+      const kinds = (yield* entries()).map((entry) => entry.kind);
       assert.deepEqual(kinds, ["team.plan"]);
+    }),
+  );
+
+  it.effect("refuses callers that are not a T3 chat, and a chat whose run has ended", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      const { call, stopTurn } = yield* makeHarness({ workspaceRoot: root });
+      const outside = yield* call("team_status", {}, null).pipe(Effect.flip);
+      assert.equal(outside._tag, "OrchestratorMcpFailure");
+      // Reading is fine after the run ends; changing the team is not.
+      yield* stopTurn(THREAD_A);
+      inTeam(yield* call("team_status", {}));
+      const late = yield* call("team_claim", { paths: ["src/a.ts"] }).pipe(Effect.flip);
+      assert.equal(late._tag, "OrchestratorMcpFailure");
     }),
   );
 

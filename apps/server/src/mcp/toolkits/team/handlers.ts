@@ -1,7 +1,5 @@
 import {
-  CommandId,
   countTeamWords,
-  EventId,
   TEAM_PLAN_ACTIVITY_KIND,
   type TeamClaim,
   type TeamClaimOverlap,
@@ -19,14 +17,16 @@ import * as Path from "effect/Path";
 
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
-import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
 import { folderKey, realFolder } from "../../../team/folders.ts";
 import { holdersOf } from "../../../team/heldElsewhere.ts";
+import * as TeamCards from "../../../team/TeamCards.ts";
 import * as TeamChoices from "../../../team/TeamChoices.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import {
   checkFreshness,
   currentCommit,
@@ -109,8 +109,9 @@ const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const projects = yield* ProjectService.ProjectService;
+  const cards = yield* TeamCards.TeamCards;
   const crypto = yield* Crypto.Crypto;
   const { resolve } = yield* makeTeamResolver;
   const platform = yield* HostProcess.Platform;
@@ -124,10 +125,19 @@ const make = Effect.gen(function* () {
       Effect.map((real) => folderKey(real, platform)),
     );
 
+  /** The calling chat; the declarations already refuse callers that are not one. */
+  const callingThread = McpInvocationContext.McpInvocationContext.pipe(
+    Effect.flatMap((scope) =>
+      scope.thread === undefined
+        ? Effect.fail(new TeamToolError({ detail: "Team tools work only from a T3 chat." }))
+        : Effect.succeed({ environmentId: scope.environmentId, ...scope.thread }),
+    ),
+  );
+
   /** Runs `run` for a team project, and answers with the not-in-team result otherwise. */
   const inTeam = <A, E, R>(run: (context: TeamContext) => Effect.Effect<A, E, R>) =>
-    McpInvocationContext.McpInvocationContext.pipe(
-      Effect.flatMap(resolve),
+    callingThread.pipe(
+      Effect.flatMap(({ environmentId, threadId }) => resolve({ environmentId, threadId })),
       Effect.flatMap((resolved): Effect.Effect<A | NotInTeamResult, E, R> =>
         resolved._tag === "NotInTeam" ? Effect.succeed(resolved.result) : run(resolved.context),
       ),
@@ -160,21 +170,20 @@ const make = Effect.gen(function* () {
 
   /** A thread's working folder on this server: its worktree, else its project root. */
   const workingFolderOf = (thread: TeamThreadRef) =>
-    snapshots.getThreadShellById(thread.threadId).pipe(
-      Effect.flatMap(
-        Option.match({
-          onNone: () => Effect.succeed(null),
-          onSome: (shell) =>
-            shell.worktreePath !== null
-              ? Effect.succeed(shell.worktreePath)
-              : snapshots
-                  .getProjectShellById(shell.projectId)
-                  .pipe(
-                    Effect.map(
-                      Option.match({ onNone: () => null, onSome: (p) => p.workspaceRoot }),
-                    ),
-                  ),
-        }),
+    orchestrator.getThreadShell(thread.threadId).pipe(
+      Effect.flatMap((shell) =>
+        shell === null
+          ? Effect.succeed(null)
+          : shell.worktreePath !== null
+            ? Effect.succeed(shell.worktreePath)
+            : projects.getById(shell.projectId).pipe(
+                Effect.map(
+                  Option.match({
+                    onNone: () => null,
+                    onSome: (project) => project.workspaceRoot,
+                  }),
+                ),
+              ),
       ),
       Effect.orElseSucceed(() => null),
     );
@@ -253,9 +262,7 @@ const make = Effect.gen(function* () {
    */
   const ownBranchOf = (context: TeamContext) =>
     Effect.gen(function* () {
-      const shell = Option.getOrUndefined(
-        yield* snapshots.getThreadShellById(context.thread.threadId),
-      );
+      const shell = yield* orchestrator.getThreadShell(context.thread.threadId);
       if (context.solo || !shell?.worktreePath || !shell.branch) return {};
       const pushed = yield* git.execute({
         operation: "TeamTools.pushedBranch",
@@ -329,30 +336,23 @@ const make = Effect.gen(function* () {
     }));
 
   /**
-   * The plan card: one activity on the thread, in the running turn. Best
-   * effort: the claim stands and the agent is answered even if it fails.
+   * The plan card, in the chat's cards under its run. Best effort: the claim
+   * stands and the agent is answered even if it fails.
    */
-  const appendPlanActivity = (context: TeamContext, payload: TeamPlanActivityPayload) =>
+  const appendPlanCard = (context: TeamContext, payload: TeamPlanActivityPayload) =>
     Effect.gen(function* () {
       const threadId = context.thread.threadId;
-      const thread = yield* snapshots.getThreadShellById(threadId);
-      const latestTurn = Option.getOrUndefined(thread)?.latestTurn ?? null;
-      const uuid = yield* crypto.randomUUIDv4;
-      const createdAt = DateTime.formatIso(yield* DateTime.now);
-      yield* engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.make(`server:team-plan:${threadId}:${uuid}`),
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      yield* cards.append({
         threadId,
-        activity: {
-          id: EventId.make(`team-plan:${uuid}`),
-          tone: "info",
+        entry: {
+          id: `team-plan:${yield* crypto.randomUUIDv4}`,
           kind: TEAM_PLAN_ACTIVITY_KIND,
           summary: teamPlanSummary(payload.files.length),
           payload,
-          turnId: latestTurn?.state === "running" ? latestTurn.turnId : null,
-          createdAt,
+          runId: shell?.activeRunId ?? null,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
         },
-        createdAt,
       });
     }).pipe(
       Effect.catchCause((cause) =>
@@ -383,8 +383,8 @@ const make = Effect.gen(function* () {
     );
   };
 
-  return TeamToolkit.of({
-    team_status: () =>
+  return {
+    team_status: McpToolAccess.readsAsCaller(() =>
       inTeam((context) =>
         Effect.gen(function* () {
           const teamId = context.teamFile.teamId;
@@ -463,8 +463,9 @@ const make = Effect.gen(function* () {
           } satisfies TeamStatusResult;
         }),
       ),
+    ),
 
-    team_plan: (input) =>
+    team_plan: McpToolAccess.actsAsCaller((input) =>
       inTeam((context) =>
         Effect.gen(function* () {
           const paths = yield* projectPaths(input.files, context);
@@ -474,7 +475,7 @@ const make = Effect.gen(function* () {
           const { claim, overlaps, names, shown, confirmed, overlapText } =
             yield* claimAndSummarize(context, paths, input.note);
           const files = planFiles(context, claim.paths, overlaps, names);
-          yield* appendPlanActivity(context, { solo: context.solo, files, shared: confirmed });
+          yield* appendPlanCard(context, { solo: context.solo, files, shared: confirmed });
           const planned = `Planned and claimed ${claim.paths.length} ${claim.paths.length === 1 ? "file" : "files"}; the user sees the plan.`;
           const result = {
             planned: claim.paths,
@@ -492,7 +493,7 @@ const make = Effect.gen(function* () {
             (file) => !wentAhead.has(file.path) && !isSharedPath(file.path, shared),
           );
           if (held.length > 0) {
-            const { providerInstanceId } = yield* McpInvocationContext.McpInvocationContext;
+            const { providerInstanceId } = yield* callingThread;
             const outcome = yield* choices.ask({ context, files: held, providerInstanceId });
             return {
               ...result,
@@ -520,8 +521,9 @@ const make = Effect.gen(function* () {
           } satisfies TeamPlanResult;
         }),
       ),
+    ),
 
-    team_claim: (input) =>
+    team_claim: McpToolAccess.actsAsCaller((input) =>
       inTeam((context) =>
         Effect.gen(function* () {
           const teamId = context.teamFile.teamId;
@@ -567,8 +569,9 @@ const make = Effect.gen(function* () {
           };
         }),
       ),
+    ),
 
-    team_task: (input) =>
+    team_task: McpToolAccess.actsAsCaller((input) =>
       inTeam((context) =>
         Effect.gen(function* () {
           const teamId = context.teamFile.teamId;
@@ -618,8 +621,9 @@ const make = Effect.gen(function* () {
           return { task: summarizeTask(updated, names), ...titleIgnored };
         }),
       ),
+    ),
 
-    team_handoff: (input) =>
+    team_handoff: McpToolAccess.actsAsCaller((input) =>
       inTeam((context) =>
         Effect.gen(function* () {
           const teamId = context.teamFile.teamId;
@@ -669,8 +673,9 @@ const make = Effect.gen(function* () {
           };
         }),
       ),
+    ),
 
-    team_memory_search: (input) =>
+    team_memory_search: McpToolAccess.readsAsCaller((input) =>
       inTeam((context) =>
         Effect.gen(function* () {
           const terms = queryTerms(input.query);
@@ -724,7 +729,8 @@ const make = Effect.gen(function* () {
           return { results, message } satisfies TeamMemorySearchResult;
         }),
       ),
-  });
+    ),
+  } satisfies McpToolAccess.Handlers<typeof TeamToolkit.tools>;
 });
 
-export const TeamToolkitHandlersLive = TeamToolkit.toLayer(make);
+export const layer = McpToolAccess.toLayer(TeamToolkit, make);

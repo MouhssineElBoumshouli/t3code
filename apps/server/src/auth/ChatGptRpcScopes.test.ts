@@ -1,11 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - spawns a real server and talks HTTP and WebSocket to it.
 // @effect-diagnostics unsafeEffectTypeAssertion:off anyUnknownInErrorContext:off - the RPCs are called by name, so their types are only known at run time.
 /**
- * team-layer: regression test for the scope check on three ChatGPT RPCs in
- * `ws.ts` (`chatGptReconnectProfile`, `chatGptImportProfile`,
- * `chatGptHandoffSubscribe`). They skipped the check `RPC_REQUIRED_SCOPES`
- * declares (`orchestration:operate`), so any session could call them. Found by
- * the team security tests, now parked with host mode (team/STORAGE_PLAN.md 3.6).
+ * team-layer: the scopes of three ChatGPT RPCs (`chatGptReconnectProfile`,
+ * `chatGptImportProfile`, `chatGptHandoffSubscribe`): an `orchestration:read`
+ * session is refused. Upstream's RPC group middleware checks them.
  *
  * Runs against a real server (`src/bin.ts` on a temp home), with a session
  * made the way a client gets one: a one-time pairing link with only
@@ -20,6 +18,7 @@ import {
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
   type AuthEnvironmentScope,
+  ORCHESTRATION_PROTOCOL_VERSION,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -180,10 +179,14 @@ const start = Effect.gen(function* () {
     Effect.gen(function* () {
       const link = yield* Effect.gen(function* () {
         const auth = yield* EnvironmentAuth.EnvironmentAuth;
-        return yield* auth.createPairingLink({ scopes, label: "RPC scope test" });
+        return yield* auth.createPairingLink({
+          scopes,
+          subject: "one-time-token",
+          label: "RPC scope test",
+        });
       }).pipe(
         Effect.provide(
-          EnvironmentAuth.runtimeLayer.pipe(
+          EnvironmentAuth.layerRuntime.pipe(
             Layer.provide(ServerConfig.layer(config)),
             Layer.provide(Layer.succeed(References.MinimumLogLevel, "Error")),
           ),
@@ -206,7 +209,7 @@ const start = Effect.gen(function* () {
       });
       assert.strictEqual(ticketResult.status, 200, ticketResult.text);
       const ticket = (yield* decodeTicket(ticketResult.text).pipe(Effect.orDie)).ticket;
-      return `ws://127.0.0.1:${port}/ws?wsTicket=${encodeURIComponent(ticket)}`;
+      return `ws://127.0.0.1:${port}/ws?wsTicket=${encodeURIComponent(ticket)}&orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}`;
     });
   return ReadOnlySocket.of({
     wsUrl: yield* socketUrlFor([AuthOrchestrationReadScope]),
@@ -300,6 +303,7 @@ it.layer(ReadOnlySocketLive, { timeout: STARTUP_TIMEOUT_MS + 30_000, excludeTest
           Option.some({
             _tag: "snapshot",
             teams: [],
+            threadCards: [],
           }),
         );
       }),

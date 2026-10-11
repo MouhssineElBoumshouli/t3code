@@ -21,6 +21,7 @@ import {
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import type * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -153,7 +154,7 @@ export const seedThread = (input: {
       yield* projects.create({
         commandId: CommandId.make(`command:team-project:${input.projectId}`),
         projectId: input.projectId,
-        title: "Team project",
+        title: "Project",
         workspaceRoot: input.workspaceRoot,
       });
     }
@@ -260,15 +261,23 @@ export const setRun = (input: {
   });
 
 /**
- * `ThreadManagementService` that only records what it is asked to dispatch:
- * the team layer's turns stop at the dispatch, since tests open no provider.
+ * The orchestration's `ThreadManagementService`, except that `dispatch` only
+ * records: the team layer's turns stop there, since tests open no provider.
+ * Merge it after the orchestration's context, or that one's wins.
  */
 export const layerRecordingDispatch = (
   dispatched: Ref.Ref<ReadonlyArray<OrchestrationV2ServerCommand>>,
+  orchestration: Context.Context<ThreadManagementService.ThreadManagementService>,
 ) =>
-  Layer.mock(ThreadManagementService.ThreadManagementService)({
-    dispatch: (command) =>
-      Ref.update(dispatched, (commands) => [...commands, command]).pipe(
-        Effect.as({ sequence: 1, storedEvents: [] }),
-      ),
-  });
+  Layer.effect(
+    ThreadManagementService.ThreadManagementService,
+    Effect.map(ThreadManagementService.ThreadManagementService, (threads) =>
+      ThreadManagementService.ThreadManagementService.of({
+        ...threads,
+        dispatch: (command) =>
+          Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+            Effect.as({ sequence: 1, storedEvents: [] }),
+          ),
+      }),
+    ),
+  ).pipe(Layer.provide(Layer.succeedContext(orchestration)));

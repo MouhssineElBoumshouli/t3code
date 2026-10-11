@@ -116,7 +116,7 @@ const makeHarness = Effect.fn("makeTeamGuardHarness")(function* () {
     TeamCards.layer.pipe(Layer.provide(Layer.succeedContext(orchestration))),
     Layer.succeedContext(orchestration),
     // After the orchestration's own: the team's turns stop at the recorded dispatch.
-    TeamOrchestrator.layerRecordingDispatch(dispatched),
+    TeamOrchestrator.layerRecordingDispatch(dispatched, orchestration),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
       getDescriptor: Effect.succeed({
