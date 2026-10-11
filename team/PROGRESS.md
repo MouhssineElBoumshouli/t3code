@@ -2,6 +2,14 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-11 — Upstream sync: stopped at a plan (upstream replaced its orchestrator)
+
+- **What changed.** `main` tagged `pre-upstream-sync-2026-10-11` (004f283df) and the tag pushed. Branch `sync/upstream-2026-10-11` made from it. No merge committed yet: the trial merge of upstream/main (`ed0f7b908`, 805 commits, base 050cfad04) conflicts in 33 files, 17 of them deleted upstream. On 2026-10-02 upstream replaced its orchestrator (de3439142); the thread activities our cards are built on, and the services about 20 of our server files import, are gone. New `team/V2_PORT_PLAN.md`: what moved, five decisions to approve (where cards live, app-sent messages, the briefing per provider, "awaiting input", no card migration), where each hook goes, six steps.
+- Files: new `team/V2_PORT_PLAN.md`; this entry.
+- Checked: our `ChatGptRpcScopes` test (its ChatGPT cases only, adjusted to upstream's new Effect import paths and pairing helper) passes on plain upstream (4 of 4) in a throwaway checkout outside the repo (`~/code/t3code-upstream-check`), so our `ws.ts` wrapper can go and the test stays. Read upstream's v2 code for each hook in the plan's table; nothing ported or compiled yet.
+- Left: everything in the plan, once approved: merge commit, server core, team MCP tools, provider hooks, web, checks and live run, merge to `main`, `team/UPSTREAM_SYNC.md`.
+- Unsure: how much of our test harness can move onto v2's test kits (the biggest cost); whether a held `team_plan` call behaves the same under v2 (reading says yes, to be checked live).
+
 ## 2026-10-08 — "Ask" and "Build on top" on the warning card (PREVENTION_PLAN.md slice 3d)
 
 - **What the user sees (asker).** The card's "Coming soon" row is gone. Team only: "Ask Omar" opens a line ("A line for Omar (optional)", "Send question", "Cancel"); after sending, the card reads "Asked Omar 2 min ago · the answer comes here; you can still choose below" with the other choices still there. Yes: "Omar said yes: go anyway, agreed · "line" · sent to the agent / as a new message". No: "Omar said no · "line"", and the card is open again without Ask. "Build on top of Omar's work" is a real button once his branch is pushed, else disabled with "· not pushed yet" (or "· this chat has no copy of its own"); after it: "Built on top of Omar's work · on `t3/omar` · sent to the agent".
