@@ -43,10 +43,10 @@ import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as Arbitrary from "effect/unstable/arbitrary/Arbitrary";
-import { FetchHttpClient, HttpBody, HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
-import * as Socket from "effect/unstable/socket/Socket";
+import * as Arbitrary from "effect/Arbitrary";
+import { FetchHttpClient, HttpBody, HttpClient, HttpClientRequest } from "effect/http";
+import { RpcClient, RpcSerialization } from "effect/rpc";
+import * as Socket from "effect/socket/Socket";
 
 import { resolveCliAuthConfig } from "../cli/config.ts";
 import * as ServerConfig from "../config.ts";

@@ -13,7 +13,7 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
@@ -28,7 +28,7 @@ const ROOT = wireFixture.rootThreadId;
 const THREAD_ID = ThreadId.make("thread-codex-team-briefing");
 const peerPath = NodePath.join(
   import.meta.dirname,
-  `../testFixtures/codexCollabMockPeer.${HostProcessPlatform.defaultValue() === "win32" ? "cmd" : "sh"}`,
+  `../testFixtures/codexCollabMockPeer.${HostProcess.Platform.defaultValue() === "win32" ? "cmd" : "sh"}`,
 );
 
 const turnParams = (teamContext: string | undefined) =>

@@ -2,6 +2,13 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-11 — v2 port, step 2 (server core), in progress
+
+- **Step 1 done** (57bf47722, pushed): merge of upstream `ed0f7b908`; see that commit's message. After the laptop restart: tree clean, branch equal to origin, install re-run (fine).
+- **2a, foundations** (this commit): our files follow upstream's moves: `effect/unstable/*` → `effect/*`, `effect/Arbitrary`; `@t3tools/shared/HostProcess` as a namespace (`HostProcess.Platform`, `.WorkingDirectory`); `atomicWrite` from `@t3tools/shared`; `gitHubAuthStatus` from `@t3tools/source-control-github`; `runtimeInstructions` from `@t3tools/provider-core`; `ServerEnvironment.layerIdentity`; `cli` from `binCli.ts`; the team id brand helper in the new `Schema.brand<Brand>` form. `team-layer:` edits: team RPCs in `RpcInstrumentation.ts` (aggregate "team") and in `CLIENT_GUARDED_RPC_SCOPES` (`teamChoose`, `teamAnswer`: operate).
+- Checked: `vp test run src/team/TeamBriefing.test.ts src/team/TeamProjectFiles.test.ts src/team/folders.test.ts src/team/state/`: 7 files, 77 passed. Typecheck of the team files only (a scoped tsconfig outside the repo; a full server `tsc` peaks at 4 GB single-threaded, so it never runs next to anything else): the foundation files are clean; 547 errors remain in the files 2b, 2c and step 3 port.
+- **Left in step 2:** 2b the `TeamCards` store (a file per chat, deleted with the chat); 2c TeamChoices, TeamQuestions, TeamWait, TeamGuard, TeamStaleView, TeamFeed, TeamAutoNotes, TeamClaimAutoRelease, TeamPushedBranches, TeamWarmup on v2, their tests, `server.ts` wiring.
+
 ## 2026-10-11 — Upstream sync: stopped at a plan (upstream replaced its orchestrator)
 
 - **What changed.** `main` tagged `pre-upstream-sync-2026-10-11` (004f283df) and the tag pushed. Branch `sync/upstream-2026-10-11` made from it. No merge committed yet: the trial merge of upstream/main (`ed0f7b908`, 805 commits, base 050cfad04) conflicts in 33 files, 17 of them deleted upstream. On 2026-10-02 upstream replaced its orchestrator (de3439142); the thread activities our cards are built on, and the services about 20 of our server files import, are gone. New `team/V2_PORT_PLAN.md`: what moved, five decisions to approve (where cards live, app-sent messages, the briefing per provider, "awaiting input", no card migration), where each hook goes, six steps.

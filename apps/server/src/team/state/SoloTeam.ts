@@ -16,7 +16,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import { TeamId, TeamLogin } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -40,5 +40,5 @@ export const soloTeamId = (folder: string, platform: NodeJS.Platform) =>
 /** The solo team id of a project folder, links resolved, on this platform. */
 export const soloTeamIdOf = (folder: string) =>
   Effect.gen(function* () {
-    return soloTeamId(yield* realFolder(folder), yield* HostProcessPlatform);
+    return soloTeamId(yield* realFolder(folder), yield* HostProcess.Platform);
   });

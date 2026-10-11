@@ -20,10 +20,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestConsole from "effect/testing/TestConsole";
-import { Command } from "effect/unstable/cli";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { Command } from "effect/cli";
+import { ChildProcessSpawner } from "effect/process";
 
-import { cli } from "../bin.ts";
+import { cli } from "../binCli.ts";
 import * as TeamHost from "../team/state/TeamHost.ts";
 import { commitAll, git } from "../team/testing/gitRepo.ts";
 import {

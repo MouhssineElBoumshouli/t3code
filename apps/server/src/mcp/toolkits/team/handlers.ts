@@ -17,7 +17,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -113,7 +113,7 @@ const make = Effect.gen(function* () {
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
   const crypto = yield* Crypto.Crypto;
   const { resolve } = yield* makeTeamResolver;
-  const platform = yield* HostProcessPlatform;
+  const platform = yield* HostProcess.Platform;
   const choices = yield* TeamChoices.TeamChoices;
 
   /** A folder as the OS compares it: links resolved, and on Windows case and slashes ignored (W8). */

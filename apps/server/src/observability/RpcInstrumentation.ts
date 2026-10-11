@@ -208,6 +208,10 @@ const RPC_AGGREGATES = {
   [WS_METHODS.subscribeServerLifecycle]: "server",
   [WS_METHODS.subscribeAuthAccess]: "auth",
   [WS_METHODS.subscribeBackgroundPolicy]: "server",
+  // team-layer: the team feed and the warning card (team/V2_PORT_PLAN.md).
+  [WS_METHODS.subscribeTeamFeed]: "team",
+  [WS_METHODS.teamChoose]: "team",
+  [WS_METHODS.teamAnswer]: "team",
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;
 
 const RPC_SPAN_PREFIX = "ws.rpc";
