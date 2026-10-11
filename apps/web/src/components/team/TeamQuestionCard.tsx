@@ -144,7 +144,8 @@ export const TeamQuestionCard = memo(function TeamQuestionCard(props: {
             askedAt={card.askedAt}
           />
           <p className="text-muted-foreground">
-            This chat holds them. Their chat waits for your answer.
+            This chat holds {card.paths.length === 1 ? "it" : "them"}. Their chat waits for your
+            answer.
           </p>
         </div>
       </div>
