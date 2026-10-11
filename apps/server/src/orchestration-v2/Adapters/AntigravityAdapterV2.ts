@@ -13,6 +13,7 @@ import * as Path from "effect/Path";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import * as EffectAcpErrors from "effect-acp/errors";
+import { checkTeamEdit } from "../../team/teamEditCheck.ts"; // team-layer
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import type { AntigravityAuth } from "../../provider/AntigravityAuth.ts";
@@ -193,13 +194,24 @@ export function makeAntigravityAcpAdapterFlavor(
           allowedRoots: antigravityClientFileRoots(cwd),
           request,
         }),
-      writeTextFile: (request, cwd) =>
-        writeAntigravityClientTextFile({
+      writeTextFile: (request, cwd, threadId) => {
+        const write = writeAntigravityClientTextFile({
           fileSystem: options.fileSystem,
           path: options.path,
           allowedRoots: antigravityClientFileRoots(cwd),
           request,
-        }),
+        });
+        // team-layer: refuse writes to files held elsewhere (team/PREVENTION_PLAN.md section 3).
+        return threadId === undefined
+          ? write
+          : checkTeamEdit(threadId, [request.path]).pipe(
+              Effect.flatMap((reason) =>
+                reason === undefined
+                  ? write
+                  : Effect.fail(EffectAcpErrors.AcpRequestError.invalidParams(reason)),
+              ),
+            );
+      },
     },
     approvalOptions: antigravityApprovalOptions,
     extractPermissionQuestion: (request) => {

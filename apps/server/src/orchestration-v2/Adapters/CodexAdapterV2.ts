@@ -92,6 +92,8 @@ import { resolveAttachmentPath, resolveAttachmentPathById } from "../../attachme
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+// team-layer: the team briefing (team/V2_PORT_PLAN.md D3).
+import { readTeamBriefing } from "../../team/TeamBriefing.ts";
 import {
   buildCodexAdditionalContext,
   buildCodexDeveloperInstructions,
@@ -714,6 +716,8 @@ export function buildCodexTurnStartParams(input: {
   readonly omitServiceTier?: boolean;
   /** What the thread's MCP Apps want the agent to know (`ui/update-model-context`). */
   readonly appContext?: ProviderAdapter.ProviderAdapterV2TurnInput["appContext"];
+  /** team-layer: the team briefing, its own `t3_code_team` entry (team/TeamBriefing.ts). */
+  readonly teamContext?: string | undefined;
 }) {
   return Effect.gen(function* () {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
@@ -751,7 +755,11 @@ export function buildCodexTurnStartParams(input: {
     const t3Context =
       input.hasT3Mcp === true
         ? buildCodexAdditionalContext(
-            { model: input.modelSelection.model, reasoningEffort: effort ?? "medium" },
+            {
+              model: input.modelSelection.model,
+              reasoningEffort: effort ?? "medium",
+              teamContext: input.teamContext, // team-layer
+            },
             {
               browser: input.browserToolsAvailable ?? true,
               device: input.deviceToolsAvailable ?? false,
@@ -1324,6 +1332,8 @@ export function codexThreadRuntimeParams(input: {
                 http_headers: {
                   Authorization: mcpSession.authorizationHeader,
                 },
+                // team-layer: team_plan holds the call while the user picks on the warning card (default 60 s).
+                tool_timeout_sec: 3600,
               },
             },
           }),
@@ -6196,6 +6206,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
+              // team-layer: the team briefing (team/V2_PORT_PLAN.md D3).
+              teamContext: yield* readTeamBriefing(turnInput.threadId),
             });
             yield* Ref.update(pendingRootTurns, (current) => {
               const updated = new Map(current);

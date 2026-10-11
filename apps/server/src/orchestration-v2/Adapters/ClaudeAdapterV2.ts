@@ -133,6 +133,9 @@ import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapsh
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+// team-layer: the team briefing and the guard on held files (team/V2_PORT_PLAN.md).
+import { readTeamBriefing } from "../../team/TeamBriefing.ts";
+import { claudeTeamEditHooks } from "../../team/teamEditCheck.ts";
 import {
   mcpToolPresentation,
   normalizeMcpText,
@@ -970,6 +973,10 @@ export function makeClaudeQueryOptions(input: {
   readonly onUserDialog?: ClaudeQueryOptions["onUserDialog"];
   readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
+  /** team-layer: the team briefing, appended once per session (team/TeamBriefing.ts). */
+  readonly teamContext?: string | undefined;
+  /** team-layer: refuses edits to files held elsewhere (team/teamEditCheck.ts). */
+  readonly hooks?: ClaudeQueryOptions["hooks"];
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection);
   const {
@@ -1049,11 +1056,12 @@ export function makeClaudeQueryOptions(input: {
       : {}),
     ...(input.environment === undefined ? {} : { env: input.environment }),
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
+    ...(input.hooks === undefined ? {} : { hooks: input.hooks }), // team-layer
     systemPrompt: {
       type: "preset" as const,
       preset: "claude_code" as const,
       append:
-        buildRuntimeInstructions({ harness: "Claude Code" }) +
+        buildRuntimeInstructions({ harness: "Claude Code", teamContext: input.teamContext }) +
         (input.mcpServers === undefined ? "" : T3_CODE_ORCHESTRATION_INSTRUCTIONS),
     },
     ...(Object.keys(extraArgs).length === 0 ? {} : { extraArgs }),
@@ -8262,6 +8270,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             canUseTool,
             onUserDialog,
             supportedDialogKinds: ["resume_return"],
+            // team-layer: the team briefing and the guard on held files (team/V2_PORT_PLAN.md).
+            teamContext: yield* readTeamBriefing(turnInput.threadId),
+            hooks: claudeTeamEditHooks(turnInput.threadId, runPromise),
           });
           const querySession = yield* queryRunner
             .open({

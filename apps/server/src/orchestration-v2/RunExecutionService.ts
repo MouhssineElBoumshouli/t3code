@@ -49,6 +49,7 @@ import {
   makeProviderFailureTurnItem,
 } from "@t3tools/provider-core/server/failure";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
+import { withTeamTurnText } from "../team/teamTurnText.ts"; // team-layer
 
 export interface ProviderEventRoutingState {
   readonly ownedThreadIds: ReadonlySet<ThreadId>;
@@ -1431,7 +1432,17 @@ export const layer: Layer.Layer<
             attemptId: input.attemptId,
             rootNodeId: input.rootNode.id,
             providerThread: input.providerThread,
-            message: input.message,
+            // team-layer: the turn note, and the team briefing for providers whose
+            // instructions the team layer does not reach (team/V2_PORT_PLAN.md D3).
+            message: {
+              ...input.message,
+              text: yield* withTeamTurnText({
+                threadId: input.run.threadId,
+                driver: input.session.driver,
+                providerTurnOrdinal: input.providerTurnOrdinal,
+                text: input.message.text,
+              }),
+            },
             modelSelection: input.modelSelection,
             runtimePolicy: input.runtimePolicy,
             ...(appContext.length === 0 ? {} : { appContext }),

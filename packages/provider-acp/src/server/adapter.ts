@@ -275,6 +275,8 @@ export interface AcpAdapterV2Flavor {
     readonly writeTextFile: (
       request: EffectAcpSchema.WriteTextFileRequest,
       cwd: string | null,
+      /** team-layer: the T3 thread of the active turn, for the team guard. */
+      threadId?: ThreadId,
     ) => Effect.Effect<EffectAcpSchema.WriteTextFileResponse, EffectAcpErrors.AcpError>;
   };
   /**
@@ -5527,6 +5529,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const clientPolicyContext = Effect.map(Ref.get(activeTurn), (context) => ({
           policy: context?.input.runtimePolicy ?? latestRuntimePolicy,
           turnKey: context === null ? null : String(context.providerTurnId),
+          threadId: context?.input.threadId, // team-layer
         }));
 
         const denyClientRequest = (operation: string, disposition: "ask" | "deny") =>
@@ -5642,7 +5645,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             );
             yield* targetRuntime.handleWriteTextFile((request) =>
               clientPolicyContext.pipe(
-                Effect.flatMap(({ policy }) => clientFileSystem.writeTextFile(request, policy.cwd)),
+                Effect.flatMap(({ policy, threadId }) =>
+                  clientFileSystem.writeTextFile(request, policy.cwd, threadId),
+                ),
               ),
             );
           }
