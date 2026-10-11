@@ -12,7 +12,13 @@
  * would change the cached prompt prefix (OpenCode's system text, Codex's
  * context entry) for that turn and the next (team/VISION.md 6.5).
  */
-import { TEAM_DIRECTORY_NAME, TEAM_RULEBOOK_FILE_NAME, type ThreadId } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  TEAM_DIRECTORY_NAME,
+  TEAM_RULEBOOK_FILE_NAME,
+  type ThreadId,
+} from "@t3tools/contracts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -23,22 +29,27 @@ import {
   renderSoloBriefing,
   renderTeamBriefing,
 } from "../../../team/TeamBriefing.ts";
-import * as McpProviderSession from "../../McpProviderSession.ts";
 import { makeTeamResolver } from "./resolve.ts";
 
 const BRIEFING_TIMEOUT = "2 seconds";
 
 export const makeTeamBriefingResolver = Effect.gen(function* () {
   const { resolve } = yield* makeTeamResolver;
+  const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const path = yield* Path.Path;
   /** The last briefing each thread got; only "not in a team" removes it. */
   const lastBriefing = new Map<ThreadId, string>();
   const reuseLast = (threadId: ThreadId) => Effect.sync(() => lastBriefing.get(threadId));
 
-  return (threadId: ThreadId): Effect.Effect<string | undefined> => {
-    const mcp = McpProviderSession.readMcpProviderSession(threadId);
-    if (mcp === undefined) return Effect.succeed(undefined);
-    return resolve({ environmentId: mcp.environmentId, threadId }).pipe(
+  return (threadId: ThreadId): Effect.Effect<string | undefined> =>
+    Effect.gen(function* () {
+      const mcp = yield* mcpSessions.read(threadId);
+      if (mcp === undefined) return undefined;
+      return yield* briefingOf(mcp.environmentId, threadId);
+    });
+
+  function briefingOf(environmentId: EnvironmentId, threadId: ThreadId) {
+    return resolve({ environmentId, threadId }).pipe(
       Effect.map((resolved) => {
         if (resolved._tag === "NotInTeam") return undefined;
         if (resolved.context.solo) return renderSoloBriefing();
@@ -78,7 +89,7 @@ export const makeTeamBriefingResolver = Effect.gen(function* () {
         }).pipe(Effect.andThen(reuseLast(threadId))),
       ),
     );
-  };
+  }
 });
 
 export const TeamBriefingLive = Layer.effectDiscard(

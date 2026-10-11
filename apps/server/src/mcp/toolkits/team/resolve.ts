@@ -23,7 +23,8 @@ import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 
-import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
 import type { TeamServiceError } from "../../../team/TeamErrors.ts";
 import { findTeamFile as findTeamFileIn } from "../../../team/TeamProjectFiles.ts";
 import * as TeamService from "../../../team/TeamService.ts";
@@ -87,7 +88,8 @@ export const fromService = (operation: string) => (error: TeamServiceError) =>
 
 export const makeTeamResolver = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const projects = yield* ProjectService.ProjectService;
   const fileContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 
   const lookupFailed = (operation: string) => (cause: unknown) =>
@@ -103,19 +105,19 @@ export const makeTeamResolver = Effect.gen(function* () {
 
   const resolve = (scope: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId }) =>
     Effect.gen(function* () {
-      const thread = yield* snapshots
-        .getThreadShellById(scope.threadId)
+      const thread = yield* orchestrator
+        .getThreadShell(scope.threadId)
         .pipe(Effect.mapError(lookupFailed("lookup")));
-      if (Option.isNone(thread)) {
+      if (thread === null) {
         return yield* new TeamToolError({ detail: `Thread ${scope.threadId} was not found.` });
       }
-      const project = yield* snapshots
-        .getProjectShellById(thread.value.projectId)
+      const project = yield* projects
+        .getById(thread.projectId)
         .pipe(Effect.mapError(lookupFailed("lookup")));
       if (Option.isNone(project)) {
         return yield* new TeamToolError({ detail: "This thread's project was not found." });
       }
-      const workingFolder = thread.value.worktreePath ?? project.value.workspaceRoot;
+      const workingFolder = thread.worktreePath ?? project.value.workspaceRoot;
       const threadRef = { environmentId: scope.environmentId, threadId: scope.threadId };
       const found = yield* findTeamFile(workingFolder);
       if (Option.isNone(found)) {

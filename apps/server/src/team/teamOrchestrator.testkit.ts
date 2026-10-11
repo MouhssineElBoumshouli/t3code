@@ -99,7 +99,7 @@ const noEnrichment = {
   repositoryIdentityResolved: false,
 };
 
-/** The orchestrator, the project service, the event sink, the server config and Node's platform. */
+/** The orchestrator, the project service, the event sink, MCP sessions, the server config and Node's platform. */
 export const layer = Layer.mergeAll(RuntimeLayer.layer, RuntimeLayer.layerEventSink).pipe(
   Layer.provideMerge(RuntimeLayer.layerProjectService),
   Layer.provide(
@@ -118,7 +118,7 @@ export const layer = Layer.mergeAll(RuntimeLayer.layer, RuntimeLayer.layerEventS
     }),
   ),
   Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(McpProviderSessions.layer),
+  Layer.provideMerge(McpProviderSessions.layer),
   Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStore),
   Layer.provideMerge(layerServerConfig),

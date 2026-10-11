@@ -11,10 +11,9 @@ import {
   TeamFile,
   TeamId,
   ThreadId,
-  type OrchestrationProjectShell,
-  type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -22,13 +21,13 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
-import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type * as TeamHost from "../../../team/state/TeamHost.ts";
 import {
   readTeamBriefing,
   renderSoloBriefing,
   renderTeamBriefing,
 } from "../../../team/TeamBriefing.ts";
+import * as TeamOrchestrator from "../../../team/teamOrchestrator.testkit.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import { git } from "../../../team/testing/gitRepo.ts";
 import {
@@ -38,7 +37,6 @@ import {
   testTeamServiceLayer,
   useTeamOrigin,
 } from "../../../team/testing/teamState.ts";
-import * as McpProviderSession from "../../McpProviderSession.ts";
 import { TeamBriefingLive, makeTeamBriefingResolver } from "./briefing.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
@@ -56,54 +54,36 @@ beforeEach(() => {
 });
 afterEach(() => NodeFS.rmSync(testRoot, { recursive: true, force: true }));
 
-function makeProject(workspaceRoot: string): OrchestrationProjectShell {
-  return {
-    id: PROJECT_ID,
-    title: "Project",
-    workspaceRoot,
-    defaultModelSelection: null,
-    scripts: [],
-    repositoryIdentity: null,
-    createdAt: "2026-09-01T00:00:00.000Z",
-    updatedAt: "2026-09-01T00:00:00.000Z",
-  };
-}
+/** Whether THREAD_ID's provider session has the `t3-code` MCP server; set per test. */
+let mcpAttached = false;
+afterEach(() => {
+  mcpAttached = false;
+});
+const attachMcp = () => {
+  mcpAttached = true;
+};
 
-function makeThread(worktreePath: string | null): OrchestrationThreadShell {
-  return {
-    id: THREAD_ID,
-    projectId: PROJECT_ID,
-    title: "Thread",
-    modelSelection: { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath,
-    pullRequests: [],
-    latestTurn: null,
-    createdAt: "2026-09-01T00:00:00.000Z",
-    updatedAt: "2026-09-01T00:00:00.000Z",
-    archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
-    session: null,
-    latestUserMessageAt: null,
-    hasPendingApprovals: false,
-    hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
-  };
-}
-
-/** Pretends the provider session for THREAD_ID has the `t3-code` MCP server. */
-const attachMcp = () =>
-  McpProviderSession.setMcpProviderSession({
-    environmentId: ENVIRONMENT_ID,
-    threadId: THREAD_ID,
-    providerSessionId: "provider-session-1",
-    providerInstanceId: ProviderInstanceId.make("claude"),
-    endpoint: "http://127.0.0.1/mcp",
-    authorizationHeader: "Bearer test",
-    capabilities: new Set(),
+/** The project and THREAD_ID in the orchestrator, and the MCP session if attached. */
+const seedThreadAndMcp = (workspaceRoot: string, worktreePath: string | null) =>
+  Effect.gen(function* () {
+    yield* TeamOrchestrator.seedThread({
+      projectId: PROJECT_ID,
+      threadId: THREAD_ID,
+      workspaceRoot,
+      worktreePath,
+    });
+    if (!mcpAttached) return;
+    const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+    yield* mcpSessions.set({
+      environmentId: ENVIRONMENT_ID,
+      threadId: THREAD_ID,
+      providerSessionId: "provider-session-1",
+      providerInstanceId: ProviderInstanceId.make("claude"),
+      endpoint: "http://127.0.0.1/mcp",
+      authorizationHeader: "Bearer test",
+      browserToolsAvailable: false,
+      capabilities: new Set(),
+    });
   });
 
 const makeFolder = (options: { readonly team: boolean }) =>
@@ -139,13 +119,9 @@ const makeDependencies = (
       stateDirectory: NodePath.join(testRoot, "state"),
       host: options.host,
     }),
-    Layer.mock(ProjectionSnapshotQuery)({
-      getThreadShellById: (threadId) =>
-        Effect.succeed(
-          threadId === THREAD_ID ? Option.some(makeThread(worktreePath)) : Option.none(),
-        ),
-      getProjectShellById: () => Effect.succeed(Option.some(makeProject(workspaceRoot))),
-    }),
+    Layer.effectDiscard(seedThreadAndMcp(workspaceRoot, worktreePath)).pipe(
+      Layer.provideMerge(TeamOrchestrator.layer),
+    ),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
       getDescriptor: Effect.succeed({
@@ -188,8 +164,6 @@ const EXPECTED = renderTeamBriefing({
 });
 
 describe("team briefing resolver", () => {
-  afterEach(() => McpProviderSession.clearAllMcpProviderSessions());
-
   it.effect("gives the solo briefing when the project is not in a team", () =>
     Effect.gen(function* () {
       attachMcp();

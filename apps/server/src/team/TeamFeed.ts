@@ -7,6 +7,9 @@
  * equal to the last one sent is not sent again, so a write that saves and
  * then reloads pushes once, and nothing is pushed while nothing changes.
  *
+ * It also carries each chat's team cards (`TeamCards`, V2_PORT_PLAN.md D1):
+ * all of them in the snapshot, then one chat's each time they change.
+ *
  * Which team a project is in is worked out per change, the way the team
  * tools do it: `.team/team.json` in the project or its repo, else the
  * project's solo team.
@@ -30,8 +33,9 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import { soloTeamIdOf } from "./state/SoloTeam.ts";
+import * as TeamCards from "./TeamCards.ts";
 import { findTeamFile } from "./TeamProjectFiles.ts";
 import * as TeamService from "./TeamService.ts";
 
@@ -53,7 +57,8 @@ export const handoffHeadline = (changed: string) => {
 
 export const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const projectService = yield* ProjectService.ProjectService;
+  const cards = yield* TeamCards.TeamCards;
   const path = yield* Path.Path;
   const fileContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 
@@ -75,7 +80,7 @@ export const make = Effect.gen(function* () {
     }).pipe(Effect.provide(fileContext), Effect.option);
 
   /** Every team with a project on this server, with those projects. */
-  const projectsByTeam = snapshots.getProjectShells().pipe(
+  const projectsByTeam = projectService.listShells().pipe(
     Effect.flatMap((projects) => Effect.forEach(projects, teamOfProject)),
     Effect.map((found) => {
       const byTeam = new Map<TeamId, Array<TeamFeedProject>>();
@@ -144,6 +149,7 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       // Subscribed before the snapshot is read, so no change is missed.
       const changes = yield* teams.subscribeChanges;
+      const cardChanges = yield* cards.subscribeChanges;
       const sent = new Map<TeamId, string>();
 
       const byTeam = yield* projectsByTeam;
@@ -157,6 +163,7 @@ export const make = Effect.gen(function* () {
       const snapshot: TeamFeedEvent = {
         _tag: "snapshot",
         teams: first.toSorted((a, b) => a.name.localeCompare(b.name)),
+        threadCards: yield* cards.all,
       };
 
       const onChange = (teamId: TeamId) =>
@@ -176,9 +183,17 @@ export const make = Effect.gen(function* () {
 
       return Stream.concat(
         Stream.make(snapshot),
-        Stream.fromSubscription(changes).pipe(
-          Stream.mapEffect(onChange),
-          Stream.flatMap((events) => Stream.fromIterable(events)),
+        Stream.merge(
+          Stream.fromSubscription(changes).pipe(
+            Stream.mapEffect(onChange),
+            Stream.flatMap((events) => Stream.fromIterable(events)),
+          ),
+          Stream.fromSubscription(cardChanges).pipe(
+            Stream.map((threadCards): TeamFeedEvent => ({
+              _tag: "threadCards",
+              cards: threadCards,
+            })),
+          ),
         ),
       );
     }),
