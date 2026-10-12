@@ -670,6 +670,7 @@ describe("CodexAdapterV2 process spawning", () => {
               http_headers: {
                 Authorization: "Bearer secret-codex-token",
               },
+              tool_timeout_sec: 3600, // team-layer: the warning card holds team_plan
             },
           },
         },
