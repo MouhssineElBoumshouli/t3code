@@ -281,6 +281,7 @@ import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } f
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
 import { TeamThreadHoldersLine, TeamThreadMarks } from "./team/TeamHolderMarks"; // team-layer
+import { useTeamAwaitsUser } from "~/state/teamFeed"; // team-layer
 import {
   composerDraftHasUserContent,
   DraftId,
@@ -1270,7 +1271,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarThreadStatus(thread);
+  // team-layer: a warning card that waits on the user counts as input (team/V2_PORT_PLAN.md D4).
+  const teamWaiting = useTeamAwaitsUser(
+    thread.environmentId,
+    thread.id,
+    thread.latestRun?.runId ?? null,
+  );
+  const status = resolveSidebarThreadStatus(
+    teamWaiting ? { ...thread, hasPendingUserInput: true } : thread,
+  );
   const isInFlight =
     status === "working" || status === "waiting" || status === "approval" || status === "input";
   // A woken thread reappears at its original position (the sort is

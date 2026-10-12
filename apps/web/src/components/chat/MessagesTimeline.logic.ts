@@ -1,5 +1,7 @@
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
 export { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+import type { TeamCardRow } from "@t3tools/client-runtime/work-log/team-cards"; // team-layer
+import { teamChoiceAwaitsUser } from "@t3tools/contracts"; // team-layer
 import { isLiveSubagentTurnItem } from "@t3tools/client-runtime/state/subagentRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Equal from "effect/Equal";
@@ -80,6 +82,7 @@ function timelineEntryRunId(entry: TimelineEntry): RunId | null {
     return entry.proposedPlan.runId;
   }
   if (entry.kind === "html-render" || entry.kind === "mcp-app") return entry.runId;
+  if (entry.kind === "team-card") return entry.runId; // team-layer
   return entry.kind === "work" ? (entry.entry.runId ?? null) : null;
 }
 
@@ -548,6 +551,8 @@ type MessagesTimelineRowContent =
       kind: "working";
       id: string;
       createdAt: string | null;
+      /** team-layer: a warning card in this run waits for the user. */
+      awaitingInput?: true;
     }
   | {
       kind: "thinking";
@@ -637,6 +642,13 @@ type MessagesTimelineRowContent =
       id: string;
       createdAt: string;
       htmlRender: HtmlRenderReference;
+    }
+  | {
+      /** team-layer: a plan, warning or question card (team/V2_PORT_PLAN.md D1). */
+      kind: "team-card";
+      id: string;
+      createdAt: string;
+      teamCard: TeamCardRow;
     }
   | {
       kind: "mcp-app";
@@ -822,6 +834,7 @@ function deriveSupersededAttemptFolds(
       (entry.kind === "message" && entry.message.role === "user") ||
       // A published page stays visible, as it does when its turn folds.
       entry.kind === "html-render" ||
+      entry.kind === "team-card" || // team-layer: so do team cards
       entry.kind === "mcp-app" ||
       timelineEntryIsPersistentResourceCard(entry) ||
       // A steer supersedes the attempt but leaves its children running.
@@ -1549,11 +1562,22 @@ export function deriveMessagesTimelineRows(input: {
   const activeWorkEntryIds = new Set(
     activeWorkRow !== null || latestToolFailed ? activeToolEntries.map((entry) => entry.id) : [],
   );
+  // team-layer: while a warning card of the running run waits for a click, the
+  // run waits on the user, as with a pending question: no "Working for" or "Thinking".
+  const awaitingTeamChoice = input.timelineEntries.some(
+    (entry) =>
+      entry.kind === "team-card" &&
+      entry.teamCard.card.kind === "choice" &&
+      teamChoiceAwaitsUser(entry.teamCard.card.card.made) &&
+      entry.runId !== null &&
+      entry.runId === input.runningRunId,
+  );
   const appendWorkingRow = () => {
     nextRows.push({
       kind: "working",
       id: "working-indicator-row",
       createdAt: input.activeTurnStartedAt ?? null,
+      ...(awaitingTeamChoice ? { awaitingInput: true as const } : {}), // team-layer
     });
   };
   let hasActivityRow = false;
@@ -1815,6 +1839,17 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    // team-layer: each team card is its own row (team/V2_PORT_PLAN.md D1).
+    if (timelineEntry.kind === "team-card") {
+      nextRows.push({
+        kind: "team-card",
+        id: timelineEntry.id,
+        createdAt: timelineEntry.createdAt,
+        teamCard: timelineEntry.teamCard,
+      });
+      continue;
+    }
+
     if (timelineEntry.kind === "mcp-app") {
       nextRows.push({
         kind: "mcp-app",
@@ -1960,6 +1995,7 @@ export function deriveMessagesTimelineRows(input: {
     input.isWorking &&
     !setupOwnsWorkingSlot &&
     !hasActiveCompaction &&
+    !awaitingTeamChoice && // team-layer
     (!hasActivityRow || latestToolFailed)
   ) {
     // A failed latest tool hands the row back to thinking, but its group
@@ -2230,7 +2266,10 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
   switch (a.kind) {
     case "working":
-      return a.createdAt === (b as typeof a).createdAt;
+      return (
+        a.createdAt === (b as typeof a).createdAt &&
+        a.awaitingInput === (b as typeof a).awaitingInput // team-layer
+      );
     case "thinking": {
       const bt = b as typeof a;
       return a.createdAt === bt.createdAt && a.groupId === bt.groupId && a.expanded === bt.expanded;
@@ -2266,6 +2305,10 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;
+
+    // team-layer: the card or its latest record changed.
+    case "team-card":
+      return a.teamCard.key === (b as typeof a).teamCard.key;
 
     case "html-render": {
       // Entries rebuild on any tool update; an equal page must keep its mounted frame.

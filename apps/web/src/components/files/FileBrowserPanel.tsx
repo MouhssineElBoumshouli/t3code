@@ -269,7 +269,6 @@ export default function FileBrowserPanel({
     },
   });
   const { model } = useFileTree({
-    renderRowDecoration: ({ item }) => teamDecoration.current(item.path),
     composition: {
       contextMenu: {
         triggerMode: "right-click",
@@ -310,7 +309,7 @@ export default function FileBrowserPanel({
       row.isExpanded &&
       loadingDirectoriesRef.current.has(item.path.replace(/\/$/, ""))
         ? { icon: "t3-tree-icon-loading", title: "Loading…" }
-        : null,
+        : teamDecoration.current(item.path), // team-layer: holder marks (team/UI_PLAN.md slice 1)
     search: false,
     onSearchChange: (value) => setQuery(value ?? ""),
     unsafeCSS: PIERRE_TREE_UNSAFE_CSS + TEAM_TREE_DECORATION_CSS, // team-layer

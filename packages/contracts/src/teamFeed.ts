@@ -18,7 +18,7 @@ import {
   TeamThreadRef,
 } from "./team.ts";
 import { TeamQuestion } from "./teamAsk.ts";
-import { TeamThreadCards } from "./teamCards.ts";
+import { type TeamCardEntry, TeamThreadCards } from "./teamCards.ts";
 
 /**
  * - `solo`: kept on this computer, nothing to sync.
@@ -119,5 +119,43 @@ export const applyTeamFeedEvent = (
       return teams.filter((team) => team.teamId !== event.teamId);
     case "threadCards":
       return teams;
+  }
+};
+
+/** What a client keeps from the feed: the teams, and each chat's cards by thread id. */
+export interface TeamFeedState {
+  readonly teams: ReadonlyArray<TeamFeedTeam>;
+  readonly threadCards: ReadonlyMap<string, ReadonlyArray<TeamCardEntry>>;
+}
+
+export const EMPTY_TEAM_FEED_STATE: TeamFeedState = { teams: [], threadCards: new Map() };
+
+/**
+ * Folds one feed event into the state. A team event keeps the cards map as it
+ * was and a cards event keeps the teams list, so readers of one part do not
+ * redraw when the other changes.
+ */
+export const applyTeamFeedStateEvent = (
+  state: TeamFeedState,
+  event: TeamFeedEvent,
+): TeamFeedState => {
+  switch (event._tag) {
+    case "snapshot":
+      return {
+        teams: event.teams,
+        threadCards: new Map(
+          (event.threadCards ?? []).flatMap((thread) =>
+            thread.entries.length === 0 ? [] : [[thread.threadId, thread.entries] as const],
+          ),
+        ),
+      };
+    case "threadCards": {
+      const threadCards = new Map(state.threadCards);
+      if (event.cards.entries.length === 0) threadCards.delete(event.cards.threadId);
+      else threadCards.set(event.cards.threadId, event.cards.entries);
+      return { teams: state.teams, threadCards };
+    }
+    default:
+      return { teams: applyTeamFeedEvent(state.teams, event), threadCards: state.threadCards };
   }
 };

@@ -16,6 +16,11 @@ const state = vi.hoisted(() => ({
   environmentIds: ["one", "two"],
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: (id: string) => state.shells.get(id) }));
+// team-layer: the coordinator reads the team feed's cards; these tests have none.
+vi.mock("~/state/teamFeed", () => ({
+  useTeamThreadCardsByThread: () => new Map(),
+  teamAwaitsUser: () => false,
+}));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => state.navigate,
   useParams: () => ({}),

@@ -1,4 +1,6 @@
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
+import { withTeamCardEntries } from "./team/teamTimeline"; // team-layer
+import { useTeamThreadCards } from "~/state/teamFeed"; // team-layer
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
@@ -3957,7 +3959,16 @@ export default function ChatView(props: ChatViewProps) {
       ),
     [optimisticUserMessages],
   );
-  const timelineEntries = isServerThread ? serverTimelineEntries : draftTimelineEntries;
+  // team-layer: the chat's team cards among its entries (team/V2_PORT_PLAN.md D1).
+  const teamCards = useTeamThreadCards(
+    activeThreadRef?.environmentId ?? null,
+    activeThreadRef?.threadId ?? null,
+  );
+  const serverEntriesWithTeamCards = useMemo(
+    () => withTeamCardEntries(serverTimelineEntries, teamCards),
+    [serverTimelineEntries, teamCards],
+  );
+  const timelineEntries = isServerThread ? serverEntriesWithTeamCards : draftTimelineEntries;
   const timelineMessages = useMemo(
     () => timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
     [timelineEntries],

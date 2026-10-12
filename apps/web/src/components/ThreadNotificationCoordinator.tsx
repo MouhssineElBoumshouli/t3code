@@ -1,4 +1,6 @@
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { TeamCardEntry } from "@t3tools/contracts"; // team-layer
+import { teamAwaitsUser, useTeamThreadCardsByThread } from "~/state/teamFeed"; // team-layer
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
@@ -90,6 +92,8 @@ export function ThreadNotificationCoordinator() {
 
 interface NotificationState {
   readonly raw: OrchestrationV2ThreadShell;
+  /** team-layer: the chat's card records the state was computed with. */
+  readonly teamEntries: ReadonlyArray<TeamCardEntry> | undefined;
   readonly attention: string | null;
   readonly completion: number | null;
 }
@@ -115,6 +119,8 @@ function EnvironmentNotifications({
     strict: false,
   });
   const previous = useRef(new Map<ThreadId, NotificationState>());
+  // team-layer: a warning card that waits on the user is input (team/V2_PORT_PLAN.md D4).
+  const teamCards = useTeamThreadCardsByThread(environmentId);
 
   useEffect(() => {
     if (threads === null) {
@@ -125,13 +131,19 @@ function EnvironmentNotifications({
     for (const rawThread of threads) {
       if (rawThread.lineage.relationshipToParent === "subagent") continue;
       const prior = previous.current.get(rawThread.id);
+      const teamEntries = teamCards.get(rawThread.id); // team-layer
       // The same object cannot produce a new notification.
-      if (prior?.raw === rawThread) {
+      if (prior?.raw === rawThread && prior.teamEntries === teamEntries) {
         next.set(rawThread.id, prior);
         continue;
       }
       const thread = presentThreadShell(environmentId, rawThread);
-      let status = resolveSidebarThreadStatus(thread);
+      let status = resolveSidebarThreadStatus(
+        // team-layer: an open warning card counts as input.
+        teamAwaitsUser(teamEntries, thread.latestRun?.runId ?? null)
+          ? { ...thread, hasPendingUserInput: true }
+          : thread,
+      );
       if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
       const attention =
         status === "input" || status === "approval" || status === "failed" || status === "limited"
@@ -145,7 +157,7 @@ function EnvironmentNotifications({
         Number.isFinite(completedAt)
           ? completedAt
           : (prior?.completion ?? null);
-      next.set(thread.id, { raw: rawThread, attention, completion });
+      next.set(thread.id, { raw: rawThread, teamEntries, attention, completion });
       if (!prior || thread.archivedAt !== null) continue;
       const kind =
         attention && attention !== prior.attention
@@ -240,6 +252,7 @@ function EnvironmentNotifications({
     mode,
     navigate,
     onNotification,
+    teamCards, // team-layer
     threads,
   ]);
 

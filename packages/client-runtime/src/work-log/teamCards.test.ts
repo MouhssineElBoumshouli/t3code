@@ -1,16 +1,15 @@
-import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
+import { RunId, type TeamCardEntry } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { foldTeamChoiceActivities, teamCardOf } from "./teamCards.ts";
+import { teamCardRows } from "./teamCards.ts";
 
-const activity = (id: string, kind: string, payload: unknown): OrchestrationThreadActivity => ({
-  id: EventId.make(id),
-  tone: "info",
+const entry = (id: string, kind: TeamCardEntry["kind"], payload: unknown): TeamCardEntry => ({
+  id,
   kind,
   summary: kind,
   payload,
-  turnId: TurnId.make("turn-1"),
-  createdAt: "2026-10-08T00:00:00.000Z",
+  runId: RunId.make("run-1"),
+  createdAt: "2026-10-12T00:00:00.000Z",
 });
 
 const card = {
@@ -20,89 +19,63 @@ const card = {
   files: [{ path: "src/a.ts", holders: [{ kind: "member", memberId: "omar", name: "Omar" }] }],
 };
 
-describe("team cards", () => {
-  it("keeps an unanswered warning card as it is", () => {
-    const activities = [activity("a", "team.choice", card)];
-    expect(foldTeamChoiceActivities(activities)).toBe(activities);
-    expect(teamCardOf(activities[0]!)).toEqual({ kind: "choice", card: { ...card, made: null } });
+describe("teamCardRows", () => {
+  it("draws an unanswered warning card as it is", () => {
+    expect(teamCardRows([entry("a", "team.choice", card)])).toEqual([
+      {
+        id: "a",
+        createdAt: "2026-10-12T00:00:00.000Z",
+        runId: "run-1",
+        key: "a|",
+        card: { kind: "choice", card: { ...card, made: null } },
+      },
+    ]);
   });
 
-  it("folds the choice into its card, at the card's place, and keeps the folded card stable", () => {
-    const open = activity("a", "team.choice", card);
-    const other = activity("b", "tool.completed", {});
-    const made = activity("c", "team.choice.made", {
-      choiceId: "team-choice:1",
-      choice: "goAnyway",
-      delivery: "turn",
-    });
-    const first = foldTeamChoiceActivities([open, other, made]);
-    expect(first.map((entry) => entry.id)).toEqual(["a", "b"]);
-    expect(teamCardOf(first[0]!)).toEqual({
-      kind: "choice",
-      card: { ...card, made: { choiceId: "team-choice:1", choice: "goAnyway", delivery: "turn" } },
-    });
-    // Same inputs, same object: the timeline row is not redrawn.
-    expect(foldTeamChoiceActivities([open, other, made])[0]).toBe(first[0]);
-  });
-
-  it("shows a card's newest record: waiting, then stopped, then waiting again", () => {
-    const open = activity("a", "team.choice", card);
-    const record = (id: string, wait: string) =>
-      activity(id, "team.choice.made", {
+  it("folds the newest choice into its card, at the card's place, and changes the key", () => {
+    const open = entry("a", "team.choice", card);
+    const plan = entry("p", "team.plan", { solo: false, shared: true, files: [] });
+    const made = (id: string, choice: string, extra: object = {}) =>
+      entry(id, "team.choice.made", {
         choiceId: "team-choice:1",
-        choice: "wait",
-        delivery: "none",
-        wait,
+        choice,
+        delivery: "held",
+        ...extra,
       });
-    const waitOf = (activities: ReadonlyArray<OrchestrationThreadActivity>) => {
-      const drawn = teamCardOf(foldTeamChoiceActivities(activities)[0]!);
-      return drawn?.kind === "choice" ? drawn.card.made?.wait : undefined;
-    };
-    expect(waitOf([open, record("b", "waiting")])).toBe("waiting");
-    expect(waitOf([open, record("b", "waiting"), record("c", "cancelled")])).toBe("cancelled");
-    expect(
-      waitOf([open, record("b", "waiting"), record("c", "cancelled"), record("d", "waiting")]),
-    ).toBe("waiting");
+    const rows = teamCardRows([
+      open,
+      plan,
+      made("m1", "wait", { wait: "waiting" }),
+      made("m2", "wait", { wait: "cancelled" }),
+    ]);
+    expect(rows.map((row) => [row.id, row.key])).toEqual([
+      ["a", "a|m2"],
+      ["p", "p|"],
+    ]);
+    expect(rows[0]!.card.kind === "choice" && rows[0]!.card.card.made?.wait).toBe("cancelled");
   });
 
-  it("ignores a choice for another card and draws nothing for a malformed card", () => {
-    const open = activity("a", "team.choice", card);
-    const stray = activity("c", "team.choice.made", {
-      choiceId: "team-choice:2",
-      choice: "anotherWay",
-      delivery: "held",
-    });
-    const folded = foldTeamChoiceActivities([open, stray]);
-    expect(folded).toEqual([open]);
-    expect(teamCardOf(activity("d", "team.choice", { choiceId: "x" }))).toBeUndefined();
-  });
-
-  it("folds a teammate's answer into the question card on the holder's chat", () => {
+  it("folds a question's answer, and draws nothing for a malformed record", () => {
     const question = {
       questionId: "q1",
       teamId: "team-1",
       threadId: "thread-1",
       from: { memberId: "sara", name: "Sara" },
       paths: ["src/a.ts"],
-      text: "Only a param",
-      askedAt: "2026-10-08T00:00:00.000Z",
+      text: null,
+      askedAt: "2026-10-12T00:00:00.000Z",
     };
-    const shown = activity("a", "team.question", question);
-    expect(teamCardOf(shown)).toEqual({ kind: "question", card: { ...question, closed: null } });
-    const closed = activity("b", "team.question.closed", {
-      questionId: "q1",
-      threadId: "thread-1",
-      outcome: "yes",
-      text: "Go ahead",
-    });
-    const folded = foldTeamChoiceActivities([shown, closed]);
-    expect(folded.map((entry) => entry.id)).toEqual(["a"]);
-    expect(teamCardOf(folded[0]!)).toEqual({
-      kind: "question",
-      card: {
-        ...question,
-        closed: { questionId: "q1", threadId: "thread-1", outcome: "yes", text: "Go ahead" },
-      },
-    });
+    const rows = teamCardRows([
+      entry("q", "team.question", question),
+      entry("c", "team.question.closed", {
+        questionId: "q1",
+        threadId: "thread-1",
+        outcome: "yes",
+        text: "ok",
+      }),
+      entry("bad", "team.choice", { nope: 1 }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.card.kind === "question" && rows[0]!.card.card.closed?.outcome).toBe("yes");
   });
 });

@@ -2,6 +2,16 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-12 — v2 port, step 5: web
+
+- **What changed.**
+  - Contracts: `TeamFeedState` and `applyTeamFeedStateEvent` (teams and each chat's card records; a team event keeps the cards map, a cards event keeps the teams list). `isTeamAppMessageId` removed (no user left).
+  - client-runtime: the feed atom (`feed`) folds into that state (`Stream.scan` takes its seed as a function in the new Effect); `work-log/teamCards.ts` is now `teamCardRows(entries)`: one row per card with its newest choice or answer folded in, at the card's place, with a `key` (card id and latest record id) that rows compare, since feed events bring new objects each time.
+  - Web: `state/teamFeed.ts` gains `useTeamThreadCards`, `useTeamThreadCardsByThread`, `useTeamAwaitsUser` (D4, `countOpenTeamChoices` on the chat's latest run). New `components/team/teamTimeline.ts` (`withTeamCardEntries`: each card before the first newer entry). Marked edits: `session-logic.ts` (a `team-card` timeline entry), `MessagesTimeline.logic.ts` (its run id, its own row that stays visible when the run folds, row comparison by key; the working row reads "Waiting for your input" and no "thinking" row while a warning card of the running run waits), `MessagesTimeline.tsx` (draws the card), `ChatView.tsx` (merges the chat's cards into its entries), `Sidebar.tsx` and `ThreadNotificationCoordinator.tsx` (an open card counts as input; the coordinator's per-chat cache also notices a change of the chat's cards), `FileBrowserPanel.tsx` (upstream added its own row decoration for loading folders; ours now comes after it in the same function). `TeamAppMessage.tsx` removed: the app's messages are upstream's notification rows now (D2). The two notification tests mock our feed module (marked), as they mock `@effect/atom-react`.
+- Checked: web `tsc` 0 errors. Tests: contracts `teamFeed.test.ts` + `teamCards.test.ts` 5; client-runtime `work-log/` + `teamMarkers` 8 files, 485; web `components/team/`, `MessagesTimeline.logic`, `session-logic`, `Sidebar.logic` 4 files, 359 (new `teamChoiceTimeline.test.ts`: card placed by time; card row, "awaiting input" until the choice); `ThreadNotificationCoordinator` (2), `MessagesTimeline.test.tsx`, `Sidebar.snooze/drag/pointer/motion` 7 files, 227.
+- Not done, on purpose: v1's "Could not change 1 file" label for a refused edit. Upstream restructured that summary (failed groups now carry `hasFailure`); re-adding the label would reach into its grouping tables, so it is a follow-up. Mobile still draws no team UI.
+- Unsure: the server's auto-settle does not know about cards, so a chat whose run ended with a card still open could settle after upstream's inactivity window; the card still takes a click.
+
 ## 2026-10-12 — v2 port, step 4: provider hooks
 
 - **What changed** (WIP commit 614debbf6, finished in a1de6225a), all `team-layer:` marked:

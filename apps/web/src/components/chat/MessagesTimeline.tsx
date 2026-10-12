@@ -174,6 +174,11 @@ import {
   SnapShotAttachmentDetails,
 } from "./SnapShotAttachmentDetails";
 import { ProposedPlanCard } from "./ProposedPlanCard";
+// team-layer: the plan, warning and question cards (team/V2_PORT_PLAN.md D1)
+import type { TeamCard } from "@t3tools/client-runtime/work-log/team-cards";
+import { TeamChoiceCard } from "../team/TeamChoiceCard";
+import { TeamPlanCard } from "../team/TeamPlanCard";
+import { TeamQuestionCard } from "../team/TeamQuestionCard";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
 import { ChangedFilesCard } from "./ChangedFilesTree";
@@ -2058,7 +2063,8 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                 row.kind === "event" ||
                 row.kind === "attempt-fold" ||
                 row.kind === "html-render" ||
-                row.kind === "mcp-app"
+                row.kind === "mcp-app" ||
+                row.kind === "team-card" // team-layer
               ? "pb-2"
               : "pb-4",
         (row.kind === "message" && row.message.role === "assistant") ||
@@ -2107,6 +2113,8 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "assistant-meta" ? <AssistantMetaTimelineRow row={row} /> : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "html-render" ? <HtmlRenderTimelineRow row={row} /> : null}
+      {/* team-layer: the plan, warning and question cards (team/V2_PORT_PLAN.md D1) */}
+      {row.kind === "team-card" ? <TeamCardTimelineRow card={row.teamCard.card} /> : null}
       {row.kind === "mcp-app" ? <McpAppTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
@@ -2993,6 +3001,26 @@ function ProposedPlanTimelineRow({
   );
 }
 
+// team-layer: the plan, warning and question cards (team/V2_PORT_PLAN.md D1)
+function TeamCardTimelineRow({ card }: { card: TeamCard }) {
+  const ctx = use(TimelineRowCtx);
+  return (
+    <div className="min-w-0 px-1 py-0.5">
+      {card.kind === "plan" ? (
+        <TeamPlanCard plan={card.plan} resolvedTheme={ctx.resolvedTheme} />
+      ) : card.kind === "question" ? (
+        <TeamQuestionCard card={card.card} environmentId={ctx.activeThreadEnvironmentId} />
+      ) : (
+        <TeamChoiceCard
+          card={card.card}
+          environmentId={ctx.activeThreadEnvironmentId}
+          resolvedTheme={ctx.resolvedTheme}
+        />
+      )}
+    </div>
+  );
+}
+
 function HtmlRenderTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "html-render" }> }) {
   const ctx = use(TimelineRowCtx);
 
@@ -3747,6 +3775,8 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
   const shimmer = isPreparingWorktree || isCompacting;
   const label = isPreparingWorktree ? (
     "Setting up worktree…"
+  ) : row.awaitingInput ? ( // team-layer: an open warning card
+    "Waiting for your input"
   ) : isCompacting ? (
     <CompactingLabel />
   ) : row.createdAt ? (

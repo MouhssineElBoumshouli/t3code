@@ -1,4 +1,5 @@
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import type { TeamCardRow } from "@t3tools/client-runtime/work-log/team-cards"; // team-layer
 import {
   type AssetResource,
   type OrchestrationV2ExecutionNode,
@@ -161,6 +162,14 @@ export type TimelineEntry = (
       readonly kind: "work";
       readonly createdAt: string;
       readonly entry: WorkLogEntry;
+    }
+  | {
+      /** team-layer: a plan, warning or question card (team/V2_PORT_PLAN.md D1). */
+      readonly id: string;
+      readonly kind: "team-card";
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly teamCard: TeamCardRow;
     }
   | {
       readonly id: string;
