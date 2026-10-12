@@ -552,7 +552,17 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   // Asks T3 Connect to deliver webhooks it held while this environment was offline.
   HeldHooksWaker.layer,
-  layerThreadSettlementWorker,
+  // team-layer: the team state, cards, feed and background work (team/V2_PORT_PLAN.md),
+  // under the settlement worker so it skips chats with a card in play. The event sink is
+  // the runtime's own (same layer, built once), for its stored events.
+  layerThreadSettlementWorker.pipe(
+    Layer.provideMerge(
+      TeamServerLayer.layer.pipe(
+        Layer.provide(layerPullRequestService),
+        Layer.provide(RuntimeLayer.layerEventSink),
+      ),
+    ),
+  ),
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   layerThreadPullRequestWorker,
   Layer.effectDiscard(
@@ -580,12 +590,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
   ReplayMarkers.layer,
-  // team-layer: the team state, cards, feed and background work (team/V2_PORT_PLAN.md).
-  // The event sink is the runtime's own (same layer, built once), for its stored events.
-  TeamServerLayer.layer.pipe(
-    Layer.provide(layerPullRequestService),
-    Layer.provide(RuntimeLayer.layerEventSink),
-  ),
 ).pipe(
   // Core Services
   Layer.provideMerge(layerOrchestrationApplication),

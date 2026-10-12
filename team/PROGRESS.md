@@ -2,6 +2,13 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-12 — Usage budget; auto-settle and the refused-edit label
+
+- **What changed.** `team/WORKING_RULES.md` has a "Usage budget" section (db1ed90b2). Upstream's automatic settling skips a chat while a warning card of its latest run is in play: waiting for the user's choice, asked and waiting for a teammate, or waiting for its holder (new `hasTeamChoiceInPlay` in contracts `teamCards.ts`, next to `countOpenTeamChoices`, sharing one helper). `ThreadSettlementService.ts` reads `TeamCards` as an optional service (marked); `server.ts` now puts the settlement worker on top of the team layer so it sees it (one marked block, replacing the old team entry). The tool group summary again says "Could not change 1 file" for a failed or refused edit (`client-runtime work-log/presentation.ts`, marked: its own group, same priority as edits); web and mobile both use that summary.
+- Files: `packages/contracts/src/teamCards.ts` (+ test), `apps/server/src/orchestration-v2/ThreadSettlementService.ts` (+ test), `apps/server/src/server.ts`, `packages/client-runtime/src/work-log/presentation.ts` (+ test), `team/UPSTREAM_SYNC.md` (hooked files), `team/WORKING_RULES.md`.
+- Checked: contracts `teamCards.test.ts` 5 passed; server `ThreadSettlementService.test.ts` 29 passed (new: a stale chat with an open card is skipped, a stale chat without one settles); client-runtime `presentation.test.ts` 100 passed. `tsc` contracts and client-runtime 0 errors; lint on the changed files clean. Server typecheck and a live start come at the end of this round.
+- Unsure: an old card the user moved past (a newer run) no longer holds the chat, on purpose, so a forgotten card cannot keep a chat from ever settling. Whether a guard-refused edit reaches the client as a failed item on every provider is not re-checked live (the v1 label used the same status).
+
 ## 2026-10-12 — Upstream sync landed on main
 
 - **What changed.** `sync/upstream-2026-10-11` merged into `main` (83757a748, `--no-ff`; tree identical to the branch head dcdfc0256) and pushed. Rollback point: tag `pre-upstream-sync-2026-10-11` (004f283df). New `team/UPSTREAM_SYNC.md`: the sync steps, the upstream files we hook into, and what was hard this time.

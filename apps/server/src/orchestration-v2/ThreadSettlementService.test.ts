@@ -1,4 +1,8 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import {
+  SourceControlProviderKind,
+  TEAM_CHOICE_ACTIVITY_KIND, // team-layer
+  type TeamCardEntry, // team-layer
+} from "@t3tools/contracts";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import {
@@ -35,6 +39,7 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerActivation from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as TeamCards from "../team/TeamCards.ts"; // team-layer
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -785,6 +790,39 @@ describe("ThreadSettlementServiceV2 worker", () => {
           expect(commands[0]?.settledAt).toEqual(thread.latestRunCompletedAt);
           expect(commands[0]?.snapshotAt).toEqual(thread.updatedAt);
         }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  // team-layer: a chat whose team warning card waits for the user is not stale.
+  it.effect("leaves a chat alone while its team warning card is in play", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const stale = { latestRunCompletedAt: DateTime.makeUnsafe("2026-08-25T00:00:00.000Z") };
+        const held = makeThread("held", { ...stale, latestRunId: "run-1" as never });
+        const free = makeThread("free", stale);
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([held, free]),
+          settings: { ...DEFAULT_SERVER_SETTINGS, sidebarAutoSettleAfterDays: 2 },
+        });
+        const card = {
+          id: "card-1",
+          kind: TEAM_CHOICE_ACTIVITY_KIND,
+          summary: "Held elsewhere",
+          runId: "run-1" as never,
+          createdAt: NOW,
+          payload: { choiceId: "c1", threadId: held.id, solo: true, files: [] },
+        } as unknown as TeamCardEntry;
+        const teamCards = Layer.mock(TeamCards.TeamCards)({
+          forThread: (threadId) => Effect.succeed(threadId === held.id ? [card] : []),
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+          const commands = yield* Ref.get(fixture.commands);
+          expect(commands.map((command) => command.threadId)).toEqual([free.id]);
+        }).pipe(Effect.provide(fixture.layer.pipe(Layer.provide(teamCards))));
       }),
     ),
   );

@@ -3,6 +3,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import {
   CommandId,
+  hasTeamChoiceInPlay, // team-layer
   type ThreadId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadShell,
@@ -15,6 +16,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option"; // team-layer
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -24,6 +26,7 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as TeamCards from "../team/TeamCards.ts"; // team-layer
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -306,6 +309,8 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const terminals = yield* TerminalManager.TerminalManager;
   const projectScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+  // team-layer: a chat whose team warning card is still in play is not stale (team/UI_PLAN.md).
+  const teamCards = Option.getOrUndefined(yield* Effect.serviceOption(TeamCards.TeamCards));
   // Settling a settled thread re-emits thread.settled with the same settledAt,
   // so this keeps the settle action to one run per settlement.
   const settleActionRunAt = new Map<ThreadId, number>();
@@ -328,7 +333,16 @@ export const make = Effect.gen(function* () {
     // the merged pull request: most threads carry no link and settle from
     // their branch lookup, which would otherwise wait for the next minute's
     // sweep on a possibly stale cached answer.
-    const candidates = threads.filter((thread) => isAutoSettlementCandidate(thread, nowMs));
+    const candidates = yield* Effect.filter(
+      threads.filter((thread) => isAutoSettlementCandidate(thread, nowMs)),
+      // team-layer: skip chats with a team warning card in play.
+      (thread) =>
+        teamCards === undefined
+          ? Effect.succeed(true)
+          : teamCards
+              .forThread(thread.id)
+              .pipe(Effect.map((entries) => !hasTeamChoiceInPlay(entries, thread.latestRunId))),
+    );
 
     const settleThread = Effect.fn("ThreadSettlementServiceV2.settleThread")(
       function* (thread: (typeof candidates)[number], pullRequest: SettlementPullRequest | null) {

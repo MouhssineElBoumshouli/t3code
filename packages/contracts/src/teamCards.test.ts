@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { RunId } from "./baseSchemas.ts";
 import { TEAM_CHOICE_ACTIVITY_KIND, TEAM_CHOICE_MADE_ACTIVITY_KIND } from "./teamChoice.ts";
-import { countOpenTeamChoices } from "./teamCards.ts";
+import { countOpenTeamChoices, hasTeamChoiceInPlay } from "./teamCards.ts";
 
 const run = (id: string) => RunId.make(id);
 type Entry = Parameters<typeof countOpenTeamChoices>[0][number];
@@ -55,5 +55,28 @@ describe("countOpenTeamChoices", () => {
         "r1",
       ),
     ).toBe(0);
+  });
+});
+
+describe("hasTeamChoiceInPlay", () => {
+  it("holds while the card waits for the user, a teammate's answer or its holder", () => {
+    expect(hasTeamChoiceInPlay([card("c1", "r1")], "r1")).toBe(true);
+    const ask = (status: string) => made({ choice: "ask", ask: status, questionId: "q1" });
+    expect(hasTeamChoiceInPlay([card("c1", "r1"), ask("asked")], "r1")).toBe(true);
+    const wait = (status: string) => made({ choice: "wait", wait: status });
+    expect(hasTeamChoiceInPlay([card("c1", "r1"), wait("waiting")], "r1")).toBe(true);
+  });
+
+  it("lets go once the card is answered, or the user moved on to a newer run", () => {
+    expect(hasTeamChoiceInPlay([card("c1", "r1"), made({ choice: "goAnyway" })], "r1")).toBe(false);
+    const ask = (status: string) => made({ choice: "ask", ask: status, questionId: "q1" });
+    const yes = made({ choice: "goAnyway", answer: { yes: true, by: "Sara", text: null } });
+    expect(hasTeamChoiceInPlay([card("c1", "r1"), ask("asked"), yes], "r1")).toBe(false);
+    const wait = (status: string) => made({ choice: "wait", wait: status });
+    expect(hasTeamChoiceInPlay([card("c1", "r1"), wait("waiting"), wait("done")], "r1")).toBe(
+      false,
+    );
+    expect(hasTeamChoiceInPlay([card("c1", "r1")], "r2")).toBe(false);
+    expect(hasTeamChoiceInPlay([], "r1")).toBe(false);
   });
 });

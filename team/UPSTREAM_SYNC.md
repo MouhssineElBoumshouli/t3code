@@ -23,8 +23,8 @@ How to pull in pingdotgg/t3code, and where our team layer hooks into upstream fi
 Every edit carries a `team-layer` comment, so `git grep -n team-layer -- ':!team/'` is the source of truth. As of 2026-10-12:
 
 - **Server wiring:** `apps/server/src/server.ts` (team layers, team MCP tools), `ws.ts` (team RPC handlers), `binCli.ts` (`t3 team`), `auth/RpcAuthorization.ts`, `observability/RpcInstrumentation.ts`.
-- **Turns and providers:** `orchestration-v2/RunExecutionService.ts` (turn text), `orchestration-v2/Adapters/ClaudeAdapterV2.ts`, `CodexAdapterV2.ts` (+ its test's expected config), `AntigravityAdapterV2.ts`, `provider/CodexDeveloperInstructions.ts`, `packages/provider-core/src/server/runtimeInstructions.ts`, `packages/provider-acp/src/server/adapter.ts`.
-- **Contracts and client runtime:** `packages/contracts/src/index.ts`, `rpc.ts`, `clientRpcPermissions.ts`; `packages/client-runtime/package.json` (exports), `src/rpc/client.ts`.
+- **Turns and providers:** `orchestration-v2/RunExecutionService.ts` (turn text), `orchestration-v2/ThreadSettlementService.ts` (+ its test: no auto-settle while a card is in play), `orchestration-v2/Adapters/ClaudeAdapterV2.ts`, `CodexAdapterV2.ts` (+ its test's expected config), `AntigravityAdapterV2.ts`, `provider/CodexDeveloperInstructions.ts`, `packages/provider-core/src/server/runtimeInstructions.ts`, `packages/provider-acp/src/server/adapter.ts`.
+- **Contracts and client runtime:** `packages/contracts/src/index.ts`, `rpc.ts`, `clientRpcPermissions.ts`; `packages/client-runtime/package.json` (exports), `src/rpc/client.ts`, `src/work-log/presentation.ts` (+ its test: "Could not change 1 file").
 - **Web:** `ChatView.tsx`, `CommandPalette.tsx`, `RightPanelTabs.tsx`, `Sidebar.tsx`, `ThreadNotificationCoordinator.tsx` (+ its two tests), `chat/ChatHeader.tsx`, `chat/MessagesTimeline.tsx`, `chat/MessagesTimeline.logic.ts`, `files/FileBrowserPanel.tsx`, `files/FilePreviewPanel.tsx`, `session-logic.ts`, `apps/web/vite.config.ts`.
 - **Tooling:** `scripts/dev-runner.ts`, `.gitignore`. Fork-only text: `AGENTS.md` (fork note), `CLAUDE.md`, `README.md`.
 

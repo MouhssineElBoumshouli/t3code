@@ -14,6 +14,8 @@ import {
   TeamChoiceActivityPayload,
   TeamChoiceMadePayload,
   teamChoiceAwaitsUser,
+  teamChoiceIsOpen,
+  teamChoiceIsWaiting,
 } from "./teamChoice.ts";
 import { TEAM_PLAN_ACTIVITY_KIND } from "./teamPlan.ts";
 
@@ -52,6 +54,31 @@ export type TeamThreadCards = typeof TeamThreadCards.Type;
 const decodeChoice = Schema.decodeUnknownOption(TeamChoiceActivityPayload);
 const decodeMade = Schema.decodeUnknownOption(TeamChoiceMadePayload);
 
+/** The choice cards of the chat's latest run (or shown with no run) whose newest record passes `state`. */
+function choiceIdsWhere(
+  entries: ReadonlyArray<Pick<TeamCardEntry, "kind" | "payload" | "runId">>,
+  latestRunId: string | null,
+  state: (made: TeamChoiceMadePayload | undefined) => boolean,
+): ReadonlySet<string> {
+  // Oldest first: the newest record of each card wins. A cancelled wait opens it again.
+  const made = new Map<string, TeamChoiceMadePayload>();
+  for (const entry of entries) {
+    if (entry.kind !== TEAM_CHOICE_MADE_ACTIVITY_KIND) continue;
+    const payload = decodeMade(entry.payload);
+    if (payload._tag === "Some") made.set(payload.value.choiceId, payload.value);
+  }
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind !== TEAM_CHOICE_ACTIVITY_KIND) continue;
+    const payload = decodeChoice(entry.payload);
+    if (payload._tag === "None" || !state(made.get(payload.value.choiceId))) continue;
+    // A card shown with no run going has no run to be overtaken by.
+    if (entry.runId !== null && entry.runId !== latestRunId) continue;
+    ids.add(payload.value.choiceId);
+  }
+  return ids;
+}
+
 /**
  * How many of a chat's warning cards wait on the user (V2_PORT_PLAN.md D4):
  * clients count the chat as awaiting input while this is above zero.
@@ -65,23 +92,23 @@ export function countOpenTeamChoices(
   entries: ReadonlyArray<Pick<TeamCardEntry, "kind" | "payload" | "runId">>,
   latestRunId: string | null,
 ): number {
-  // Oldest first: the newest record of each card wins. A cancelled wait opens it again.
-  const made = new Map<string, TeamChoiceMadePayload>();
-  for (const entry of entries) {
-    if (entry.kind !== TEAM_CHOICE_MADE_ACTIVITY_KIND) continue;
-    const payload = decodeMade(entry.payload);
-    if (payload._tag === "Some") made.set(payload.value.choiceId, payload.value);
-  }
-  const open = new Set<string>();
-  for (const entry of entries) {
-    if (entry.kind !== TEAM_CHOICE_ACTIVITY_KIND) continue;
-    const payload = decodeChoice(entry.payload);
-    if (payload._tag === "None" || !teamChoiceAwaitsUser(made.get(payload.value.choiceId))) {
-      continue;
-    }
-    // A card shown with no run going has no run to be overtaken by.
-    if (entry.runId !== null && entry.runId !== latestRunId) continue;
-    open.add(payload.value.choiceId);
-  }
-  return open.size;
+  return choiceIdsWhere(entries, latestRunId, teamChoiceAwaitsUser).size;
+}
+
+/**
+ * Whether a warning card of the chat's latest run is still in play: waiting
+ * for the user's choice, for a teammate's answer, or for its holder. The
+ * server's automatic settling leaves such a chat alone.
+ */
+export function hasTeamChoiceInPlay(
+  entries: ReadonlyArray<Pick<TeamCardEntry, "kind" | "payload" | "runId">>,
+  latestRunId: string | null,
+): boolean {
+  return (
+    choiceIdsWhere(
+      entries,
+      latestRunId,
+      (made) => teamChoiceIsOpen(made) || teamChoiceIsWaiting(made),
+    ).size > 0
+  );
 }

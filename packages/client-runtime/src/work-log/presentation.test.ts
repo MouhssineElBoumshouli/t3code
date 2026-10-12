@@ -206,6 +206,33 @@ describe("summarizeToolGroup", () => {
     ...overrides,
   });
 
+  // team-layer: a refused edit (the team guard) changed nothing.
+  it("does not count a refused or failed edit as a change", () => {
+    const refused = entry("refused", {
+      label: "File change",
+      itemType: "file_change",
+      toolLifecycleStatus: "failed",
+      changedFiles: ["src/auth/session.ts"],
+    });
+    const made = entry("made", {
+      label: "File change",
+      itemType: "file_change",
+      toolLifecycleStatus: "completed",
+      changedFiles: ["src/a.ts"],
+    });
+
+    expect(summarizeToolGroup([refused])).toEqual({
+      summary: "Could not change 1 file",
+      hasFailure: true,
+    });
+    expect(summarizeToolGroup([refused, made]).summary).toBe(
+      "Could not change 1 file and changed 1 file",
+    );
+    expect(
+      summarizeToolGroup([made, { ...made, id: "b", changedFiles: ["src/b.ts"] }]).summary,
+    ).toBe("Changed 2 files");
+  });
+
   it("excludes reasoning from mixed tool counts and icons", () => {
     const thought = entry("thought", {
       itemType: "reasoning",

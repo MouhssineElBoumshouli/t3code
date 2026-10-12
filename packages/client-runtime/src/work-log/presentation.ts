@@ -600,6 +600,15 @@ function t3ToolSummaryCall(entry: WorkLogPresentationEntry): T3ToolSummaryCall {
   };
 }
 
+// team-layer: an edit that failed or was refused (the team guard) changed nothing.
+const editChangedNothing = (entry: WorkLogPresentationEntry) =>
+  entry.toolLifecycleStatus === "failed" || entry.toolLifecycleStatus === "declined";
+
+const couldNotChangeLabel = (entries: ReadonlyArray<WorkLogPresentationEntry>) => {
+  const count = toolGroupActionCount("edit", entries);
+  return `Could not change ${count} ${count === 1 ? "file" : "files"}`;
+};
+
 function summaryActionPriority(action: ToolGroupAction | T3McpToolSummaryAction): number {
   switch (action) {
     case "command":
@@ -656,7 +665,7 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
   }
   entries = toolEntries;
   const groups = new Map<
-    ToolGroupAction | T3McpToolSummaryAction,
+    ToolGroupAction | T3McpToolSummaryAction | "edit-failed", // team-layer
     {
       action: ToolGroupAction;
       t3Action: T3McpToolSummaryAction | null;
@@ -671,7 +680,9 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
       continue;
     }
     const action = toolGroupAction(entry);
-    const key = t3Action ?? action;
+    // team-layer: refused edits get their own "Could not change" group.
+    const key =
+      t3Action ?? (action === "edit" && editChangedNothing(entry) ? "edit-failed" : action);
     const group = groups.get(key);
     if (group) group.entries.push(entry);
     else groups.set(key, { action, t3Action, entries: [entry] });
@@ -679,14 +690,17 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
   const summaries = [...groups].map(([action, group], index) => ({
     index,
     count: group.entries.length,
-    priority: summaryActionPriority(action),
+    priority: summaryActionPriority(group.t3Action ?? group.action), // team-layer
     ...(group.t3Action
       ? summarizeT3ToolCalls(group.t3Action, group.entries.map(t3ToolSummaryCall))
       : {
-          label: toolGroupActionLabel(
-            group.action,
-            toolGroupActionCount(group.action, group.entries),
-          ),
+          label:
+            action === "edit-failed" // team-layer
+              ? couldNotChangeLabel(group.entries)
+              : toolGroupActionLabel(
+                  group.action,
+                  toolGroupActionCount(group.action, group.entries),
+                ),
           failedCount: group.entries.filter(workEntryDisplayIndicatesToolFailure).length,
         }),
   }));
