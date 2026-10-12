@@ -540,10 +540,10 @@ export const make = Effect.gen(function* () {
       }
       return resolved.context;
     }).pipe(
-      Effect.catchTag("TeamToolError", (error) =>
-        Effect.fail(new TeamChoiceError({ detail: error.detail })),
-      ),
-      Effect.catchTag("TeamToolFailedError", failed("The team could not be read.")),
+      Effect.catchTags({
+        TeamToolError: (error) => Effect.fail(new TeamChoiceError({ detail: error.detail })),
+        TeamToolFailedError: failed("The team could not be read."),
+      }),
     );
 
   /** "Ask": the question goes to the team state for the teammates the card names. */

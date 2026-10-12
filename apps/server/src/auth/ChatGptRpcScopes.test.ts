@@ -334,16 +334,14 @@ it.layer(ReadOnlySocketLive, { timeout: STARTUP_TIMEOUT_MS + 30_000, excludeTest
       }),
     );
 
-    for (const tag of CHATGPT_RPCS) {
-      it.effect(`${tag} refuses an orchestration:read session`, () =>
-        Effect.gen(function* () {
-          const { wsUrl } = yield* ReadOnlySocket;
-          const exit = yield* callByName(wsUrl, tag, yield* samplePayload(tag));
-          const failure = failureOf(exit);
-          assert.strictEqual(failure?._tag, "EnvironmentAuthorizationError");
-          assert.strictEqual(failure?.requiredScope, "orchestration:operate");
-        }),
-      );
-    }
+    it.effect.each(CHATGPT_RPCS)("%s refuses an orchestration:read session", (tag) =>
+      Effect.gen(function* () {
+        const { wsUrl } = yield* ReadOnlySocket;
+        const exit = yield* callByName(wsUrl, tag, yield* samplePayload(tag));
+        const failure = failureOf(exit);
+        assert.strictEqual(failure?._tag, "EnvironmentAuthorizationError");
+        assert.strictEqual(failure?.requiredScope, "orchestration:operate");
+      }),
+    );
   },
 );

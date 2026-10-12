@@ -8,7 +8,6 @@ import {
   EnvironmentId,
   type OrchestrationV2ServerCommand,
   ProjectId,
-  ProviderInstanceId,
   RunId,
   TeamFile,
   TeamId,

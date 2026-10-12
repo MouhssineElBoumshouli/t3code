@@ -20,7 +20,6 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 
 import { makeTeamBriefingResolver } from "../mcp/toolkits/team/briefing.ts";
-import * as ProjectService from "../project/ProjectService.ts";
 import * as TeamHost from "./state/TeamHost.ts";
 import { renderTeamBriefing } from "./TeamBriefing.ts";
 import * as TeamOrchestrator from "./teamOrchestrator.testkit.ts";

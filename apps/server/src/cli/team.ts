@@ -218,9 +218,10 @@ export const runTeamInit = Effect.fn("runTeamInit")(function* (input: TeamInitIn
         })
         .pipe(
           // Timed out, or Git did not run: as unreachable as a failed command.
-          Effect.catchTag("GitCommandError", (error) =>
-            Effect.succeed({ exitCode: -1, stdout: "", stderr: error.detail }),
-          ),
+          Effect.catchTags({
+            GitCommandError: (error) =>
+              Effect.succeed({ exitCode: -1, stdout: "", stderr: error.detail }),
+          }),
         );
       if (state.exitCode !== 0) {
         return localOnly(
@@ -238,9 +239,10 @@ export const runTeamInit = Effect.fn("runTeamInit")(function* (input: TeamInitIn
         isPublic,
       } satisfies RemotePlan;
     }).pipe(
-      Effect.catchTag("GitCommandError", (error) =>
-        Effect.fail(new TeamProjectRegisterError({ detail: error.message, cause: error })),
-      ),
+      Effect.catchTags({
+        GitCommandError: (error) =>
+          Effect.fail(new TeamProjectRegisterError({ detail: error.message, cause: error })),
+      }),
     );
 
   let plan: RemotePlan = localOnly("not checked");
@@ -335,7 +337,7 @@ const confirmCreate = Effect.gen(function* () {
     });
   }
   return yield* Prompt.run(Prompt.Confirm({ message: "Create it?", initial: false })).pipe(
-    Effect.catchTag("QuitError", () => Effect.succeed(false)),
+    Effect.catchTags({ QuitError: () => Effect.succeed(false) }),
   );
 });
 

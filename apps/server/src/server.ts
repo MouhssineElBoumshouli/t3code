@@ -180,6 +180,7 @@ import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
 import * as ServerActivation from "./serverActivation.ts";
+import * as TeamMcpLayer from "./team/teamMcpLayer.ts"; // team-layer
 import * as TeamServerLayer from "./team/teamServerLayer.ts"; // team-layer
 
 // MCP handoff thread IDs include escaped provenance and can exceed find-my-way's
@@ -721,9 +722,14 @@ const layerMakeRoutes = Layer.mergeAll(
   // delegation targets through the same live adapter facade the V2
   // orchestrator uses, so MCP capability reporting can never drift from
   // what dispatch can actually serve.
-  McpHttpServer.layer.pipe(
-    Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
-    Layer.provide(McpOAuth.layerMcpClientAuthenticator),
+  // team-layer: the team tools, registered on the MCP server built below (team/DESIGN.md D5).
+  TeamMcpLayer.layer.pipe(
+    Layer.provideMerge(
+      McpHttpServer.layer.pipe(
+        Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+        Layer.provide(McpOAuth.layerMcpClientAuthenticator),
+      ),
+    ),
   ),
 ).pipe(
   // Guides read through the same pull request service as every other surface.

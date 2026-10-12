@@ -50,9 +50,6 @@ import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import * as PullRequestsHandlers from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
-// team-layer: team tools (team/DESIGN.md D5)
-import * as TeamHandlers from "./toolkits/team/handlers.ts";
-import { TeamToolkit } from "./toolkits/team/tools.ts";
 import * as DeviceHandlers from "./toolkits/device/handlers.ts";
 import {
   DeviceScreenshotTool,
@@ -881,5 +878,4 @@ export const layer = Layer.mergeAll(
   layerPullRequestsToolkit,
   layerDeviceToolkit,
   layerHtmlToolkit,
-  toolkitRegistration(TeamToolkit, TeamHandlers.layer), // team-layer: team tools (D5)
 ).pipe(Layer.provideMerge(layerMcpTransport));
