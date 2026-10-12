@@ -2,6 +2,14 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-12 — v2 port, step 6: checks and live run
+
+- **What changed** (0334d75e4). Upstream's worktree-registration test builds `McpHttpServer.layer` without team services, so the team toolkit moved out of it: new `team/teamMcpLayer.ts` registers it, and `server.ts` wraps upstream's MCP layer with it (`McpHttpServer.ts` is identical to upstream again). Lint fixes for upstream's new rules in our files (`catchTags`, no tests in loops, `ring-inset`), and three unused imports removed.
+- Checked, one at a time: `vp i`. `tsc --noEmit` on every package plus desktop, mobile, marketing, web and server: 0 errors (server run on its own, single-threaded). Server: team suites, `ChatGptRpcScopes` and the upstream tests of every conflicted or hooked server file: 33 files, 721 passed; after the MCP move, the team suites again: 24 files, 216 passed. Web: 16 files, 779; client-runtime 9 files, 499; contracts 3 files, 10; provider-acp 8 files, 109. Lint on changed files: 0 errors, no new warnings in upstream files.
+- **Live** (pictures `test-screenshots` `2026-10-12-upstream-sync-v2/`, commit c12db9fcd): `vp run dev --home-dir ~/.t3-dev`, Codex GPT-6-Astra, fresh `~/code/team-demo13` (seed), Sara as a scratch script on the team repo. Plan card and warning card render, sidebar "Input". Find another way: the agent planned `server.ts` instead and changed only that. The automatic note after the turn landed, so the team layer and the runtime share one event sink. Wait: the held call showed "Waiting for your input"; after the click "Waiting for Sara…"; Sara released, the server ended the wait about 50 s later, "Done waiting", and the agent changed `search.ts`. Ask: "Asked Sara just now"; she said yes with a line; about 40 s later "Sara said yes: go anyway, agreed", T3 row "Go ahead, agreed", the agent added `/health`. Solo (`~/code/solo-demo7`, two chats): the card names "your chat 'Add Excited Greeting Option'", three choices; Go anyway reached the agent while the call was held.
+- Found: this Codex build sometimes ends its turn while `team_plan` is still held; the designed fallback (the click starts a new turn) handled each case. Codex's own status check timed out once (a toast, not ours).
+- Not live-tested: Claude and the other providers (tests only), mobile (draws no team UI), the refused-edit label (follow-up from step 5).
+
 ## 2026-10-12 — v2 port, step 5: web
 
 - **What changed.**
