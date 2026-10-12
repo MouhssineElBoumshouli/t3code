@@ -235,7 +235,13 @@ function NoteItem(props: {
       <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
         {team.solo ? null : (
           <>
-            <TeamFace initials={holderInitials(from)} hue={holderHue(`member:${note.from}`)} />
+            <TeamFace
+              initials={holderInitials(
+                team.members.find((member) => member.memberId === note.from)?.displayName ??
+                  note.from,
+              )}
+              hue={holderHue(`member:${note.from}`)}
+            />
             <span className="font-medium text-foreground">{from}</span>
             <span>to {to}</span>
             <span>·</span>
