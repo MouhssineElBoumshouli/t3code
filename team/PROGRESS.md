@@ -2,6 +2,14 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-12 — Upstream sync landed on main
+
+- **What changed.** `sync/upstream-2026-10-11` merged into `main` (83757a748, `--no-ff`; tree identical to the branch head dcdfc0256) and pushed. Rollback point: tag `pre-upstream-sync-2026-10-11` (004f283df). New `team/UPSTREAM_SYNC.md`: the sync steps, the upstream files we hook into, and what was hard this time.
+- Files: `team/UPSTREAM_SYNC.md` (new), this entry.
+- Checked: every check in the step 6 entry below ran on the branch head that was merged; `git diff` between the branch and `main` after the merge is empty. The hooked-file list in `UPSTREAM_SYNC.md` comes from `git grep team-layer`, compared with `git diff --name-only upstream/main HEAD`.
+- Left (follow-ups, not part of this sync): the "Could not change 1 file" label for a refused edit; auto-settle does not know about open cards; mobile draws no team UI; Codex sometimes ends its turn while `team_plan` is held (the fallback works). The throwaway checkout `~/code/t3code-upstream-check` (a git worktree) can be removed with `git worktree remove ../t3code-upstream-check`.
+- Unsure: nothing new beyond the step 5 and 6 notes.
+
 ## 2026-10-12 — v2 port, step 6: checks and live run
 
 - **What changed** (0334d75e4). Upstream's worktree-registration test builds `McpHttpServer.layer` without team services, so the team toolkit moved out of it: new `team/teamMcpLayer.ts` registers it, and `server.ts` wraps upstream's MCP layer with it (`McpHttpServer.ts` is identical to upstream again). Lint fixes for upstream's new rules in our files (`catchTags`, no tests in loops, `ring-inset`), and three unused imports removed.
