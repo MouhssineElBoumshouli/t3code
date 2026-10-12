@@ -2,6 +2,17 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-12 — Seed team ids, Today from a new chat, merging help plan
+
+- **What changed** (8db19fe7c fixes; this commit the plan).
+  - Seed: `team-cold-start-seed.ts` takes `--team-id`; by default each demo folder gets its own id (folder name plus 8 hex of its path's hash, `demoTeamId` in `teamDemoRepo.ts`), stable across re-runs, and the team is named after the demo's number ("Demo team 15"). A re-run recognises its own folder by the team file plus an origin pointing at its marked remote, checked before anything is deleted (before, the check compared the old fixed id).
+  - Today from a new, unsent chat: the sidebar entry read only a sent chat's route, and the command palette fell back to the first project. Both now go through new `components/team/teamHomeTarget.ts`: open chat, then unsent chat, then the page's own project, then (palette) the first project. Marked edit in `CommandPalette.tsx`.
+  - Research: new `team/MERGE_HELP_PLAN.md` for step 5 (linked from VISION.md section 7): merge-tree on events (measured on this repo: 0.05 s for a small merge, 1.25 s / 140 MB for a 19-conflict one), typecheck in one reused combine copy under the T3 home behind upstream's `BackgroundPolicy` plus a memory floor, command from a rulebook `## Check` section or detected, "new errors only" against both sides, where warnings show, merge order from PR snapshots, agent fix with both sides' notes and approval, solo, tests, build order.
+- Files: `apps/server/scripts/{team-cold-start-seed,teamDemoRepo}.ts`, new `teamDemoRepo.test.ts`; `apps/web/src/components/team/{TeamHomeRailItem.tsx,teamHomeTarget.ts,teamHomeTarget.test.ts}`, `CommandPalette.tsx`; `team/{COLD_START_TEST,MERGE_HELP_PLAN,VISION}.md`.
+- Checked: `teamDemoRepo.test.ts` 2 passed (own id per folder, same on re-run, valid `TeamId`; name). `teamHomeTarget.test.ts` 2 passed (unsent chat's project over the first project; order). The seed run for real in a scratch folder: own id, re-run with `--team-id my-team` rebuilt it, a plain folder refused; scratch removed. `tsc`: web 0 errors; the seed script and its helper (scoped to those files) 0 errors. Lint on changed files: no new findings. No live run this round (as asked): the Today fix is not seen in a browser.
+- Left: older seeded demos still share `team-demo5-cold-start` until re-seeded. The plan's three open questions (teammates' unpushed work, where the check command lives, automatic typecheck by default).
+- Unsure: the default id changes for a demo folder that an older seed made, so re-seeding `team-demo5` to `team-demo14` gives them new ids; their old chats belonged to the old team anyway.
+
 ## 2026-10-12 — UI slice 4, part 2: Notes
 
 - **What changed** (9b5b1f17a server, a0ba7105f client, a14d2afb4 face fix).

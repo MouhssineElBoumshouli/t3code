@@ -1,0 +1,122 @@
+# Merging help: plan (VISION.md step 5)
+
+Status: research only, 2026-10-12. Nothing built. Covers VISION.md 3.4, and 3.6 points 1, 4, 6 and 7.
+
+## 1. Background test-combine
+
+**What gets combined.** For each pair below, Git builds the merged result in its object store. The working copy is never touched.
+
+- Mine: each chat's latest checkpoint ref. It is a commit of the whole working tree, uncommitted edits included (`TeamStaleView.ts` already reads it). A chat in the shared checkout counts as one side.
+- Teammates: their claims carry `branch` and `pushedCommit` (`TeamPushedBranches.ts`, every 15 s). We only see what they pushed. Unpushed work stays invisible (see open question 1).
+- Main: `origin/<base>`.
+
+**How.** `git fetch origin <branches>`, only the branches whose `pushedCommit` changed, into a hidden namespace (`refs/t3-team/peers/<login>/<branch>`), so the person's `git branch -r` stays clean. Then `git merge-tree --write-tree --name-only <mine> <theirs>`: exit 1 means conflict, and it lists the files. No checkout, no index. Measured on this repo (28,000 files): 0.05 s and 11 MB for a small merge; 1.25 s and 140 MB for 40 commits against upstream with 19 conflicting files. Needs Git 2.38 or newer (we have 2.53); with an older Git, the check is skipped and says so.
+
+**How often.** On events, not on a timer: my chat's turn ends (new checkpoint), a teammate's `pushedCommit` changes (already in the team state poll), or `origin/<base>` moves (checked on the same poll, at most every 2 minutes). A 30 s debounce. Each result is cached by its pair of commits, so nothing is checked twice.
+
+**Cost.** The merge-tree step is cheap enough to run on every event. The expensive part is section 2.
+
+## 2. Checks after combining
+
+**Git conflicts.** Exact, from merge-tree. The result tree holds the conflict markers, so counting them gives "2 places" and their line ranges. When merge-tree says two branches merge cleanly, the file-level overlap mark drops to a quiet mark (3.6 point 1c).
+
+**Typecheck and tests on the combined result.** This catches a function renamed on one side and still called on the other (3.6 point 4).
+
+- **Where.** One combine copy per project, kept between runs: a detached `git worktree` under the T3 home (`userdata/team/combine/<project>`). It is never in the repo, and never anyone's chat copy. A run does `git commit-tree` on the merged tree, then `git checkout --detach` in the combine copy. Git only rewrites the changed files, so `node_modules` and incremental build data (`tsbuildinfo`) stay. The first run installs dependencies with the project's worktree setup script (t3.json `runOnWorktreeCreate`). After that, when the lockfile changes, the automatic check skips and says "dependencies changed"; "Check now" installs.
+- **When.** Only if merge-tree was clean, both sides changed code, and this pair of commits is new. Only when upstream's `BackgroundPolicy.shouldRunOpportunisticWork` allows it: not suspended, locked, too hot, or on battery (per the person's settings). Also no turn running in this project, and at least 1.5 GB of free memory. One check at a time on the server. At most once every 10 minutes per pair. "Check now" skips the idle rules but not the memory rule.
+- **Laptop safety.** The child runs at the lowest priority (`os.setPriority`, which works on Windows too). It has a 10-minute timeout and is killed by the PID we started. We keep the last 200 lines of output.
+- **Command source**, first found wins:
+  1. A `## Check` section in `.team/rulebook.md` with one command. It is reviewed like code and shared by the team, and agents read it too, so they can run it before a handoff. It is parsed like "Shared files" (`rulebook.ts`).
+  2. Detected: a `typecheck` script in package.json, else `tsc --noEmit` when there is a tsconfig.json. Also `cargo check` and `go vet ./...`.
+  3. Nothing found: Git conflicts only.
+
+  I would not add a key to t3.json: it is upstream's published schema, and every sync would fight over it.
+
+- **Keep it short.** Typecheck by default. Tests only when the rulebook command asks for them, ideally only the tests related to the changed files (`{files}` in the command expands to the files both sides changed, e.g. `vitest related {files}`). Aim for under 2 minutes; the Check section says so.
+- **No false alarms.** Report only errors that are new: present in the combined result, but not in mine alone and not in theirs alone. Each side's result is cached per commit and reused across pairs, so an error already on main never shows up as a clash.
+
+## 3. How we warn
+
+- **Who.** Only the people whose branches clash, each on their own server. Others see it on Team home, without a ping.
+- **Team home** (Today when solo): a "Merging" section with one line per pair that has news:
+  - "Your 'login' chat and Sara's search branch clash in 2 places in `src/api/routes.ts`."
+  - "Combined with Sara's branch, `getUser` is renamed but still called in `src/api/me.ts` (yours)."
+  - Clean pairs show as "merges cleanly, checked 3 min ago".
+  - Buttons: Ask the agent to fix, Check now, and the merge order.
+- **Presence popover:** a clash mark on the teammate's face and the same line.
+- **File tree:** "clash" on the conflicting files; the quiet mark when clean.
+- **The chat:** one line in the turn note, only when something changed (like the stale-view line), so the agent knows and tells the person. It never pauses the agent and is never a card.
+- **Notification:** only for a new clash, once.
+- **Against false alarms:**
+  - Only changes of state are told.
+  - Text says how fresh it is: "Sara's pushed work, 10:42; she pushed since, checking…".
+  - Conflicts in lockfiles and generated files are worded "regenerate after merging", not "clash".
+  - Shared files (rulebook) still get checked but are worded softly.
+
+## 4. Merge order
+
+When two branches clash or overlap, suggest the one that is ready first. We use the pull request data T3 already has (`ThreadPullRequestSnapshot`):
+
+1. A pull request is open and not a draft.
+2. Checks are green (`checksState`).
+3. It is mergeable and approved.
+4. Then the smaller diff (`additions + deletions`).
+5. Then the older one.
+
+The rule is a pure function of shared data, so both people see the same suggestion; a tie goes to the login that sorts first. After the first one merges, the other chat's server sees it (`TeamClaimAutoRelease`, or base moved) and offers "Update my copy". This reuses Wait's rebase (`teamCopy.ts`): it is never done while a turn runs or with uncommitted changes. It happens automatically only if the person had chosen Wait. A rebase conflict goes to section 5.
+
+## 5. When a clash happens
+
+- **Start.** Ask the agent to fix (Team home, popover, or the turn-note line), or a conflicting update.
+- **Turn.** It is a normal turn in that person's own chat copy, any provider, so the checkpoint before it is the undo. The prompt holds:
+  - the conflicting files and hunks;
+  - both sides' handoff notes and automatic notes on those files (why each change was made);
+  - both claims' notes and task titles;
+  - decision files that name those files.
+
+  The prompt is capped at about 600 tokens.
+
+- **What the agent does.** It merges or rebases, resolves, runs the Check command, and stops before committing. The person sees the diff and chooses:
+  - Approve: commit, and push if the branch is pushed.
+  - Undo: abort, or go back to the checkpoint.
+- **Limits.** The teammate's branch is never touched. The teammate gets a team note: "Mouhssine's agent merged your search changes into his branch; see `routes.ts`."
+
+## 6. Solo
+
+The same code, with my chats on both sides of each pair. It matters only for chats with their own worktree. Chats in the shared checkout edit the same files live, which the overlap warning and the stale-view line already cover. Today shows "Your chats 'A' and 'B' clash in `greet.ts`". The merge order is whichever chat finishes first, and "Update B on top of A" uses the same rebase. Mine against main also helps: after chat A's PR merges, B learns it is behind and will clash.
+
+## 7. Testing
+
+**Automatic:**
+
+- merge-tree wrapper on real temp repos, like the `GitTeamService` bench: a clean merge, a conflict with its place count, and a rename that Git merges cleanly.
+- Pair cache and triggers: debounce, unchanged pairs skipped, only changes of state reported.
+- Check runner with a fake command: errors parsed (tsc format and plain `path:line`), timeout kill, one at a time.
+- The "new errors only" filter.
+- Gates: a `BackgroundPolicy` stub and the memory floor.
+- The combine copy is reused: an unchanged file is not rewritten, and `node_modules` stays.
+- Merge-order ranking from PR snapshots.
+- Clash-prompt builder: both sides present, capped.
+- Warning sentences in client-runtime, like `teamHome.ts`.
+
+**Live:**
+
+- Two servers on a seeded demo: Sara pushes a rename of `searchPins`, and my chat calls the old name. Team home says it breaks. Watch memory and CPU (`free`, `ps`) during the check on this laptop.
+- A real conflict, fixed by the agent with Codex, then approved.
+- Merge order and the update after Sara's PR merges on GitHub (needs `gh` and a real PR).
+- Native Windows: Git for Windows merge-tree, low priority, paths.
+
+## 8. What I'd build first
+
+1. **merge-tree only:** mine against teammates' pushed branches and main, on events, shown on Team home / Today and in the popover, plus the quiet mark when clean. Cheap, no laptop risk, and it covers the most common case.
+2. Ask the agent to fix, with notes, and approve.
+3. Merge order and "Update my copy".
+4. The typecheck combine copy, with its gates (the heavy one).
+
+Solo comes with 1, since it is the same code.
+
+## Open questions (your call)
+
+1. **Teammates' unpushed work.** Should each chat push its latest checkpoint to a hidden ref (`refs/t3-team/wip/<login>/<thread>`), so clashes show before anyone pushes? It is fresher, but it puts work-in-progress code on the shared remote. I'd wait until slice 1 is used.
+2. **The check command** in a rulebook `## Check` section (my pick) or in t3.json.
+3. **Automatic typecheck on by default** (only idle and plugged in), or only "Check now" and before merging? I'd start with on-request only, given this laptop's memory, and turn on automatic after measuring.

@@ -191,7 +191,7 @@ Not worth cutting: the tool descriptions (already under 40 words) and the tool c
 2. **Two people, for real.** Done 2026-10-07 (slice 8, self-tested on GitHub with two dev servers). Two clones of one GitHub repo on one laptop, then two laptops. Claims, tasks, handoffs sync through `refs/t3-team/state`.
 3. **Visible.** Team screen, file markers, the warning card from 3.1. Picked 2026-10-07: Option C (a Team home page, "Today" when solo, and the warning card inside the agent's message) with Option B's presence chip in the tab bar ([DESIGN_DIRECTION.md](DESIGN_DIRECTION.md) section 5). Build order: [UI_PLAN.md](UI_PLAN.md).
 4. **Prevention.** Plan-first claim check (3.1) and pause-in-the-middle (3.2).
-5. **Merging help.** Background clash check and note-aware conflict fixing (3.4).
+5. **Merging help.** Background clash check and note-aware conflict fixing (3.4). Plan: [MERGE_HELP_PLAN.md](MERGE_HELP_PLAN.md).
 6. **Installer.** Our own name, Windows installer, sign-in, "Make this a team project," joining.
 7. **Classmates test** on a real group project. Fix what they hate.
 8. **Launch.** 30-second demo video, one-page site, Reddit, X, Hacker News, Product Hunt.
