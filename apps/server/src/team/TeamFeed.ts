@@ -23,8 +23,10 @@ import {
   type TeamFeedProject,
   TeamFeedTeam,
   type TeamId,
+  teamNoteConcerns,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -35,6 +37,7 @@ import * as Stream from "effect/Stream";
 
 import * as ProjectService from "../project/ProjectService.ts";
 import { soloTeamIdOf } from "./state/SoloTeam.ts";
+import { isNotePastKeeping } from "./state/TeamNotesModel.ts";
 import * as TeamCards from "./TeamCards.ts";
 import { findTeamFile } from "./TeamProjectFiles.ts";
 import * as TeamService from "./TeamService.ts";
@@ -120,6 +123,23 @@ export const make = Effect.gen(function* () {
                   ),
               );
             });
+      // Notes for everyone, for this person and from them: open ones, then recently done.
+      const teamNotes = yield* Option.match(me, {
+        onNone: () => Effect.succeed([]),
+        onSome: (member) =>
+          Effect.gen(function* () {
+            const now = DateTime.formatIso(yield* DateTime.now);
+            const mine = (yield* teams.listNotes(teamId)).filter((note) =>
+              teamNoteConcerns(note, member.memberId),
+            );
+            return [
+              ...mine.filter((note) => note.doneAt === null).slice(0, TEAM_FEED_LIMITS.openNotes),
+              ...mine
+                .filter((note) => note.doneAt !== null && !isNotePastKeeping(note, now))
+                .slice(0, TEAM_FEED_LIMITS.doneNotes),
+            ];
+          }),
+      });
       return Option.some<TeamFeedTeam>({
         teamId,
         name: team.value.name,
@@ -141,6 +161,7 @@ export const make = Effect.gen(function* () {
             createdAt: note.createdAt,
           })),
         ...(questions.length === 0 ? {} : { questions }),
+        ...(teamNotes.length === 0 ? {} : { notes: teamNotes }),
         sync: yield* teams.syncState(teamId),
       });
     }).pipe(Effect.orElseSucceed(() => Option.none<TeamFeedTeam>()));

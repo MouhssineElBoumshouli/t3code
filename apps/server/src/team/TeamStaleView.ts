@@ -18,7 +18,8 @@
  * Each change is told once: the next turn's view includes it. Solo and team
  * alike: solo chats share the checkout by default, so another chat's edit
  * lands under this one. The line goes with the turn's message (teamTurnNote),
- * only when something changed.
+ * only when something changed. Notes left for agents on those files follow
+ * it (TeamNotes), each once per chat.
  *
  * @module TeamStaleView
  */
@@ -38,6 +39,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { holdersOf, sameThread } from "./heldElsewhere.ts";
 import { diffToTeamPaths } from "./TeamAutoNotes.ts";
 import { findRepoRoot } from "./TeamProjectFiles.ts";
+import * as TeamNotes from "./TeamNotes.ts";
 import * as TeamService from "./TeamService.ts";
 import { installTeamTurnNote } from "./teamTurnNote.ts";
 
@@ -83,6 +85,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
   const { resolve } = yield* makeTeamResolver;
+  const teamNotes = yield* TeamNotes.TeamNotes;
 
   const withFiles = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>) =>
     effect.pipe(
@@ -163,8 +166,8 @@ export const make = Effect.gen(function* () {
       const last = runCheckpoints
         .filter((checkpoint) => checkpoint.status === "ready")
         .toSorted((a, b) => (b.appRunOrdinal ?? 0) - (a.appRunOrdinal ?? 0))[0];
-      // The first turn has no earlier view.
-      if (last === undefined) return [];
+      // The first turn has no earlier view, and has worked on nothing yet.
+      if (last === undefined) return { stale: [], near: [] };
       const cwd =
         records.checkpointScopes.find((scope) => scope.id === last.scopeId)?.cwd ??
         context.workingFolder;
@@ -185,12 +188,12 @@ export const make = Effect.gen(function* () {
         .filter((claim) => sameThread(claim.thread, context.thread))
         .flatMap((claim) => claim.paths.filter((held) => !held.endsWith("/")));
       const files = [...new Set([...touched, ...planned])].slice(0, STALE_VIEW_MAX_CHECKED);
-      if (files.length === 0) return [];
+      if (files.length === 0) return { stale: [], near: files };
 
       const toRepo = (file: string) =>
         path.relative(repoRoot, path.join(context.teamRoot, file)).replaceAll("\\", "/");
       const before = yield* hashesAt(repoRoot, last.ref, files.map(toRepo));
-      if (before === undefined) return [];
+      if (before === undefined) return { stale: [], near: files };
       const now = yield* withFiles(hashFiles(git, context.teamRoot, files));
 
       const viewer = { memberId: context.member.memberId, solo: context.solo };
@@ -239,15 +242,26 @@ export const make = Effect.gen(function* () {
         if (unmerged.length > 0)
           stale.push({ path: file, by: [...new Set(unmerged)], inCopy: false });
       }
-      return stale;
+      return { stale, near: files };
+    });
+
+  /** The stale-view line, then notes left for agents on the files this chat works on. */
+  const turnNote = (context: TeamContext) =>
+    Effect.gen(function* () {
+      const { stale, near } = yield* staleFiles(context);
+      const noteLines = yield* teamNotes.takeForAgent(context, near);
+      const parts = [
+        renderStaleView(stale),
+        TeamNotes.renderAgentNotes(noteLines, context.solo),
+      ].filter((part) => part !== undefined);
+      return parts.length === 0 ? undefined : parts.join("\n\n");
     });
 
   const read = (threadId: ThreadId): Effect.Effect<string | undefined> =>
     resolve({ environmentId, threadId }).pipe(
       Effect.flatMap((resolved) =>
-        resolved._tag === "InTeam" ? staleFiles(resolved.context) : Effect.succeed([]),
+        resolved._tag === "InTeam" ? turnNote(resolved.context) : Effect.succeed(undefined),
       ),
-      Effect.map(renderStaleView),
       Effect.timeoutOption(STALE_VIEW_TIMEOUT),
       Effect.map(Option.getOrUndefined),
       Effect.tap((line) =>

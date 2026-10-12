@@ -40,6 +40,7 @@ import {
 } from "./testing/teamState.ts";
 import * as TeamService from "./TeamService.ts";
 import * as TeamOrchestrator from "./teamOrchestrator.testkit.ts";
+import * as TeamNotes from "./TeamNotes.ts";
 import * as TeamStaleView from "./TeamStaleView.ts";
 import { installTeamTurnNote, withTeamTurnNote } from "./teamTurnNote.ts";
 
@@ -93,7 +94,7 @@ const makeHarness = Effect.fn("makeStaleViewHarness")(function* (team: boolean) 
       getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
     }),
   ).pipe(Layer.provideMerge(NodeServices.layer));
-  const context = yield* Layer.build(dependencies);
+  const context = yield* Layer.build(TeamNotes.layer.pipe(Layer.provideMerge(dependencies)));
   const teams = yield* TeamService.TeamService.pipe(Effect.provide(context));
   const membership = team
     ? (yield* teams.ensureTeam({ teamFile: TEAM_FILE, checkout: root })).membership

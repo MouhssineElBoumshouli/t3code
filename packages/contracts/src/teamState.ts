@@ -22,6 +22,7 @@ import {
   TeamTaskStatus,
   TeamThreadRef,
 } from "./team.ts";
+import { TeamStateNoteMark, TeamStateNoteReply, TeamStateTeamNote } from "./teamNotes.ts";
 
 /** The hidden ref that holds the team state. Default fetches and branch lists never show it. */
 export const TEAM_STATE_REF = "refs/t3-team/state";
@@ -167,5 +168,9 @@ export const TeamWriterFile = Schema.Struct({
   /** Absent in files written before "Ask". */
   questions: Schema.optionalKey(Schema.Array(TeamStateQuestion)),
   answers: Schema.optionalKey(Schema.Array(TeamStateAnswer)),
+  /** Notes this writer wrote, and its marks and replies on anyone's notes. Absent before notes. */
+  teamNotes: Schema.optionalKey(Schema.Array(TeamStateTeamNote)),
+  noteMarks: Schema.optionalKey(Schema.Array(TeamStateNoteMark)),
+  noteReplies: Schema.optionalKey(Schema.Array(TeamStateNoteReply)),
 });
 export type TeamWriterFile = typeof TeamWriterFile.Type;

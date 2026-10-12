@@ -23,6 +23,7 @@ import { folderKey, realFolder } from "../../../team/folders.ts";
 import { holdersOf } from "../../../team/heldElsewhere.ts";
 import * as TeamCards from "../../../team/TeamCards.ts";
 import * as TeamChoices from "../../../team/TeamChoices.ts";
+import * as TeamNotes from "../../../team/TeamNotes.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -116,6 +117,7 @@ const make = Effect.gen(function* () {
   const { resolve } = yield* makeTeamResolver;
   const platform = yield* HostProcess.Platform;
   const choices = yield* TeamChoices.TeamChoices;
+  const teamNotes = yield* TeamNotes.TeamNotes;
 
   /** A folder as the OS compares it: links resolved, and on Windows case and slashes ignored (W8). */
   const folderKeyOf = (folder: string) =>
@@ -477,10 +479,13 @@ const make = Effect.gen(function* () {
           const files = planFiles(context, claim.paths, overlaps, names);
           yield* appendPlanCard(context, { solo: context.solo, files, shared: confirmed });
           const planned = `Planned and claimed ${claim.paths.length} ${claim.paths.length === 1 ? "file" : "files"}; the user sees the plan.`;
+          // Notes left for agents on these files (UI_PLAN.md slice 4), each told once per chat.
+          const agentNotes = yield* teamNotes.takeForAgent(context, claim.paths);
           const result = {
             planned: claim.paths,
             overlaps: shown,
             ...(yield* lateOverlapsOf(context)),
+            ...(agentNotes.length === 0 ? {} : { teamNotes: agentNotes }),
           };
           // Slice 3a: a held file stops the agent until the user picks a choice on the card.
           // Files the user already chose "Go anyway" for in this chat do not ask again,

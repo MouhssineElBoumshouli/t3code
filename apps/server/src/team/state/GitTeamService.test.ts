@@ -1481,3 +1481,100 @@ describe("GitTeamService solo (no team file)", () => {
       }).pipe(Effect.provide(TestLayer)),
   );
 });
+
+// team-layer: notes (UI_PLAN.md slice 4).
+describe("GitTeamService notes", () => {
+  it.effect(
+    "shares a note, its seen, reply and done between two servers, each in its own file",
+    () =>
+      Effect.gen(function* () {
+        const { teams, owner, friendTeams, friend, originFile } = yield* setUpTwo;
+        const teamId = teamFile.teamId;
+        const note = yield* teams.writeNote({
+          teamId,
+          memberId: owner.memberId,
+          to: friend.memberId,
+          text: "  Keep the old login route until Friday.  ",
+          path: "./src/auth/",
+          forAgents: true,
+        });
+        assert.strictEqual(note.text, "Keep the old login route until Friday.");
+        assert.strictEqual(note.path, "src/auth");
+        yield* teams.sync(teamId);
+        yield* friendTeams.sync(teamId);
+        const seenByFriend = yield* friendTeams.listNotes(teamId);
+        assert.deepEqual(
+          seenByFriend.map((found) => [String(found.from), String(found.to), found.doneAt]),
+          [["Mouhssine", "Friend", null]],
+        );
+
+        // The author cannot mark it done or "see" it; the friend can.
+        const refused = yield* teams
+          .markNote({ teamId, memberId: owner.memberId, noteIds: [note.noteId], done: true })
+          .pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "TeamNoteRefusedError");
+        yield* friendTeams.markNote({
+          teamId,
+          memberId: friend.memberId,
+          noteIds: [note.noteId],
+          seen: true,
+        });
+        yield* friendTeams.replyToNote({
+          teamId,
+          memberId: friend.memberId,
+          noteId: note.noteId,
+          text: "OK, I will.",
+        });
+        yield* friendTeams.markNote({
+          teamId,
+          memberId: friend.memberId,
+          noteIds: [note.noteId],
+          done: true,
+        });
+        yield* friendTeams.sync(teamId);
+        yield* teams.sync(teamId);
+        const [shared] = yield* teams.listNotes(teamId);
+        assert.deepEqual(shared?.seenBy.map(String), ["Friend"]);
+        assert.deepEqual(
+          shared?.replies.map((reply) => [String(reply.by), reply.text]),
+          [["Friend", "OK, I will."]],
+        );
+        assert.strictEqual(String(shared?.doneBy), "Friend");
+        // The note stays in the author's file; the marks and the reply in the friend's.
+        assert.include(originFile(`writers/Mouhssine/${ownerEnvironment}.json`), note.noteId);
+        assert.notInclude(originFile(`writers/Mouhssine/${ownerEnvironment}.json`), "OK, I will.");
+        assert.include(originFile(`writers/Friend/${friendEnvironment}.json`), "OK, I will.");
+
+        // Open again; only the author removes it.
+        yield* friendTeams.markNote({
+          teamId,
+          memberId: friend.memberId,
+          noteIds: [note.noteId],
+          done: false,
+        });
+        assert.isNull((yield* friendTeams.listNotes(teamId))[0]?.doneAt);
+        const notRemoved = yield* friendTeams
+          .removeNote({ teamId, memberId: friend.memberId, noteId: note.noteId })
+          .pipe(Effect.flip);
+        assert.strictEqual(notRemoved._tag, "TeamNoteRefusedError");
+        yield* teams.removeNote({ teamId, memberId: owner.memberId, noteId: note.noteId });
+        assert.lengthOf(yield* teams.listNotes(teamId), 0);
+      }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("refuses a note for agents with no file or folder", () =>
+    Effect.gen(function* () {
+      const { teams, owner } = yield* setUpTeam;
+      const refused = yield* teams
+        .writeNote({
+          teamId: teamFile.teamId,
+          memberId: owner.memberId,
+          to: null,
+          text: "Use the new API.",
+          forAgents: true,
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(refused._tag, "TeamNoteRefusedError");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+});

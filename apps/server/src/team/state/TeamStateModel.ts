@@ -29,6 +29,10 @@ import {
   TeamStateTask as TeamStateTaskSchema,
   type TeamStateTeamFile,
   TeamStateTeamFile as TeamStateTeamFileSchema,
+  type TeamNote,
+  TeamStateNoteMark as TeamStateNoteMarkSchema,
+  TeamStateNoteReply as TeamStateNoteReplySchema,
+  TeamStateTeamNote as TeamStateTeamNoteSchema,
   type TeamTask,
   type TeamThreadRef,
   TEAM_AUTOMATIC_NOTE_MAX_FILES,
@@ -47,6 +51,8 @@ import {
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+
+import { buildTeamNotes, capTeamNotes } from "./TeamNotesModel.ts";
 
 /** One server's writer file, with the key readers break ties by. */
 export interface TeamWriter {
@@ -90,6 +96,8 @@ export interface TeamStateView {
   readonly questions: ReadonlyArray<TeamQuestion>;
   /** Answers to them, oldest first. */
   readonly answers: ReadonlyArray<TeamAnswer>;
+  /** Notes with everyone's marks and replies, newest first; done ones past keeping left out. */
+  readonly teamNotes: ReadonlyArray<TeamNote>;
 }
 
 /** Another writer's active claim that overlaps one of this server's, found after both were made. */
@@ -132,6 +140,9 @@ const WriterEnvelope = Schema.Struct({
   activity: Schema.Array(Schema.Unknown),
   questions: Schema.optionalKey(Schema.Array(Schema.Unknown)),
   answers: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  teamNotes: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  noteMarks: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  noteReplies: Schema.optionalKey(Schema.Array(Schema.Unknown)),
 });
 const decodeEnvelope = Schema.decodeUnknownExit(WriterEnvelope);
 const decodeTeamFile = Schema.decodeUnknownExit(TeamStateTeamFileSchema);
@@ -205,13 +216,19 @@ export const parseTeamState = (files: ReadonlyMap<string, string>): ParsedTeamSt
     const activity = decodeEntries(TeamStateActivitySchema, raw.activity);
     const questions = decodeEntries(TeamStateQuestionSchema, raw.questions ?? []);
     const answers = decodeEntries(TeamStateAnswerSchema, raw.answers ?? []);
+    const teamNotes = decodeEntries(TeamStateTeamNoteSchema, raw.teamNotes ?? []);
+    const noteMarks = decodeEntries(TeamStateNoteMarkSchema, raw.noteMarks ?? []);
+    const noteReplies = decodeEntries(TeamStateNoteReplySchema, raw.noteReplies ?? []);
     const skipped =
       claims.skipped +
       tasks.skipped +
       notes.skipped +
       activity.skipped +
       questions.skipped +
-      answers.skipped;
+      answers.skipped +
+      teamNotes.skipped +
+      noteMarks.skipped +
+      noteReplies.skipped;
     if (skipped > 0) {
       warnings.push(
         `${path}: ${skipped} ${skipped === 1 ? "entry" : "entries"} not understood; skipped.`,
@@ -231,6 +248,9 @@ export const parseTeamState = (files: ReadonlyMap<string, string>): ParsedTeamSt
         activity: activity.kept,
         ...(raw.questions === undefined ? {} : { questions: questions.kept }),
         ...(raw.answers === undefined ? {} : { answers: answers.kept }),
+        ...(raw.teamNotes === undefined ? {} : { teamNotes: teamNotes.kept }),
+        ...(raw.noteMarks === undefined ? {} : { noteMarks: noteMarks.kept }),
+        ...(raw.noteReplies === undefined ? {} : { noteReplies: noteReplies.kept }),
       },
     });
   }
@@ -349,7 +369,9 @@ export const buildTeamView = (
     )
     .toSorted(byTime((answer) => answer.answeredAt));
 
-  return { team, members, activeClaims, tasks, notes, activity, questions, answers };
+  const teamNotes = buildTeamNotes(ordered);
+
+  return { team, members, activeClaims, tasks, notes, activity, questions, answers, teamNotes };
 };
 
 const toClaim = (team: TeamStateTeamFile, login: TeamLogin, claim: TeamStateClaim): TeamClaim => ({
@@ -527,6 +549,7 @@ export const compactWriterFile = (file: TeamWriterFile, now: string): TeamWriter
             timeOf(answer.answeredAt),
           ),
         }),
+    ...capTeamNotes(file),
   };
 };
 

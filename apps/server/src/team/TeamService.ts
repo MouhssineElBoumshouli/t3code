@@ -27,6 +27,7 @@ import type {
   TeamId,
   TeamMember,
   TeamMemberId,
+  TeamNote,
   TeamTask,
   TeamTaskId,
   TeamTaskStatus,
@@ -316,6 +317,43 @@ export class TeamService extends Context.Service<
     readonly listAnswers: (
       teamId: TeamId,
     ) => Effect.Effect<ReadonlyArray<TeamAnswer>, TeamServiceError>;
+    /**
+     * Notes (UI_PLAN.md slice 4). A note goes in this member's writer file;
+     * seen, done and replies in the reader's own. Each is shared at once.
+     * `to` null is everyone; `path` is relative to the team's root.
+     */
+    readonly writeNote: (input: {
+      readonly teamId: TeamId;
+      readonly memberId: TeamMemberId;
+      readonly to: TeamMemberId | null;
+      readonly text: string;
+      readonly path?: string | undefined;
+      readonly forAgents: boolean;
+    }) => Effect.Effect<TeamNote, TeamServiceError>;
+    readonly replyToNote: (input: {
+      readonly teamId: TeamId;
+      readonly memberId: TeamMemberId;
+      readonly noteId: string;
+      readonly text: string;
+    }) => Effect.Effect<void, TeamServiceError>;
+    /** Seen, and done or open again. Fails when the note is gone or not this member's to mark. */
+    readonly markNote: (input: {
+      readonly teamId: TeamId;
+      readonly memberId: TeamMemberId;
+      readonly noteIds: ReadonlyArray<string>;
+      readonly seen?: boolean;
+      readonly done?: boolean;
+    }) => Effect.Effect<void, TeamServiceError>;
+    /** Drops one of this member's own notes. */
+    readonly removeNote: (input: {
+      readonly teamId: TeamId;
+      readonly memberId: TeamMemberId;
+      readonly noteId: string;
+    }) => Effect.Effect<void, TeamServiceError>;
+    /** Every note with everyone's marks and replies, newest first. */
+    readonly listNotes: (
+      teamId: TeamId,
+    ) => Effect.Effect<ReadonlyArray<TeamNote>, TeamServiceError>;
     /** Adds one line to the team's activity, as this member (the warning card's "Go anyway"). */
     readonly recordActivity: (input: {
       readonly teamId: TeamId;

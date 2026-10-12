@@ -37,6 +37,7 @@ import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import { TEAM_RULEBOOK_TEMPLATE } from "../../../team/TeamProjectFiles.ts";
 import * as TeamCards from "../../../team/TeamCards.ts";
 import * as TeamChoices from "../../../team/TeamChoices.ts";
+import * as TeamNotes from "../../../team/TeamNotes.ts";
 import * as TeamOrchestrator from "../../../team/teamOrchestrator.testkit.ts";
 import * as TeamService from "../../../team/TeamService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
@@ -186,7 +187,9 @@ const makeHarness = Effect.fn("makeTeamToolkitHarness")(function* (options: Harn
       }),
     }),
   ).pipe(Layer.provideMerge(NodeServices.layer));
-  const context = yield* Layer.build(TeamChoices.layer.pipe(Layer.provideMerge(dependencies)));
+  const context = yield* Layer.build(
+    Layer.mergeAll(TeamChoices.layer, TeamNotes.layer).pipe(Layer.provideMerge(dependencies)),
+  );
   const teamCards = yield* TeamCards.TeamCards.pipe(Effect.provide(context));
   // Each new warning card, in the order they are added.
   const seenCards = new Set<string>();
@@ -1231,6 +1234,46 @@ describe("team toolkit", () => {
       // The plan card still shows who is in there; no warning card.
       const kinds = (yield* entries()).map((entry) => entry.kind);
       assert.deepEqual(kinds, ["team.plan"]);
+    }),
+  );
+
+  // team-layer: notes (UI_PLAN.md slice 4).
+  it.effect("tells the planning agent a note left for agents on its files, once per chat", () =>
+    Effect.gen(function* () {
+      const root = yield* makeProjectFolder(true);
+      const { call } = yield* makeHarness({ workspaceRoot: root });
+      const sara = yield* teammate("Sara");
+      yield* sara.openTeam({ teamFile: TEAM_FILE, checkout: root });
+      const saraId = TeamMemberId.make("Sara");
+      yield* sara.writeNote({
+        teamId: TEAM_ID,
+        memberId: saraId,
+        to: null,
+        text: "Migrations go through db/migrate.ts only.",
+        path: "src/db",
+        forAgents: true,
+      });
+      yield* sara.writeNote({
+        teamId: TEAM_ID,
+        memberId: saraId,
+        to: null,
+        text: "Just for people.",
+        path: "src/db",
+        forAgents: false,
+      });
+      yield* sara.sync(TEAM_ID);
+
+      const elsewhere = inTeam(yield* call("team_plan", { files: ["src/api/users.ts"] }));
+      assert.notProperty(elsewhere, "teamNotes");
+      const plan = inTeam(yield* call("team_plan", { files: ["src/db/schema.ts"] }));
+      assert.deepEqual(plan.teamNotes, [
+        'Sara on `src/db`: "Migrations go through db/migrate.ts only."',
+      ]);
+      const again = inTeam(yield* call("team_plan", { files: ["src/db/schema.ts"] }));
+      assert.notProperty(again, "teamNotes");
+      // Another chat has not been told yet.
+      const other = inTeam(yield* call("team_plan", { files: ["src/db/seed.ts"] }, THREAD_B));
+      assert.lengthOf(other.teamNotes ?? [], 1);
     }),
   );
 

@@ -212,6 +212,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.subscribeTeamFeed]: "team",
   [WS_METHODS.teamChoose]: "team",
   [WS_METHODS.teamAnswer]: "team",
+  [WS_METHODS.teamNote]: "team",
 } as const satisfies Readonly<Record<WsRpcMethod, string>>;
 
 const RPC_SPAN_PREFIX = "ws.rpc";

@@ -3,8 +3,8 @@
  * `team-layer:` line in `server.ts` adds it.
  *
  * Gives the server the team state (`TeamService`), each chat's cards, the
- * warning card's hold (`TeamChoices`), the team feed and "Ask" for `ws.ts` and
- * the team tools, and starts the background work: the briefing resolver, the
+ * warning card's hold (`TeamChoices`), the team feed, "Ask" and notes for
+ * `ws.ts` and the team tools, and starts the background work: the briefing resolver, the
  * guard, claim release, automatic notes, the stale-view line, waits, questions,
  * pushed branches, the warm-up and card cleanup.
  *
@@ -22,6 +22,7 @@ import { TeamClaimAutoReleaseLive } from "./TeamClaimAutoRelease.ts";
 import * as TeamFeed from "./TeamFeed.ts";
 import { TeamGuardLive } from "./TeamGuard.ts";
 import { TeamPushedBranchesLive } from "./TeamPushedBranches.ts";
+import * as TeamNotes from "./TeamNotes.ts";
 import * as TeamQuestions from "./TeamQuestions.ts";
 import { TeamStaleViewLive } from "./TeamStaleView.ts";
 import { TeamWaitLive } from "./TeamWait.ts";
@@ -40,6 +41,7 @@ export const layer = Layer.mergeAll(
   TeamFeed.layer,
 ).pipe(
   Layer.provideMerge(TeamQuestions.layer),
+  Layer.provideMerge(TeamNotes.layer),
   Layer.provideMerge(TeamChoices.layer),
   Layer.provideMerge(TeamCards.layer),
   Layer.provideMerge(GitTeamService.layer),

@@ -219,6 +219,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.teamChoose]: AuthOrchestrationOperateScope,
   // team-layer: answering a teammate's question steers their agent.
   [WS_METHODS.teamAnswer]: AuthOrchestrationOperateScope,
+  // team-layer: notes can steer agents ("Agents should know this").
+  [WS_METHODS.teamNote]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

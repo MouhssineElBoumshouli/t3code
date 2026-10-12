@@ -54,10 +54,21 @@ export class TeamHandoffTooLongError extends Schema.TaggedError<TeamHandoffTooLo
   }
 }
 
+/** A note that is gone, or not this person's to change; the detail is shown as is. */
+export class TeamNoteRefusedError extends Schema.TaggedError<TeamNoteRefusedError>()(
+  "TeamNoteRefusedError",
+  { detail: Schema.String },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 export type TeamServiceError =
   | TeamStorageError
   | TeamNotFoundError
   | TeamMemberNotFoundError
   | TeamTaskNotFoundError
   | TeamClaimPathsInvalidError
-  | TeamHandoffTooLongError;
+  | TeamHandoffTooLongError
+  | TeamNoteRefusedError;

@@ -50,6 +50,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // team-layer: answering the warning card or a teammate's question steers an agent.
   [WS_METHODS.teamChoose]: AuthOrchestrationOperateScope,
   [WS_METHODS.teamAnswer]: AuthOrchestrationOperateScope,
+  // team-layer: notes can steer agents ("Agents should know this").
+  [WS_METHODS.teamNote]: AuthOrchestrationOperateScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

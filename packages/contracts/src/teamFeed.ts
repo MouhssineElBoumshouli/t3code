@@ -19,6 +19,7 @@ import {
 } from "./team.ts";
 import { TeamQuestion } from "./teamAsk.ts";
 import { type TeamCardEntry, TeamThreadCards } from "./teamCards.ts";
+import { TeamNote } from "./teamNotes.ts";
 
 /**
  * - `solo`: kept on this computer, nothing to sync.
@@ -77,6 +78,11 @@ export const TeamFeedTeam = Schema.Struct({
   handoffs: Schema.Array(TeamFeedHandoff),
   /** Questions to this server's person not answered yet, oldest first ("Ask", slice 3d). */
   questions: Schema.optionalKey(Schema.Array(TeamQuestion)),
+  /**
+   * Notes for everyone, for this server's person and from them, newest first:
+   * open ones, then done ones not dropped yet. Capped.
+   */
+  notes: Schema.optionalKey(Schema.Array(TeamNote)),
   sync: TeamFeedSync,
 });
 export type TeamFeedTeam = typeof TeamFeedTeam.Type;
@@ -100,7 +106,14 @@ export const TeamFeedEvent = Schema.Union([
 export type TeamFeedEvent = typeof TeamFeedEvent.Type;
 
 /** Caps on one team's view, so a push stays small. */
-export const TEAM_FEED_LIMITS = { tasks: 50, handoffs: 5, handoffFiles: 5, headline: 160 } as const;
+export const TEAM_FEED_LIMITS = {
+  tasks: 50,
+  handoffs: 5,
+  handoffFiles: 5,
+  headline: 160,
+  openNotes: 60,
+  doneNotes: 20,
+} as const;
 
 /** Folds feed events into the current list of teams, by name. */
 export const applyTeamFeedEvent = (

@@ -31,6 +31,7 @@
  * @module GitTeamService
  */
 import {
+  canMarkTeamNoteDone,
   countTeamWords,
   type EnvironmentId,
   normalizeTeamPath,
@@ -53,6 +54,7 @@ import {
   type TeamStateQuestion,
   type TeamStateTask,
   TeamTaskId,
+  teamNoteConcerns,
   type TeamThreadRef,
   type ThreadId,
   type TeamWriterFile,
@@ -78,6 +80,7 @@ import {
   TeamHandoffTooLongError,
   TeamMemberNotFoundError,
   TeamNotFoundError,
+  TeamNoteRefusedError,
   type TeamServiceError,
   TeamStorageError,
   TeamTaskNotFoundError,
@@ -97,6 +100,7 @@ import {
 } from "../TeamService.ts";
 import * as SoloTeam from "./SoloTeam.ts";
 import * as TeamHost from "./TeamHost.ts";
+import * as NotesModel from "./TeamNotesModel.ts";
 import * as Model from "./TeamStateModel.ts";
 import * as TeamStateRepo from "./TeamStateRepo.ts";
 
@@ -369,7 +373,9 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
   const saveMyFile = (entry: TeamEntry, file: TeamWriterFile) =>
     Effect.gen(function* () {
       const now = yield* nowIso;
-      const next = Model.compactWriterFile({ ...file, lastSyncAt: now }, now);
+      const pruned =
+        entry.view === null ? file : NotesModel.pruneTeamNotes(file, entry.view.teamNotes, now);
+      const next = Model.compactWriterFile({ ...pruned, lastSyncAt: now }, now);
       const filePath = Model.writerFilePath(next.login, next.environmentId);
       yield* entry.repo.saveMine(filePath, Model.encodeWriterFile(next));
       const key = Model.writerKey(next.login, next.environmentId);
@@ -1068,6 +1074,112 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
     return answer!;
   });
 
+  const writeNote = Effect.fn("GitTeamService.writeNote")(function* (
+    input: Parameters<TeamService["Service"]["writeNote"]>[0],
+  ) {
+    const { view: found } = yield* requireEntry(input.teamId);
+    if (input.to !== null) yield* requireMember(found, input.to);
+    const [path] =
+      input.path === undefined || input.path.trim() === ""
+        ? []
+        : yield* normalizeClaimPaths([input.path]);
+    const text = optionalText(input.text);
+    if (text === null) return yield* new TeamNoteRefusedError({ detail: "Write the note first." });
+    if (input.forAgents && path === undefined) {
+      return yield* new TeamNoteRefusedError({
+        detail: "Attach the note to a file or folder, so agents know when it matters.",
+      });
+    }
+    const noteId = yield* newId;
+    yield* changeMyFile(input.teamId, input.memberId, (file, now) =>
+      NotesModel.addTeamNote(file, {
+        noteId,
+        to: input.to,
+        text,
+        path: path ?? null,
+        forAgents: input.forAgents,
+        createdAt: now,
+      }),
+    );
+    const { view: after } = yield* requireEntry(input.teamId);
+    const note = after.teamNotes.find((candidate) => candidate.noteId === noteId);
+    if (note === undefined)
+      return yield* new TeamNoteRefusedError({ detail: "The note was not saved." });
+    return note;
+  });
+
+  /** The note, when it exists and concerns this member. */
+  const requireNote = (teamId: TeamId, memberId: TeamMemberId, noteId: string) =>
+    Effect.gen(function* () {
+      const { view: found } = yield* requireEntry(teamId);
+      const note = found.teamNotes.find((candidate) => candidate.noteId === noteId);
+      if (note === undefined || !teamNoteConcerns(note, memberId)) {
+        return yield* new TeamNoteRefusedError({ detail: "That note is gone." });
+      }
+      return note;
+    });
+
+  const replyToNote = Effect.fn("GitTeamService.replyToNote")(function* (
+    input: Parameters<TeamService["Service"]["replyToNote"]>[0],
+  ) {
+    yield* requireNote(input.teamId, input.memberId, input.noteId);
+    const text = optionalText(input.text);
+    if (text === null) return yield* new TeamNoteRefusedError({ detail: "Write the reply first." });
+    const replyId = yield* newId;
+    yield* changeMyFile(input.teamId, input.memberId, (file, now) =>
+      NotesModel.markTeamNote(
+        NotesModel.addNoteReply(file, { noteId: input.noteId, replyId, text, createdAt: now }),
+        { noteId: input.noteId, seen: true },
+        now,
+      ),
+    );
+  });
+
+  const markNote = Effect.fn("GitTeamService.markNote")(function* (
+    input: Parameters<TeamService["Service"]["markNote"]>[0],
+  ) {
+    const noteIds: Array<string> = [];
+    for (const noteId of new Set(input.noteIds)) {
+      const note = yield* requireNote(input.teamId, input.memberId, noteId);
+      if (input.done !== undefined && !canMarkTeamNoteDone(note, input.memberId)) {
+        return yield* new TeamNoteRefusedError({
+          detail: "Only the person a note is for can mark it done.",
+        });
+      }
+      // Your own notes are not "seen" by you.
+      if (input.done === undefined && note.from === input.memberId) continue;
+      noteIds.push(noteId);
+    }
+    if (noteIds.length === 0) return;
+    yield* changeMyFile(input.teamId, input.memberId, (file, now) =>
+      noteIds.reduce(
+        (next, noteId) =>
+          NotesModel.markTeamNote(
+            next,
+            {
+              noteId,
+              ...(input.seen === undefined ? {} : { seen: input.seen }),
+              ...(input.done === undefined ? {} : { done: input.done }),
+            },
+            now,
+          ),
+        file,
+      ),
+    );
+  });
+
+  const removeNote = Effect.fn("GitTeamService.removeNote")(function* (
+    input: Parameters<TeamService["Service"]["removeNote"]>[0],
+  ) {
+    const note = yield* requireNote(input.teamId, input.memberId, input.noteId);
+    if (note.from !== input.memberId) {
+      return yield* new TeamNoteRefusedError({ detail: "Only its author can remove a note." });
+    }
+    yield* changeMyFile(input.teamId, input.memberId, (file) =>
+      NotesModel.removeTeamNote(file, input.noteId),
+    );
+  });
+
   const releaseThreadClaims = Effect.fn("GitTeamService.releaseThreadClaims")(function* (
     input: ReleaseThreadClaimsInput,
   ) {
@@ -1356,6 +1468,11 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
     answerQuestion,
     listQuestions: (teamId) => view(teamId).pipe(Effect.map((found) => found.questions)),
     listAnswers: (teamId) => view(teamId).pipe(Effect.map((found) => found.answers)),
+    writeNote,
+    replyToNote,
+    markNote,
+    removeNote,
+    listNotes: (teamId) => view(teamId).pipe(Effect.map((found) => found.teamNotes)),
     recordActivity,
     listActivity: (teamId, listOptions) =>
       view(teamId).pipe(

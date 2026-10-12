@@ -104,6 +104,8 @@ export const TeamPlanResult = Schema.Struct({
   ),
   /** Teammates' claims that overlap this thread's earlier claims, found since; each told once. */
   lateOverlaps: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** Notes left for agents on the planned files or folders; follow them. Each told once. */
+  teamNotes: Schema.optionalKey(Schema.Array(Schema.String)),
   message: Schema.String,
 });
 export type TeamPlanResult = typeof TeamPlanResult.Type;
