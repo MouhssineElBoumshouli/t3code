@@ -7,6 +7,7 @@
  * visit; a first visit looks back one day.
  */
 import type { TeamClaim, TeamFeedTeam, TeamMemberId } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 
 import { claimPathInProject } from "./teamMarkers.ts";
 
@@ -159,5 +160,9 @@ export function buildCatchUp(input: CatchUpInput): CatchUp {
     );
   }
 
-  return { since: new Date(sinceMs).toISOString(), firstVisit, sentences };
+  return {
+    since: firstVisit ? DateTime.formatIso(DateTime.makeUnsafe(sinceMs)) : input.lastVisitAt!,
+    firstVisit,
+    sentences,
+  };
 }

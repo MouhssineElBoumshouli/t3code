@@ -50,6 +50,7 @@ import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { TeamFace } from "./TeamHolderMarks";
+import { TeamNotes } from "./TeamNotes";
 import { syncLabel } from "./TeamPresenceChip";
 
 const MAX_PATHS = 3;
@@ -111,11 +112,23 @@ function Muted(props: { readonly children: React.ReactNode }) {
   return <p className="text-xs text-muted-foreground">{props.children}</p>;
 }
 
-/** Where notes and decisions go; they arrive in the next round (UI_PLAN.md slice 4, part 2). */
-function NotesSection() {
+/** Notes for the team, or to future you (UI_PLAN.md slice 4, part 2). */
+function NotesSection(props: {
+  readonly environmentId: EnvironmentId;
+  readonly team: TeamFeedTeam | null;
+  readonly pathPrefix: string;
+}) {
   return (
     <Section title="Notes">
-      <Muted>Notes are coming soon.</Muted>
+      {props.team === null ? (
+        <Muted>Notes appear once this project's state is open on the server.</Muted>
+      ) : (
+        <TeamNotes
+          environmentId={props.environmentId}
+          team={props.team}
+          pathPrefix={props.pathPrefix}
+        />
+      )}
     </Section>
   );
 }
@@ -225,7 +238,7 @@ export function TeamHomePage(props: {
             <div className="grid gap-4 md:grid-cols-2">
               {solo ? null : <TeamTasks team={team} />}
               {solo ? null : <TeamHandoffs team={team} />}
-              <NotesSection />
+              <NotesSection environmentId={environmentId} team={team} pathPrefix={pathPrefix} />
               {solo ? <MakeTeamSection /> : null}
             </div>
           </WorkspacePageContainer>

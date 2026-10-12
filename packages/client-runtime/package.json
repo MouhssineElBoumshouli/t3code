@@ -127,6 +127,10 @@
       "types": "./src/state/teamHome.ts",
       "default": "./src/state/teamHome.ts"
     },
+    "./state/teamNotes": {
+      "types": "./src/state/teamNotes.ts",
+      "default": "./src/state/teamNotes.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"

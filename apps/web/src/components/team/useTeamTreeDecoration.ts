@@ -1,7 +1,8 @@
 /**
  * team-layer: holder marks in the file tree (team/UI_PLAN.md slice 1). The
  * tree draws a short text in its decoration lane: teammates' initials, or how
- * many of the person's chats hold the file. It reads the function from a ref,
+ * many of the person's chats hold the file, and "✎" for an open note on it
+ * (slice 4). It reads the function from a ref,
  * so the tree is built once; `onChange` re-renders its rows when the marks change.
  */
 import {
@@ -9,7 +10,8 @@ import {
   findProjectTeam,
   type TeamHolder,
 } from "@t3tools/client-runtime/state/teamMarkers";
-import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import { fileNotes } from "@t3tools/client-runtime/state/teamNotes";
+import type { EnvironmentId, ScopedThreadRef, TeamFeedTeam, TeamNote } from "@t3tools/contracts";
 import { useEffect, useMemo, useRef } from "react";
 
 import { useThreadShell } from "~/state/entities";
@@ -18,6 +20,31 @@ import { useTeamFeed } from "~/state/teamFeed";
 export interface TeamTreeDecoration {
   readonly text: string;
   readonly title: string;
+}
+
+/** A note on the row (slice 4): "✎", and who left it in the tooltip. */
+function notesDecoration(
+  team: TeamFeedTeam,
+  notes: ReadonlyArray<TeamNote>,
+): TeamTreeDecoration | null {
+  if (notes.length === 0) return null;
+  const lines = notes.map((note) => {
+    const from = team.solo
+      ? "Your note"
+      : `Note from ${team.members.find((member) => member.memberId === note.from)?.displayName ?? note.from}`;
+    const text = note.text.length > 80 ? `${note.text.slice(0, 79)}…` : note.text;
+    return `${from}: "${text}"`;
+  });
+  return { text: notes.length === 1 ? "✎" : `✎${notes.length}`, title: lines.join("\n") };
+}
+
+/** Holder marks and note marks on one row, in one decoration. */
+function joinDecorations(
+  holders: TeamTreeDecoration | null,
+  notes: TeamTreeDecoration | null,
+): TeamTreeDecoration | null {
+  if (holders === null || notes === null) return holders ?? notes;
+  return { text: `${holders.text} ${notes.text}`, title: `${holders.title}\n${notes.title}` };
 }
 
 /** The text and tooltip for one row's holders; null when nothing is marked. */
@@ -69,7 +96,11 @@ export function useTeamTreeDecoration(input: {
     if (projectTeam === null) return noDecoration;
     const viewing =
       environmentId === null || threadId === null ? null : { environmentId, threadId };
-    return (path: string) => treeDecorationFor(fileHolders(projectTeam, path, viewing));
+    return (path: string) =>
+      joinDecorations(
+        treeDecorationFor(fileHolders(projectTeam, path, viewing)),
+        notesDecoration(projectTeam.team, fileNotes(projectTeam, path)),
+      );
   }, [teams, projectId, environmentId, threadId]);
   const decorateRef = useRef(decorate);
   const onChangeRef = useRef(input.onChange);

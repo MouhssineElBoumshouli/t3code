@@ -36,5 +36,10 @@ export function createTeamFeedAtoms<R, E>(runtime: Atom.AtomRuntime<EnvironmentR
       label: "environment-data:team:answer",
       tag: WS_METHODS.teamAnswer,
     }),
+    /** Writing, replying to, marking and removing notes (slice 4). */
+    note: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:team:note",
+      tag: WS_METHODS.teamNote,
+    }),
   };
 }
