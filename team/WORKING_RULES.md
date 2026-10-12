@@ -37,6 +37,14 @@ The agent runs the manual tests itself in a headless browser, so a slice reaches
 - **Memory.** This laptop runs out of memory. Never run two dev servers and a full typecheck at the same time. Stop the browser (`browser_close`) when done.
 - **Honesty.** A self-test is a real check, so report it like one: what you clicked, what you saw, which screenshot shows it. It does not replace your own manual test when a slice asks for one.
 
+## Usage budget
+
+- At most 6 screenshots per round, only of things that are new or changed. Look at each once.
+- Live tests use one provider (Codex by default), unless the change is about a specific provider.
+- Run only the tests and typechecks for what you changed. The full server typecheck only at the end of a round, alone.
+- Read files with targeted searches, not whole large files when a part will do.
+- Keep rounds to one feature, and keep the final report short.
+
 ## Honesty
 
 - Never say something works unless you ran it and saw it work.
