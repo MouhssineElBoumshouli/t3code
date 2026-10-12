@@ -2,6 +2,23 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-12 — v2 port, step 4: provider hooks
+
+- **What changed** (WIP commit 614debbf6, finished in a1de6225a), all `team-layer:` marked:
+  - Claude (`ClaudeAdapterV2.ts`): `makeClaudeQueryOptions` takes `teamContext` (appended to the system prompt through `buildRuntimeInstructions`, once per session) and `hooks`; the call site passes `readTeamBriefing` and `claudeTeamEditHooks`. Upstream already gives T3's MCP server 65 min, so no timeout edit.
+  - Codex (`CodexAdapterV2.ts`): `buildCodexTurnStartParams` takes `teamContext`, sent as its own `t3_code_team` application entry; `mcp_servers["t3-code"].tool_timeout_sec = 3600`. Upstream's `CodexAdapterV2.test.ts` expects the exact config, so its expectation gets the marked field.
+  - Every other provider, and the turn note: new `team/teamTurnText.ts`, one marked edit in `RunExecutionService.ts` on the turn's message text. The note goes after the text every turn; the briefing goes before it on the provider thread's first turn and again only when it changes (D3 as amended); slash commands untouched. After a server restart it is sent once more (what the provider thread saw is not known then).
+  - Antigravity: `provider-acp`'s adapter passes the active turn's thread id to a flavor's `writeTextFile` (optional third argument); `AntigravityAdapterV2.ts` refuses a held file's write with the guard's reason.
+  - `provider/CodexTeamBriefing.test.ts` removed (it tested v1's session runtime); its cases are in the new test.
+- Checked: new `team/teamProviderHooks.test.ts`, 7 passed (first-turn and changed-briefing rule, Claude/Codex text gets the note only, slash untouched, nothing outside a team; Claude's `append` and hook; Codex's entry present/absent and `tool_timeout_sec`; Antigravity refuses a held file, writes a free one). Mutation: the Antigravity check switched off fails its test. Upstream tests of the touched files pass: `ClaudeAdapterV2`, `CodexAdapterV2` (161), `AntigravityAdapterV2` with `src/team/` (20 files, 518 tests), `RunExecutionService` (50), `provider-acp` server (8 files, 109). Scoped typecheck including the four touched upstream files: 0 errors.
+- **Left:** step 5 (web), step 6 (checks, live run, merge).
+
+## 2026-10-11 — v2 port, step 3: the team MCP tools
+
+- **What changed** (611ebc65b). `mcp/toolkits/team/handlers.ts` on upstream's tool-access layer: `team_status` and `team_memory_search` are `readsAsCaller` (an agent in a T3 chat), `team_plan`, `team_claim`, `team_task`, `team_handoff` are `actsAsCaller` (that chat's run must be live, and not a read-only client). The calling chat comes from v2's `McpInvocationContext.thread`; chat and project reads from `OrchestratorV2` and `ProjectService`; the plan card goes to `TeamCards` under the run. `tools.ts`: refusals (`OrchestratorMcpFailure`) in each tool's failure schema, `ThreadManagementService` in its dependencies. `McpHttpServer.ts`: registered with upstream's `toolkitRegistration` (two `team-layer:` lines). `auth/ChatGptRpcScopes.test.ts` follows upstream's pairing helper, `layerRuntime` and the socket's protocol version, the feed snapshot's `threadCards`, and its header no longer describes the old problem. Testkit: `layerRecordingDispatch` wraps the orchestration's real `ThreadManagementService` and changes only `dispatch`.
+- Checked: `vp test run src/team/ src/mcp/toolkits/team/ src/cli/team.test.ts src/auth/ChatGptRpcScopes.test.ts`: 23 files, 209 passed; `handlers.test.ts` 32 including a new one (an outside MCP client is refused; after the chat's run ends `team_status` still reads, `team_claim` is refused). `ChatGptRpcScopes.test.ts` 7 passed against a real merged server, so the server also starts with the team layer.
+- Unsure: a chat whose run ended can no longer `team_handoff` or `team_claim`; agents call them during their turn, to watch in the live run.
+
 ## 2026-10-11 — v2 port, step 2 (server core): done
 
 - **Step 1 done** (57bf47722, pushed): merge of upstream `ed0f7b908`; see that commit's message. After the laptop restart: tree clean, branch equal to origin, install re-run (fine).
