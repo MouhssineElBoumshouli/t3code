@@ -26,8 +26,11 @@
  * team's state is deleted so the server fetches the new one. Stop the dev
  * server first.
  *
+ * Each project gets its own team id (from its folder, `demoTeamId`), so seeded
+ * demos in one dev home never share a team; `--team-id` picks one instead.
+ *
  *   node apps/server/scripts/team-cold-start-seed.ts [--home-dir ~/.t3-dev]
- *     [--project ~/code/team-demo5] [--you login]
+ *     [--project ~/code/team-demo5] [--you login] [--team-id id]
  */
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -59,6 +62,8 @@ import * as VcsProcess from "../src/vcs/VcsProcess.ts";
 import {
   APP_FILES,
   commitAll,
+  demoTeamId,
+  demoTeamName,
   expandHome,
   git,
   inside,
@@ -66,10 +71,6 @@ import {
   writeFiles,
 } from "./teamDemoRepo.ts";
 
-const TEAM_FILE = TeamFile.make({
-  teamId: TeamId.make("team-demo5-cold-start"),
-  name: "Demo team 5",
-});
 const SARA_ENVIRONMENT = EnvironmentId.make("demo5-sara-server");
 const OMAR_ENVIRONMENT = EnvironmentId.make("demo5-omar-server");
 const SARA_CHAT = ThreadId.make("demo5-sara-chat");
@@ -88,7 +89,7 @@ class SeedRefusedError extends Schema.TaggedError<SeedRefusedError>()("SeedRefus
 const refuse = (detail: string) => Effect.fail(new SeedRefusedError({ detail }));
 
 const usage =
-  "Usage: node apps/server/scripts/team-cold-start-seed.ts [--home-dir ~/.t3-dev] [--project ~/code/team-demo5] [--you login]";
+  "Usage: node apps/server/scripts/team-cold-start-seed.ts [--home-dir ~/.t3-dev] [--project ~/code/team-demo5] [--you login] [--team-id id]";
 
 /** Marks a remote this script made, so a re-run may rebuild it. */
 const REMOTE_MARKER = "t3-team-cold-start-seed";
@@ -105,6 +106,7 @@ function readArgs() {
     homeDir: "~/.t3-dev",
     project: "~/code/team-demo5",
     you: undefined as string | undefined,
+    teamId: undefined as string | undefined,
   };
   for (let index = 0; index < args.length; index += 2) {
     const [flag, value] = [args[index], args[index + 1]];
@@ -112,6 +114,7 @@ function readArgs() {
     if (flag === "--home-dir") options.homeDir = value;
     else if (flag === "--project") options.project = value;
     else if (flag === "--you") options.you = value;
+    else if (flag === "--team-id") options.teamId = value;
     else return null;
   }
   const project = expandHome(options.project);
@@ -120,6 +123,10 @@ function readArgs() {
     project,
     remote: `${project}-remote.git`,
     you: options.you ?? defaultLogin(),
+    teamFile: TeamFile.make({
+      teamId: TeamId.make(options.teamId?.trim() || demoTeamId(project)),
+      name: demoTeamName(project),
+    }),
   };
 }
 
@@ -187,24 +194,35 @@ function buildRemote(remote: string) {
   return null;
 }
 
-function buildRepo(project: string, remote: string) {
-  if (NodeFS.existsSync(project)) {
-    const teamJson = NodePath.join(project, ".team", "team.json");
-    const ours =
-      NodeFS.existsSync(teamJson) &&
-      JSON.parse(NodeFS.readFileSync(teamJson, "utf8")).teamId === TEAM_FILE.teamId;
-    if (!ours && NodeFS.readdirSync(project).length > 0) {
-      return `${project} exists and was not made by this script. Pick another --project or remove it yourself.`;
-    }
-    NodeFS.rmSync(project, { recursive: true, force: true });
+const originOf = (project: string) => {
+  try {
+    return git(project, "remote", "get-url", "origin");
+  } catch {
+    return null;
   }
+};
+
+/** Refuses a project folder this script did not make: one with a team file and our remote. */
+function checkProject(project: string, remote: string) {
+  if (!NodeFS.existsSync(project) || NodeFS.readdirSync(project).length === 0) return null;
+  const ours =
+    NodeFS.existsSync(NodePath.join(project, ".team", "team.json")) &&
+    NodeFS.existsSync(NodePath.join(remote, REMOTE_MARKER)) &&
+    originOf(project) === `file://${remote}`;
+  return ours
+    ? null
+    : `${project} exists and was not made by this script. Pick another --project or remove it yourself.`;
+}
+
+function buildRepo(project: string, remote: string, teamFile: TeamFile) {
+  NodeFS.rmSync(project, { recursive: true, force: true });
   NodeFS.mkdirSync(project, { recursive: true });
   git(project, "init", "--quiet", "-b", "main");
   git(project, "remote", "add", "origin", `file://${remote}`);
   writeFiles(project, APP_FILES);
   const first = commitAll(project, "Pinboard: first version");
   writeFiles(project, {
-    ".team/team.json": `${JSON.stringify(TEAM_FILE, null, 2)}\n`,
+    ".team/team.json": `${JSON.stringify(teamFile, null, 2)}\n`,
     ".team/rulebook.md": RULEBOOK,
     ".team/decisions/0001-signed-cookie-sessions.md": decisionFile(first),
     [T3_PROJECT_FILE_NAME]: `${JSON.stringify(
@@ -213,7 +231,7 @@ function buildRepo(project: string, remote: string) {
       2,
     )}\n`,
   });
-  const teamSetup = commitAll(project, "Set up team Demo team 5");
+  const teamSetup = commitAll(project, `Set up team ${teamFile.name}`);
   return { first, teamSetup };
 }
 
@@ -240,9 +258,14 @@ const server = (input: {
   }).pipe(Effect.provideService(TeamHost.TeamHost, hostFor(input.login)));
 
 /** Opens the team as a member and returns the member id, or fails with the reason. */
-const join = (teams: TeamService.TeamService["Service"], project: string, create: boolean) =>
+const join = (
+  teams: TeamService.TeamService["Service"],
+  teamFile: TeamFile,
+  project: string,
+  create: boolean,
+) =>
   Effect.gen(function* () {
-    const input = { teamFile: TEAM_FILE, checkout: project };
+    const input = { teamFile, checkout: project };
     const membership = create
       ? (yield* teams.ensureTeam(input)).membership
       : yield* teams.openTeam(input);
@@ -256,6 +279,7 @@ const join = (teams: TeamService.TeamService["Service"], project: string, create
 
 const seedTeam = (input: {
   readonly project: string;
+  readonly teamFile: TeamFile;
   readonly environmentId: EnvironmentId;
   readonly you: TeamLogin;
   readonly stateRoot: string;
@@ -278,15 +302,16 @@ const seedTeam = (input: {
       stateRoot: input.stateRoot,
     });
     // You start the team, so you are its owner; the others join.
-    const you = yield* join(yours, input.project, true);
-    const sara = yield* join(saras, input.project, false);
-    const omar = yield* join(omars, input.project, false);
+    const you = yield* join(yours, input.teamFile, input.project, true);
+    const sara = yield* join(saras, input.teamFile, input.project, false);
+    const omar = yield* join(omars, input.teamFile, input.project, false);
+    const teamId = input.teamFile.teamId;
     const saraChat = { environmentId: SARA_ENVIRONMENT, threadId: SARA_CHAT };
     const omarChat = { environmentId: OMAR_ENVIRONMENT, threadId: OMAR_CHAT };
     const yourOldChat = { environmentId: input.environmentId, threadId: YOUR_OLD_CHAT };
 
     const yourTask = yield* yours.createTask({
-      teamId: TEAM_FILE.teamId,
+      teamId,
       actorMemberId: you,
       title: "Rate-limit the login endpoint",
       ownerMemberId: you,
@@ -295,7 +320,7 @@ const seedTeam = (input: {
       note: "Limiter done in src/auth/rateLimit.ts. Left: call allowLoginAttempt in handleLogin (src/auth/login.ts) and answer 429 when it says no; add tests.",
     });
     const saraTask = yield* saras.createTask({
-      teamId: TEAM_FILE.teamId,
+      teamId,
       actorMemberId: sara,
       title: "Add tag filters to search",
       ownerMemberId: sara,
@@ -306,14 +331,14 @@ const seedTeam = (input: {
     });
 
     yield* saras.claimPaths({
-      teamId: TEAM_FILE.teamId,
+      teamId,
       memberId: sara,
       thread: saraChat,
       paths: ["src/pins/search.ts", "src/api/routes.ts"],
       note: "tag filters",
     });
     yield* omars.claimPaths({
-      teamId: TEAM_FILE.teamId,
+      teamId,
       memberId: omar,
       thread: omarChat,
       paths: ["src/auth/session.ts"],
@@ -322,7 +347,7 @@ const seedTeam = (input: {
 
     const commit = input.commits.teamSetup;
     yield* saras.writeHandoff({
-      teamId: TEAM_FILE.teamId,
+      teamId,
       memberId: sara,
       thread: saraChat,
       taskId: saraTask.taskId,
@@ -334,7 +359,7 @@ const seedTeam = (input: {
       fileHashes: { "src/pins/search.ts": hashOf(input.project, "src/pins/search.ts") },
     });
     yield* yours.writeHandoff({
-      teamId: TEAM_FILE.teamId,
+      teamId,
       memberId: you,
       thread: yourOldChat,
       taskId: yourTask.taskId,
@@ -351,20 +376,20 @@ const seedTeam = (input: {
     // server's file is on the remote, and each saw the others'.
     yield* Effect.sleep(Duration.sum(GitTeamService.TEAM_SYNC_DELAY, Duration.seconds(1)));
     for (const teams of [yours, saras, omars, yours]) {
-      const synced = yield* teams.sync(TEAM_FILE.teamId);
+      const synced = yield* teams.sync(teamId);
       if (!synced.confirmed) {
         return yield* refuse(`A push to the remote did not land (${synced.reason}).`);
       }
     }
-    const members = yield* yours.listMembers(TEAM_FILE.teamId);
-    const claims = yield* yours.listActiveClaims(TEAM_FILE.teamId);
+    const members = yield* yours.listMembers(teamId);
+    const claims = yield* yours.listActiveClaims(teamId);
     return { members: members.map((member) => member.memberId), claims: claims.length };
   }).pipe(Effect.scoped);
 
 const main = Effect.gen(function* () {
   const args = readArgs();
   if (args === null) return yield* refuse(usage);
-  const { homeDir, project, remote, you } = args;
+  const { homeDir, project, remote, you, teamFile } = args;
   if (!isLogin(you)) {
     return yield* refuse(`--you must be a GitHub-style login (letters, digits, -): "${you}".`);
   }
@@ -384,18 +409,18 @@ const main = Effect.gen(function* () {
   }
   const environmentId = EnvironmentId.make(NodeFS.readFileSync(environmentIdPath, "utf8").trim());
 
-  const remoteRefused = buildRemote(remote);
-  if (remoteRefused !== null) return yield* refuse(remoteRefused);
-  const commits = buildRepo(project, remote);
-  if (typeof commits === "string") return yield* refuse(commits);
+  const refused = checkProject(project, remote) ?? buildRemote(remote);
+  if (refused !== null) return yield* refuse(refused);
+  const commits = buildRepo(project, remote, teamFile);
   // The dev server's copy of the old run's team state: it would push the old claims back.
-  const homeCopy = NodePath.join(homeDir, "userdata", "team", `${TEAM_FILE.teamId}.git`);
+  const homeCopy = NodePath.join(homeDir, "userdata", "team", `${teamFile.teamId}.git`);
   NodeFS.rmSync(homeCopy, { recursive: true, force: true });
 
   // The three servers' own state repos are scratch: the remote is what counts.
   const stateRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-team-seed-"));
   const seeded = yield* seedTeam({
     project,
+    teamFile,
     environmentId,
     you: TeamLogin.make(you),
     stateRoot,
@@ -418,7 +443,7 @@ const main = Effect.gen(function* () {
   yield* Console.log(
     [
       `Seeded ${project} (main at ${last.slice(0, 7)}, origin ${remote})`,
-      `and team "${TEAM_FILE.name}" on the remote's refs/t3-team/state: members ${seeded.members.join(", ")}, ${seeded.claims} active claims.`,
+      `and team "${teamFile.name}" (id ${teamFile.teamId}) on the remote's refs/t3-team/state: members ${seeded.members.join(", ")}, ${seeded.claims} active claims.`,
       `You are "${you}". Teammates: Sara and Omar, on their own servers.`,
       "Next: start the dev server as you (a remote on this computer has no GitHub login):",
       `  T3CODE_TEAM_LOGIN_OVERRIDE=${you} vp run dev --home-dir ${homeDir}`,

@@ -6,6 +6,7 @@
  * of the t3code repo and the real T3 home.
  */
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -18,6 +19,25 @@ export const T3CODE_REPO = NodePath.resolve(import.meta.dirname, "../../..");
 export const inside = (child: string, parent: string) => {
   const relative = NodePath.relative(parent, child);
   return relative === "" || (!relative.startsWith("..") && !NodePath.isAbsolute(relative));
+};
+
+/**
+ * A team id of its own for each demo folder, so seeded demos in one dev home
+ * never share a team. Stable for a folder, so a re-run keeps its id.
+ */
+export const demoTeamId = (project: string) => {
+  const name = NodePath.basename(project)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-|-$/gu, "");
+  const hash = NodeCrypto.createHash("sha256").update(NodePath.resolve(project)).digest("hex");
+  return `${name || "demo"}-${hash.slice(0, 8)}`;
+};
+
+/** "Demo team 15" for `team-demo15`, else the folder's name. */
+export const demoTeamName = (project: string) => {
+  const number = /team-demo(\d+)$/u.exec(project)?.[1];
+  return number ? `Demo team ${number}` : NodePath.basename(project);
 };
 
 const GIT_ENV = {

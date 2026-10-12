@@ -241,6 +241,7 @@ import {
 import type { Project } from "../types";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
+import { teamHomeTarget } from "~/components/team/teamHomeTarget"; // team-layer
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 
@@ -2182,9 +2183,11 @@ function OpenCommandPaletteDialog(props: {
     run: async () => {
       await navigate({
         to: "/team",
-        search: activeThread
-          ? { environmentId: activeThread.environmentId, projectId: activeThread.projectId }
-          : (defaultProjectRef ?? {}),
+        search: teamHomeTarget({
+          thread: activeThread,
+          draft: activeDraftThread,
+          fallback: defaultProjectRef,
+        }),
       });
     },
   });

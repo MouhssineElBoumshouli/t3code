@@ -1,36 +1,32 @@
 /**
  * team-layer: the sidebar icon row's entry to the Team home page, "Today" when
  * solo (team/UI_PLAN.md slice 4). It opens the page for the project of the
- * open chat (or of the page itself); elsewhere the page picks a project.
+ * open chat, a new unsent one included (or of the page itself); elsewhere the
+ * page picks a project.
  */
 import { findProjectTeam } from "@t3tools/client-runtime/state/teamMarkers";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { HouseIcon, UsersIcon } from "lucide-react";
 import { memo } from "react";
 
-import { useThreadShell } from "~/state/entities";
+import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import { useTeamFeed } from "~/state/teamFeed";
 
 import { SidebarMenuButton, SidebarMenuItem, useSidebar } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { teamHomeTarget } from "./teamHomeTarget";
 
 export const TeamHomeRailItem = memo(function TeamHomeRailItem() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
-  const params = useParams({ strict: false });
-  const shell = useThreadShell(
-    params.environmentId !== undefined && params.threadId !== undefined
-      ? {
-          environmentId: EnvironmentId.make(params.environmentId),
-          threadId: ThreadId.make(params.threadId),
-        }
-      : null,
-  );
-  // On the page itself, its own project.
-  const search = useSearch({ strict: false });
-  const environmentId = shell?.environmentId ?? search.environmentId ?? null;
-  const projectId = shell?.projectId ?? search.projectId ?? null;
+  const { activeThread, activeDraftThread } = useHandleNewThread();
+  const target = teamHomeTarget({
+    thread: activeThread,
+    draft: activeDraftThread,
+    page: useSearch({ strict: false }),
+  });
+  const environmentId = target.environmentId ?? null;
+  const projectId = target.projectId ?? null;
   const teams = useTeamFeed(environmentId);
   const isTeam = findProjectTeam(teams, projectId)?.team.solo === false;
   const label = isTeam ? "Team home" : "Today";
@@ -39,7 +35,7 @@ export const TeamHomeRailItem = memo(function TeamHomeRailItem() {
     if (isMobile) setOpenMobile(false);
     void navigate({
       to: "/team",
-      search: environmentId !== null && projectId !== null ? { environmentId, projectId } : {},
+      search: target,
     });
   };
 
