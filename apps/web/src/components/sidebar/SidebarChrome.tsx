@@ -30,6 +30,7 @@ import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
+import { TeamHomeRailItem } from "../team/TeamHomeRailItem"; // team-layer
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -212,6 +213,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         </SidebarMenuItem>
       ) : (
         <>
+          <TeamHomeRailItem /> {/* team-layer: Team home / Today (team/UI_PLAN.md slice 4) */}
           <SidebarUtilityItem
             icon={<SettingsIcon />}
             label="Settings"

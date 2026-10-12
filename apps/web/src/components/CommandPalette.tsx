@@ -59,6 +59,7 @@ import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
+  UsersIcon, // team-layer
   CheckIcon,
   ChevronRightIcon,
   CornerLeftUpIcon,
@@ -2168,6 +2169,23 @@ function OpenCommandPaletteDialog(props: {
     shortcutCommand: "usage.open",
     run: async () => {
       await navigate({ to: "/usage" });
+    },
+  });
+
+  // team-layer: the Team home page, "Today" when solo (team/UI_PLAN.md slice 4).
+  actionItems.push({
+    kind: "action",
+    value: "action:team-home",
+    searchTerms: ["team", "home", "today", "catch up", "teammates", "tasks", "handoffs"],
+    title: "Open Team home / Today",
+    icon: <UsersIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({
+        to: "/team",
+        search: activeThread
+          ? { environmentId: activeThread.environmentId, projectId: activeThread.projectId }
+          : (defaultProjectRef ?? {}),
+      });
     },
   });
 

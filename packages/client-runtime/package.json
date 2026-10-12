@@ -123,6 +123,10 @@
       "types": "./src/state/teamFeed.ts",
       "default": "./src/state/teamFeed.ts"
     },
+    "./state/teamHome": {
+      "types": "./src/state/teamHome.ts",
+      "default": "./src/state/teamHome.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
