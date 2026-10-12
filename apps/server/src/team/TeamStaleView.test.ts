@@ -5,28 +5,30 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  CheckpointId,
   CheckpointRef,
+  CheckpointScopeId,
+  CommandId,
   EnvironmentId,
-  type OrchestrationCheckpointSummary,
+  EventId,
+  NodeId,
   ProjectId,
-  ProviderInstanceId,
+  RunId,
   TeamFile,
   TeamId,
   TeamMemberId,
   type TeamPath,
   ThreadId,
-  TurnId,
 } from "@t3tools/contracts";
 import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
 import { commitAll, git, initRepo, writeFile } from "./testing/gitRepo.ts";
 import {
   fakeTeamHost,
@@ -37,6 +39,7 @@ import {
   useTeamOrigin,
 } from "./testing/teamState.ts";
 import * as TeamService from "./TeamService.ts";
+import * as TeamOrchestrator from "./teamOrchestrator.testkit.ts";
 import * as TeamStaleView from "./TeamStaleView.ts";
 import { installTeamTurnNote, withTeamTurnNote } from "./teamTurnNote.ts";
 
@@ -58,21 +61,6 @@ afterEach(() => NodeFS.rmSync(originRoot, { recursive: true, force: true }));
 
 const blobOf = (root: string, file: string) => git(root, "hash-object", file);
 
-const checkpoint = (
-  turn: number,
-  ref: string,
-  files: ReadonlyArray<string>,
-  completedAt: string,
-): OrchestrationCheckpointSummary => ({
-  turnId: TurnId.make(`turn-${turn}`),
-  checkpointTurnCount: turn,
-  checkpointRef: CheckpointRef.make(ref),
-  status: "ready",
-  files: files.map((path) => ({ path, kind: "modified", additions: 1, deletions: 1 })),
-  assistantMessageId: null,
-  completedAt,
-});
-
 /** A project folder with four files; `team` adds `.team/team.json`, else it is solo. */
 const makeHarness = Effect.fn("makeStaleViewHarness")(function* (team: boolean) {
   const fs = yield* FileSystem.FileSystem;
@@ -86,61 +74,21 @@ const makeHarness = Effect.fn("makeStaleViewHarness")(function* (team: boolean) 
   });
   if (team) useTeamOrigin(root, originUrl);
 
-  let checkpoints: ReadonlyArray<OrchestrationCheckpointSummary> = [];
+  const orchestration = yield* Layer.build(TeamOrchestrator.layer);
+  for (const threadId of [THREAD_A, THREAD_B]) {
+    yield* TeamOrchestrator.seedThread({
+      projectId: PROJECT_ID,
+      threadId,
+      workspaceRoot: root,
+    }).pipe(Effect.provide(orchestration));
+  }
   const dependencies = Layer.mergeAll(
     testTeamServiceLayer({
       environmentId: ENVIRONMENT_ID,
       stateDirectory: yield* fs.makeTempDirectoryScoped({ prefix: "t3-stale-view-state-" }),
     }),
     TestTeamGitLayer,
-    Layer.mock(ProjectionSnapshotQuery)({
-      getThreadShellById: (threadId) =>
-        Effect.succeedSome({
-          id: threadId,
-          projectId: PROJECT_ID,
-          title: "Thread",
-          modelSelection: { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" },
-          runtimeMode: "full-access" as const,
-          interactionMode: "default" as const,
-          branch: null,
-          worktreePath: null,
-          pullRequests: [],
-          latestTurn: null,
-          createdAt: "2026-10-08T10:00:00.000Z",
-          updatedAt: "2026-10-08T10:00:00.000Z",
-          archivedAt: null,
-          settledOverride: null,
-          settledAt: null,
-          session: null,
-          latestUserMessageAt: null,
-          hasPendingApprovals: false,
-          hasPendingUserInput: false,
-          hasActionableProposedPlan: false,
-        }),
-      getProjectShellById: () =>
-        Effect.succeedSome({
-          id: PROJECT_ID,
-          title: "Project",
-          workspaceRoot: root,
-          defaultModelSelection: null,
-          scripts: [],
-          repositoryIdentity: null,
-          createdAt: "2026-10-08T10:00:00.000Z",
-          updatedAt: "2026-10-08T10:00:00.000Z",
-        }),
-      getThreadCheckpointContext: (threadId) =>
-        Effect.succeed(
-          threadId === THREAD_A && checkpoints.length > 0
-            ? Option.some({
-                threadId,
-                projectId: PROJECT_ID,
-                workspaceRoot: root,
-                worktreePath: null,
-                checkpoints,
-              })
-            : Option.none(),
-        ),
-    }),
+    Layer.succeedContext(orchestration),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
     }),
@@ -155,14 +103,45 @@ const makeHarness = Effect.fn("makeStaleViewHarness")(function* (team: boolean) 
   const memberId = membership.member.memberId;
   const { read } = yield* TeamStaleView.make.pipe(Effect.provide(context));
 
-  /** Thread A's turn ends now (test clock): its checkpoint is the folder as it is. */
+  /** Thread A's run ends now (test clock): its checkpoint is the folder as it is. */
+  let runs = 0;
   const endTurnOfA = (files: ReadonlyArray<string>) =>
     Effect.gen(function* () {
-      writeFile(root, `.checkpoint-${checkpoints.length}`, "");
-      const ref = commitAll(root, `checkpoint ${checkpoints.length + 1}`);
-      const completedAt = DateTime.formatIso(yield* DateTime.now);
-      checkpoints = [...checkpoints, checkpoint(checkpoints.length + 1, ref, files, completedAt)];
-    });
+      writeFile(root, `.checkpoint-${runs}`, "");
+      runs += 1;
+      const ref = commitAll(root, `checkpoint ${runs}`);
+      const now = yield* DateTime.now;
+      const nodeId = NodeId.make(`node:stale-view-${runs}`);
+      const runId = RunId.make(`run:stale-view-${runs}`);
+      const eventSink = yield* EventSink.EventSinkV2;
+      yield* eventSink.write({
+        commandId: CommandId.make(`command:stale-view-${runs}`),
+        events: [
+          {
+            id: EventId.make(`event:stale-view-${runs}`),
+            type: "checkpoint.captured",
+            threadId: THREAD_A,
+            runId,
+            nodeId,
+            occurredAt: now,
+            payload: {
+              id: CheckpointId.make(`checkpoint:stale-view-${runs}`),
+              threadId: THREAD_A,
+              scopeId: CheckpointScopeId.make("scope:stale-view"),
+              runId,
+              nodeId,
+              parentCheckpointId: null,
+              ordinalWithinScope: runs,
+              appRunOrdinal: runs,
+              ref: CheckpointRef.make(ref),
+              status: "ready",
+              files: files.map((path) => ({ path, kind: "modified", additions: 1, deletions: 1 })),
+              capturedAt: now,
+            },
+          },
+        ],
+      });
+    }).pipe(Effect.provide(orchestration));
   /** Another thread's automatic note on `file` as it is now in `folder`. */
   const noteBy = (
     service: TeamService.TeamService["Service"],

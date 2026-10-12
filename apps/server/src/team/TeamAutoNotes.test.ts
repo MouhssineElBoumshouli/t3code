@@ -1,31 +1,31 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  CheckpointId,
+  CheckpointRef,
+  CheckpointScopeId,
+  CommandId,
   EnvironmentId,
   EventId,
+  NodeId,
   ProjectId,
-  ProviderInstanceId,
+  RunId,
   TeamFile,
   TeamId,
-  ThreadId,
-  type OrchestrationEvent,
-  type OrchestrationProjectShell,
-  type OrchestrationThreadShell,
   type TeamHandoff,
+  ThreadId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
-import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
+import * as TeamOrchestrator from "./teamOrchestrator.testkit.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { TeamAutoNotesLive } from "./TeamAutoNotes.ts";
@@ -41,7 +41,6 @@ import {
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 const PROJECT_ID = ProjectId.make("project-1");
 const TEAM_ID = TeamId.make("team-1");
-const NOW = "2026-10-01T00:00:00.000Z";
 const THREAD_A = ThreadId.make("thread-a");
 const THREAD_B = ThreadId.make("thread-b");
 /** Its project has no `.team/`. */
@@ -53,82 +52,56 @@ const GitLayer = GitVcsDriver.layer.pipe(
   Layer.provideMerge(NodeServices.layer),
 );
 
-function makeThread(id: ThreadId, worktreePath: string | null): OrchestrationThreadShell {
-  return {
-    id,
-    projectId: PROJECT_ID,
-    title: "Thread",
-    modelSelection: { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath,
-    pullRequests: [],
-    latestTurn: null,
-    createdAt: NOW,
-    updatedAt: NOW,
-    archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
-    session: null,
-    latestUserMessageAt: null,
-    hasPendingApprovals: false,
-    hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
-  };
-}
-
-function makeProject(workspaceRoot: string): OrchestrationProjectShell {
-  return {
-    id: PROJECT_ID,
-    title: "Project",
-    workspaceRoot,
-    defaultModelSelection: null,
-    scripts: [],
-    repositoryIdentity: null,
-    createdAt: NOW,
-    updatedAt: NOW,
-  };
-}
-
 let sequence = 0;
-/** A turn diff as the checkpoint reactor sends it: paths relative to the repo root. */
-function turnDiff(
+/**
+ * A checkpoint as the capture service writes it: the run's own (with a run
+ * id), or a baseline (none). Paths are relative to the repo root.
+ */
+const checkpointCaptured = (
   threadId: ThreadId,
   files: ReadonlyArray<string>,
-  status: "ready" | "missing" = "ready",
-): OrchestrationEvent {
-  sequence += 1;
-  return {
-    sequence,
-    eventId: EventId.make(`event-${sequence}`),
-    aggregateKind: "thread",
-    aggregateId: threadId,
-    occurredAt: NOW,
-    commandId: null,
-    causationEventId: null,
-    correlationId: null,
-    metadata: {},
-    type: "thread.turn-diff-completed",
-    payload: {
-      threadId,
-      turnId: `turn-${sequence}`,
-      checkpointTurnCount: sequence,
-      checkpointRef: `refs/t3/checkpoints/${sequence}`,
-      status,
-      files: files.map((path) => ({ path, kind: "modified", additions: 1, deletions: 0 })),
-      assistantMessageId: null,
-      completedAt: NOW,
-    },
-  } as unknown as OrchestrationEvent;
-}
+  options: { readonly status?: "ready" | "missing"; readonly baseline?: boolean } = {},
+) =>
+  Effect.gen(function* () {
+    const eventSink = yield* EventSink.EventSinkV2;
+    sequence += 1;
+    const now = yield* DateTime.now;
+    const nodeId = NodeId.make(`node:auto-notes-${sequence}`);
+    const runId = options.baseline ? null : RunId.make(`run:auto-notes-${sequence}`);
+    yield* eventSink.write({
+      commandId: CommandId.make(`command:auto-notes-${sequence}`),
+      events: [
+        {
+          id: EventId.make(`event:auto-notes-${sequence}`),
+          type: "checkpoint.captured",
+          threadId,
+          ...(runId === null ? {} : { runId }),
+          nodeId,
+          occurredAt: now,
+          payload: {
+            id: CheckpointId.make(`checkpoint:auto-notes-${sequence}`),
+            threadId,
+            scopeId: CheckpointScopeId.make(`scope:auto-notes-${threadId}`),
+            runId,
+            nodeId,
+            parentCheckpointId: null,
+            ordinalWithinScope: sequence,
+            appRunOrdinal: runId === null ? null : sequence,
+            ref: CheckpointRef.make(`refs/t3/checkpoints/auto-notes-${sequence}`),
+            status: options.status ?? "ready",
+            files: files.map((path) => ({ path, kind: "modified", additions: 1, deletions: 0 })),
+            capturedAt: now,
+          },
+        },
+      ],
+    });
+  });
 
 const makeHarness = Effect.fn("makeTeamAutoNotesHarness")(function* (options: {
   readonly workspaceRoot: string;
   readonly plainRoot: string;
   readonly worktrees?: Partial<Record<ThreadId, string>>;
 }) {
-  const events = yield* PubSub.unbounded<OrchestrationEvent>();
   // Every saved note, in order.
   const saved = yield* Queue.unbounded<TeamHandoff>();
   const fs = yield* FileSystem.FileSystem;
@@ -165,32 +138,26 @@ const makeHarness = Effect.fn("makeTeamAutoNotesHarness")(function* (options: {
     checkout: options.workspaceRoot,
   });
 
+  // The real v2 orchestrator, with the threads in the project.
+  const orchestration = yield* Layer.build(TeamOrchestrator.layer);
+  const seed = (threadId: ThreadId, worktreePath: string | null) =>
+    TeamOrchestrator.seedThread({
+      projectId: PROJECT_ID,
+      threadId,
+      workspaceRoot: options.workspaceRoot,
+      worktreePath,
+    }).pipe(Effect.provide(orchestration));
+  yield* seed(THREAD_A, options.worktrees?.[THREAD_A] ?? null);
+  yield* seed(THREAD_B, options.worktrees?.[THREAD_B] ?? null);
+  yield* seed(THREAD_PLAIN, options.plainRoot);
+
   yield* Layer.build(
     TeamAutoNotesLive.pipe(
       Layer.provide(
         Layer.mergeAll(
           Layer.succeedContext(teamContext),
           GitLayer,
-          Layer.mock(OrchestrationEngineService)({
-            subscribeDomainEvents: PubSub.subscribe(events).pipe(
-              Effect.map((subscription) => Stream.fromSubscription(subscription)),
-            ),
-          }),
-          Layer.mock(ProjectionSnapshotQuery)({
-            getThreadShellById: (threadId) =>
-              Effect.succeed(
-                Option.some(
-                  makeThread(
-                    threadId,
-                    threadId === THREAD_PLAIN
-                      ? options.plainRoot
-                      : (options.worktrees?.[threadId] ?? null),
-                  ),
-                ),
-              ),
-            getProjectShellById: () =>
-              Effect.succeed(Option.some(makeProject(options.workspaceRoot))),
-          }),
+          Layer.succeedContext(orchestration),
           Layer.mock(ServerEnvironment.ServerEnvironment)({
             getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
             getDescriptor: Effect.succeed({
@@ -208,7 +175,11 @@ const makeHarness = Effect.fn("makeTeamAutoNotesHarness")(function* (options: {
 
   return {
     teams,
-    publish: (event: OrchestrationEvent) => PubSub.publish(events, event),
+    publish: (
+      threadId: ThreadId,
+      files: ReadonlyArray<string>,
+      options?: Parameters<typeof checkpointCaptured>[2],
+    ) => checkpointCaptured(threadId, files, options).pipe(Effect.provide(orchestration)),
     /** The next saved note; events are handled in order, so earlier ones are done. */
     nextSaved: Queue.take(saved),
     savedCount: Queue.size(saved),
@@ -231,11 +202,12 @@ describe("TeamAutoNotes", () => {
       initRepo(plainRoot, { "src/x.ts": "x\n" });
       const harness = yield* makeHarness({ workspaceRoot: root, plainRoot });
 
-      // Skipped: a mid-turn placeholder and a turn with no files.
-      yield* harness.publish(turnDiff(THREAD_A, ["src/login.ts"], "missing"));
-      yield* harness.publish(turnDiff(THREAD_A, []));
+      // Skipped: a checkpoint that could not be read, a run with no files, a baseline.
+      yield* harness.publish(THREAD_A, ["src/login.ts"], { status: "missing" });
+      yield* harness.publish(THREAD_A, []);
+      yield* harness.publish(THREAD_A, ["src/login.ts"], { baseline: true });
       // A checkout with no team file: the note goes to the solo team, not the team.
-      yield* harness.publish(turnDiff(THREAD_PLAIN, ["src/x.ts"]));
+      yield* harness.publish(THREAD_PLAIN, ["src/x.ts"]);
       const plain = yield* harness.nextSaved;
       assert.equal(plain.thread.threadId, THREAD_PLAIN);
       assert.notEqual(plain.teamId, TEAM_ID);
@@ -243,7 +215,7 @@ describe("TeamAutoNotes", () => {
 
       writeFile(root, "src/login.ts", "v2\n");
       writeFile(root, "src/form.ts", "form\n");
-      yield* harness.publish(turnDiff(THREAD_A, ["src/login.ts", "src/form.ts"]));
+      yield* harness.publish(THREAD_A, ["src/login.ts", "src/form.ts"]);
       const first = yield* harness.nextSaved;
       assert.equal(first.thread.threadId, THREAD_A);
       assert.isTrue(first.automatic);
@@ -257,7 +229,7 @@ describe("TeamAutoNotes", () => {
       assert.equal(git(root, "cat-file", "blob", first.fileHashes!["src/form.ts"]!), "form");
 
       writeFile(root, "src/api.ts", "api\n");
-      yield* harness.publish(turnDiff(THREAD_A, ["src/api.ts"]));
+      yield* harness.publish(THREAD_A, ["src/api.ts"]);
       const second = yield* harness.nextSaved;
       assert.equal(second.handoffId, first.handoffId);
       assert.deepEqual(second.files, ["src/api.ts", "src/login.ts", "src/form.ts"]);
@@ -287,13 +259,13 @@ describe("TeamAutoNotes", () => {
         worktrees: { [THREAD_B]: path.join(worktree, "app") },
       });
 
-      // Turn diff paths are relative to the repo root; README.md is outside the project.
-      yield* harness.publish(turnDiff(THREAD_A, ["app/src/a.ts", "README.md"]));
+      // Checkpoint paths are relative to the repo root; README.md is outside the project.
+      yield* harness.publish(THREAD_A, ["app/src/a.ts", "README.md"]);
       const fromA = yield* harness.nextSaved;
       assert.deepEqual(fromA.files, ["src/a.ts"]);
 
       writeFile(worktree, "app/src/b.ts", "b\n");
-      yield* harness.publish(turnDiff(THREAD_B, ["app/src/b.ts"]));
+      yield* harness.publish(THREAD_B, ["app/src/b.ts"]);
       const fromB = yield* harness.nextSaved;
       assert.notEqual(fromB.handoffId, fromA.handoffId);
       assert.deepEqual(fromB.files, ["src/b.ts"]);

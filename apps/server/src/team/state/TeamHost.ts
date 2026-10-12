@@ -20,7 +20,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../../config.ts";
-import { parseGitHubAuthStatus } from "../../sourceControl/gitHubAuthStatus.ts";
+import { parseGitHubAuthStatus } from "@t3tools/source-control-github/server/gitHubAuthStatus";
 import * as VcsProcess from "../../vcs/VcsProcess.ts";
 
 /**

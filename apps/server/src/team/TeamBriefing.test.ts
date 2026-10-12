@@ -2,7 +2,7 @@ import { ThreadId } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { buildRuntimeInstructions } from "../provider/RuntimeInstructions.ts";
+import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import {
   TEAM_BRIEFING_MAX_NAME_LENGTH,
   TEAM_BRIEFING_TOKEN_BUDGET,

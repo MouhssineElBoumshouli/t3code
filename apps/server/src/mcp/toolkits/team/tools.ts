@@ -3,14 +3,19 @@
  * descriptions stay under 40 words and results stay short. A project without
  * `.team/team.json` gets a plain {@link NotInTeamResult}, not an error.
  */
-import { TeamTaskStatus } from "@t3tools/contracts";
+import { OrchestratorMcpFailure, TeamTaskStatus } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import * as Tool from "effect/unstable/ai/Tool";
-import * as Toolkit from "effect/unstable/ai/Toolkit";
+import * as Tool from "effect/ai/Tool";
+import * as Toolkit from "effect/ai/Toolkit";
 
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
-const dependencies = [McpInvocationContext.McpInvocationContext];
+// The caller checks (`McpToolAccess`) read the calling thread.
+const dependencies = [
+  McpInvocationContext.McpInvocationContext,
+  ThreadManagementService.ThreadManagementService,
+];
 
 /** A problem the agent can fix or report, shown to it as is. */
 export class TeamToolError extends Schema.TaggedError<TeamToolError>()("TeamToolError", {
@@ -31,7 +36,8 @@ export class TeamToolFailedError extends Schema.TaggedError<TeamToolFailedError>
   }
 }
 
-const TeamToolFailure = Schema.Union([TeamToolError, TeamToolFailedError]);
+// `OrchestratorMcpFailure`: a caller the tool refuses (not a T3 chat, or its run is not live).
+const TeamToolFailure = Schema.Union([TeamToolError, TeamToolFailedError, OrchestratorMcpFailure]);
 
 export const NotInTeamResult = Schema.Struct({
   inTeam: Schema.Literal(false),

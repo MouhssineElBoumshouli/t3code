@@ -2,7 +2,7 @@
  * The warning card's hold and click (fork-only, team/PREVENTION_PLAN.md, slice 3a).
  *
  * When `team_plan` finds a planned file someone else holds, {@link TeamChoices.ask}
- * appends a `team.choice` activity to the thread (the card) and holds the tool
+ * adds a `team.choice` card to the chat (`TeamCards`) and holds the tool
  * call until the user picks a choice, the way the preview tools wait for the
  * browser. Each provider waits only so long for a tool call ({@link holdCap});
  * at the cap the agent is told to stop and end its turn.
@@ -10,18 +10,19 @@
  * {@link TeamChoices.choose} runs the click: the choice's side effect (release
  * the held files' claims, or tell the team the user went ahead), then delivery:
  * to the held call if one is still waiting, else as a new turn whose message is
- * the choice (cap reached, server restarted, turn stopped). Then a
- * `team.choice.made` activity, so the choice stays on the card.
+ * the choice (cap reached, server restarted, turn stopped), sent as T3 Code's
+ * own message (a `system` notification, V2_PORT_PLAN.md D2). Then a
+ * `team.choice.made` record, so the choice stays on the card.
  *
  * @module TeamChoices
  */
 import {
   buildOnTopClaim,
   CommandId,
-  EventId,
   MessageId,
   type ProviderDriverKind,
   type ProviderInstanceId,
+  type RunId,
   TEAM_CHOICE_ACTIVITY_KIND,
   TEAM_CHOICE_MADE_ACTIVITY_KIND,
   type TeamChoice,
@@ -38,8 +39,8 @@ import {
   type TeamChooseInput,
   type TeamChooseResult,
   type TeamPlanFile,
+  type TeamCardKind,
   type ThreadId,
-  type TurnId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -57,16 +58,18 @@ import * as Semaphore from "effect/Semaphore";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { makeTeamResolver, type TeamContext } from "../mcp/toolkits/team/resolve.ts";
-import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as TeamCards from "./TeamCards.ts";
 import { moveCopyOnto } from "./teamCopy.ts";
 import * as TeamService from "./TeamService.ts";
 
 /**
  * How long each provider lets a tool call wait (PREVENTION_PLAN.md section 1).
- * Codex gets `tool_timeout_sec=3600` from CodexAdapter, Claude a 1 h `timeout`
- * on T3's MCP server from ClaudeAdapter (its default drops the call at 60 s).
+ * Codex gets `tool_timeout_sec=3600` from CodexAdapterV2 (a team-layer edit),
+ * Claude 65 min from upstream's own `timeout` on T3's MCP server.
  * The rest are not known, so they get less than 60 s.
  */
 export const holdCap = (driver: ProviderDriverKind | string): Duration.Duration => {
@@ -117,8 +120,8 @@ export interface ShowEditedInput {
   readonly context: TeamContext;
   /** The files the turn changed that someone else holds and this chat did not plan. */
   readonly files: ReadonlyArray<TeamPlanFile>;
-  /** The turn whose diff changed them; a newer turn stops the card counting as waiting. */
-  readonly turnId: TurnId;
+  /** The run whose checkpoint changed them; a newer run stops the card counting as waiting. */
+  readonly runId: RunId;
 }
 
 export class TeamChoices extends Context.Service<
@@ -298,16 +301,18 @@ interface Delivered {
 
 interface Waiter {
   readonly threadId: ThreadId;
-  /** The turn that made the call. Once it stops, nothing reads the call's answer. */
-  readonly turnId: TurnId | null;
+  /** The run that made the call. Once it stops, nothing reads the call's answer. */
+  readonly runId: RunId | null;
   /** The click's choice and what to tell the agent, or none when the cap passes first. */
   readonly deferred: Deferred.Deferred<Option.Option<Delivered>>;
 }
 
 export const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const threads = yield* ThreadManagementService.ThreadManagementService;
+  const providers = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+  const cards = yield* TeamCards.TeamCards;
   const crypto = yield* Crypto.Crypto;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
@@ -320,77 +325,73 @@ export const make = Effect.gen(function* () {
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
   const listChoices = (threadId: ThreadId) =>
-    snapshots.listActivitiesByKind(TEAM_CHOICE_ACTIVITY_KIND).pipe(
-      Effect.map((activities) =>
-        activities.flatMap((activity) => {
-          const payload = decodeChoice(activity.payload);
-          return Option.isSome(payload) && payload.value.threadId === threadId
-            ? [payload.value]
-            : [];
+    cards.forThread(threadId).pipe(
+      Effect.map((entries) =>
+        entries.flatMap((entry) => {
+          if (entry.kind !== TEAM_CHOICE_ACTIVITY_KIND) return [];
+          const payload = decodeChoice(entry.payload);
+          return Option.isSome(payload) ? [payload.value] : [];
         }),
       ),
     );
 
-  const madeChoices = snapshots.listActivitiesByKind(TEAM_CHOICE_MADE_ACTIVITY_KIND).pipe(
+  const allChoices = cards
+    .listByKind(TEAM_CHOICE_ACTIVITY_KIND)
+    .pipe(
+      Effect.map((entries) =>
+        entries.flatMap(({ entry }) => Option.toArray(decodeChoice(entry.payload))),
+      ),
+    );
+
+  const madeChoices = cards.listByKind(TEAM_CHOICE_MADE_ACTIVITY_KIND).pipe(
     Effect.map(
-      (activities) =>
+      (entries) =>
         new Map(
-          activities.flatMap((activity) => {
-            const payload = decodeMade(activity.payload);
+          entries.flatMap(({ entry }) => {
+            const payload = decodeMade(entry.payload);
             return Option.isSome(payload) ? [[payload.value.choiceId, payload.value] as const] : [];
           }),
         ),
     ),
   );
 
-  const appendActivity = (input: {
-    readonly threadId: ThreadId;
-    readonly kind: string;
-    readonly summary: string;
-    readonly payload: unknown;
-    readonly id: string;
-    /** The turn to file it under; else the running turn, if any. */
-    readonly turnId?: TurnId;
-  }) =>
-    Effect.gen(function* () {
-      const thread = yield* snapshots.getThreadShellById(input.threadId);
-      const latestTurn = Option.getOrUndefined(thread)?.latestTurn ?? null;
-      const runningTurnId = latestTurn?.state === "running" ? latestTurn.turnId : null;
-      const createdAt = yield* nowIso;
-      yield* engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.make(`server:${input.id}`),
-        threadId: input.threadId,
-        activity: {
-          id: EventId.make(input.id),
-          tone: "info",
-          kind: input.kind,
-          summary: input.summary,
-          payload: input.payload,
-          turnId: input.turnId ?? runningTurnId,
-          createdAt,
-        },
-        createdAt,
-      });
-    });
-
-  const runningTurn = (threadId: ThreadId) =>
-    snapshots.getThreadShellById(threadId).pipe(
-      Effect.map((thread) => {
-        const turn = Option.getOrUndefined(thread)?.latestTurn;
-        return turn?.state === "running" ? turn.turnId : null;
-      }),
+  /** The chat's run going now, if any. */
+  const activeRun = (threadId: ThreadId) =>
+    orchestrator.getThreadShell(threadId).pipe(
+      Effect.map((shell): RunId | null => shell?.activeRunId ?? null),
       Effect.orElseSucceed(() => null),
     );
 
-  /** The session's driver; a built-in instance is named after its driver when there is none yet. */
+  const appendCard = (input: {
+    readonly threadId: ThreadId;
+    readonly kind: TeamCardKind;
+    readonly summary: string;
+    readonly payload: unknown;
+    readonly id: string;
+    /** The run to file it under; else the active run, if any. */
+    readonly runId?: RunId;
+  }) =>
+    Effect.gen(function* () {
+      yield* cards.append({
+        threadId: input.threadId,
+        entry: {
+          id: input.id,
+          kind: input.kind,
+          summary: input.summary,
+          payload: input.payload,
+          runId: input.runId ?? (yield* activeRun(input.threadId)),
+          createdAt: yield* nowIso,
+        },
+      });
+    });
+
+  /** The chat's provider driver; a built-in instance is named after its driver. */
   const capFor = (threadId: ThreadId, instanceId: ProviderInstanceId) =>
-    snapshots.getThreadShellById(threadId).pipe(
-      Effect.map((thread) =>
-        holdCap(Option.getOrUndefined(thread)?.session?.providerName ?? instanceId),
-      ),
-      Effect.orElseSucceed(() => holdCap(instanceId)),
-    );
+    Effect.gen(function* () {
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      const instance = yield* providers.getInstance(shell?.providerInstanceId ?? instanceId);
+      return holdCap(instance?.driverKind ?? instanceId);
+    }).pipe(Effect.orElseSucceed(() => holdCap(instanceId)));
 
   /**
    * An unanswered card of this thread that already names every held file
@@ -430,7 +431,7 @@ export const make = Effect.gen(function* () {
       const cap = yield* capFor(threadId, input.providerInstanceId);
       const waiter: Waiter = {
         threadId,
-        turnId: yield* runningTurn(threadId),
+        runId: yield* activeRun(threadId),
         deferred: yield* Deferred.make<Option.Option<Delivered>>(),
       };
       // Registered before the card shows, so a click always finds this call.
@@ -450,7 +451,7 @@ export const make = Effect.gen(function* () {
       );
       const chosen = yield* Effect.gen(function* () {
         if (reused === undefined) {
-          yield* appendActivity({
+          yield* appendCard({
             threadId,
             kind: TEAM_CHOICE_ACTIVITY_KIND,
             summary: teamChoiceSummary(input.files.length),
@@ -539,10 +540,10 @@ export const make = Effect.gen(function* () {
       }
       return resolved.context;
     }).pipe(
-      Effect.catchTag("TeamToolError", (error) =>
-        Effect.fail(new TeamChoiceError({ detail: error.detail })),
-      ),
-      Effect.catchTag("TeamToolFailedError", failed("The team could not be read.")),
+      Effect.catchTags({
+        TeamToolError: (error) => Effect.fail(new TeamChoiceError({ detail: error.detail })),
+        TeamToolFailedError: failed("The team could not be read."),
+      }),
     );
 
   /** "Ask": the question goes to the team state for the teammates the card names. */
@@ -575,11 +576,9 @@ export const make = Effect.gen(function* () {
   const moveOntoHolder = (card: TeamChoiceActivityPayload) =>
     Effect.gen(function* () {
       const context = yield* teamContextOf(card.threadId);
-      const shell = Option.getOrUndefined(
-        yield* snapshots
-          .getThreadShellById(card.threadId)
-          .pipe(Effect.catch(failed("This chat could not be read."))),
-      );
+      const shell = yield* orchestrator
+        .getThreadShell(card.threadId)
+        .pipe(Effect.catch(failed("This chat could not be read.")));
       const folder = shell?.worktreePath ?? null;
       if (folder === null) {
         return yield* new TeamChoiceError({
@@ -626,26 +625,33 @@ export const make = Effect.gen(function* () {
       }
     });
 
-  /** A turn whose message comes from the card; `key` keeps each card's turns apart. */
-  const startTurn = (threadId: ThreadId, key: string, text: string) =>
+  /**
+   * A turn whose message comes from the card, sent as T3 Code's own (a
+   * `system` notification: the chat shows `summary`, the agent gets `text`).
+   * Queued after a run still going. `key` keeps each card's turns apart.
+   */
+  const startTurn = (threadId: ThreadId, key: string, text: string, summary: string) =>
     Effect.gen(function* () {
-      const thread = yield* snapshots.getThreadShellById(threadId);
-      if (Option.isNone(thread)) {
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      if (shell === null) {
         return yield* new TeamChoiceError({ detail: "This chat was not found." });
       }
-      yield* engine.dispatch({
-        type: "thread.turn.start",
+      yield* threads.dispatch({
+        type: "message.dispatch",
         commandId: CommandId.make(`server:${key}:turn`),
         threadId,
-        message: {
-          messageId: choiceTurnMessageId(key),
-          role: "user",
-          text,
-          attachments: [],
+        messageId: choiceTurnMessageId(key),
+        text,
+        attachments: [],
+        notification: {
+          source: { kind: "system" },
+          outcome: "updated",
+          summary,
+          detail: text,
         },
-        runtimeMode: thread.value.runtimeMode,
-        interactionMode: thread.value.interactionMode,
-        createdAt: yield* nowIso,
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "server",
       });
     });
 
@@ -653,7 +659,7 @@ export const make = Effect.gen(function* () {
   const recordMade = (threadId: ThreadId, made: TeamChoiceMadePayload) =>
     Effect.gen(function* () {
       const first = !(yield* madeChoices).has(made.choiceId);
-      yield* appendActivity({
+      yield* appendCard({
         threadId,
         kind: TEAM_CHOICE_MADE_ACTIVITY_KIND,
         summary: teamChoiceMadeSummary(made),
@@ -676,20 +682,22 @@ export const make = Effect.gen(function* () {
     readonly choice: TeamChoice;
     readonly tool: string;
     readonly message: string;
+    /** What the chat shows for the new turn's message. */
+    readonly summary: string;
     readonly noTurn: boolean;
   }) =>
     Effect.gen(function* () {
-      const running = yield* runningTurn(input.threadId);
+      const running = yield* activeRun(input.threadId);
       let delivery: TeamChoiceDelivery = input.noTurn ? "none" : "turn";
       for (const waiter of waiting.get(input.choiceId) ?? []) {
-        const live = running !== null && (waiter.turnId ?? running) === running;
+        const live = running !== null && (waiter.runId ?? running) === running;
         const answer = live
           ? Option.some<Delivered>({ choice: input.choice, instruction: input.tool })
           : Option.none();
         if ((yield* Deferred.succeed(waiter.deferred, answer)) && live) delivery = "held";
       }
       if (delivery === "turn") {
-        yield* startTurn(input.threadId, input.key, input.message).pipe(
+        yield* startTurn(input.threadId, input.key, input.message, input.summary).pipe(
           Effect.catchCause(failed("The choice was saved, but the agent could not be started.")),
         );
       }
@@ -792,6 +800,7 @@ export const make = Effect.gen(function* () {
           choice,
           tool: choiceInstruction(choice, card.files, "tool", edited, made),
           message: choiceInstruction(choice, card.files, "message", edited, made),
+          summary: teamChoiceMadeSummary(made),
           noTurn: choice === "wait" || choice === "ask" || (edited && choice === "goAnyway"),
         });
         yield* recordMade(input.threadId, { ...made, delivery }).pipe(
@@ -838,6 +847,7 @@ export const make = Effect.gen(function* () {
           choice: "goAnyway",
           tool: choiceInstruction("goAnyway", card.files, "tool", false, details),
           message: choiceInstruction("goAnyway", card.files, "message", false, details),
+          summary: teamChoiceMadeSummary({ choice: "goAnyway", answer: input.answer }),
           noTurn: false,
         });
         yield* recordMade(input.threadId, {
@@ -858,9 +868,12 @@ export const make = Effect.gen(function* () {
         )).get(input.choiceId);
         if (!teamChoiceIsWaiting(latest)) return false;
         if (input.outcome === "done") {
-          yield* startTurn(input.threadId, `${input.choiceId}:wait`, input.text).pipe(
-            Effect.catchCause(failed("The wait ended, but the agent could not be started.")),
-          );
+          yield* startTurn(
+            input.threadId,
+            `${input.choiceId}:wait`,
+            input.text,
+            teamChoiceMadeSummary({ choice: "wait", wait: "done" }),
+          ).pipe(Effect.catchCause(failed("The wait ended, but the agent could not be started.")));
         }
         yield* recordMade(input.threadId, {
           choiceId: input.choiceId,
@@ -890,35 +903,24 @@ export const make = Effect.gen(function* () {
 
   const waitingCards = Effect.gen(function* () {
     const made = yield* madeChoices;
-    return (yield* snapshots.listActivitiesByKind(TEAM_CHOICE_ACTIVITY_KIND)).flatMap(
-      (activity) => {
-        const card = decodeChoice(activity.payload);
-        return Option.isSome(card) && teamChoiceIsWaiting(made.get(card.value.choiceId))
-          ? [card.value]
-          : [];
-      },
-    );
+    return (yield* allChoices).filter((card) => teamChoiceIsWaiting(made.get(card.choiceId)));
   }).pipe(Effect.orElseSucceed((): ReadonlyArray<TeamChoiceActivityPayload> => []));
 
   const askedCards = Effect.gen(function* () {
     const made = yield* madeChoices;
-    return (yield* snapshots.listActivitiesByKind(TEAM_CHOICE_ACTIVITY_KIND)).flatMap(
-      (activity): Array<AskedCard> => {
-        const card = decodeChoice(activity.payload);
-        if (Option.isNone(card)) return [];
-        const latest = made.get(card.value.choiceId);
-        return teamChoiceIsAsking(latest) && latest?.questionId !== undefined
-          ? [{ card: card.value, questionId: latest.questionId }]
-          : [];
-      },
-    );
+    return (yield* allChoices).flatMap((card): Array<AskedCard> => {
+      const latest = made.get(card.choiceId);
+      return teamChoiceIsAsking(latest) && latest?.questionId !== undefined
+        ? [{ card, questionId: latest.questionId }]
+        : [];
+    });
   }).pipe(Effect.orElseSucceed((): ReadonlyArray<AskedCard> => []));
 
   const showEdited = (input: ShowEditedInput) =>
     Effect.gen(function* () {
       const threadId = input.context.thread.threadId;
       const choiceId = `team-choice:${yield* crypto.randomUUIDv4}`;
-      yield* appendActivity({
+      yield* appendCard({
         threadId,
         kind: TEAM_CHOICE_ACTIVITY_KIND,
         summary: teamChoiceSummary(input.files.length, true),
@@ -930,7 +932,7 @@ export const make = Effect.gen(function* () {
           edited: true,
         } satisfies TeamChoiceActivityPayload,
         id: choiceId,
-        turnId: input.turnId,
+        runId: input.runId,
       });
     }).pipe(
       Effect.catchCause((cause) =>

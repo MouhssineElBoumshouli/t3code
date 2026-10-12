@@ -29,7 +29,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { writeFileStringAtomically } from "../atomicWrite.ts";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 
 export class TeamProjectNotInRepoError extends Schema.TaggedError<TeamProjectNotInRepoError>()(
   "TeamProjectNotInRepoError",
@@ -237,13 +237,14 @@ const readOptionalFile = (filePath: string) =>
     const fileSystem = yield* FileSystem.FileSystem;
     return yield* fileSystem.readFileString(filePath).pipe(
       Effect.map((contents): string | null => contents),
-      Effect.catchTag("PlatformError", (error) =>
-        error.reason._tag === "NotFound"
-          ? Effect.succeed(null)
-          : Effect.fail(
-              new TeamProjectFileInvalidError({ filePath, detail: "could not be read." }),
-            ),
-      ),
+      Effect.catchTags({
+        PlatformError: (error) =>
+          error.reason._tag === "NotFound"
+            ? Effect.succeed(null)
+            : Effect.fail(
+                new TeamProjectFileInvalidError({ filePath, detail: "could not be read." }),
+              ),
+      }),
     );
   });
 

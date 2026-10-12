@@ -1,7 +1,7 @@
 /**
  * Team warm-up (fork-only, see team/STORAGE_PLAN.md 3.4): opens the team of
  * every project when the server starts, and of each project added while it
- * runs, so the first turn finds its team already open.
+ * runs (looked for every 15 s), so the first turn finds its team already open.
  *
  * Why: a turn's briefing gets 2 seconds (`mcp/toolkits/team/briefing.ts`),
  * and the first open of a team on GitHub asks gh who is signed in and whether
@@ -15,35 +15,36 @@
  *
  * @module TeamWarmup
  */
-import type { OrchestrationEvent } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
-import * as Stream from "effect/Stream";
+import * as Schedule from "effect/Schedule";
 
-import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import { forkParked } from "../serverActivation.ts";
 import { findTeamFile } from "./TeamProjectFiles.ts";
 import * as TeamService from "./TeamService.ts";
 
+/** How often new projects are looked for: upstream has no project event to follow. */
+const NEW_PROJECT_CHECK_INTERVAL = Duration.seconds(15);
+
 export class TeamWarmup extends Context.Service<
   TeamWarmup,
   {
-    /** Resolves once the startup pass and every project queued so far are opened. */
+    /** Resolves once the team of every project this server has now is opened. */
     readonly drain: Effect.Effect<void>;
   }
 >()("t3/team/TeamWarmup") {}
 
 export const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
-  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const projects = yield* ProjectService.ProjectService;
   const fileContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 
   const warm = (workspaceRoot: string) =>
@@ -69,25 +70,39 @@ export const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker(warm);
   const startupQueued = yield* Deferred.make<void>();
 
-  // Subscribe now, so a project added during the startup pass is not missed.
-  const events = yield* engine.subscribeDomainEvents;
-  const onEvent = (event: OrchestrationEvent) =>
-    event.type === "project.created" ? worker.enqueue(event.payload.workspaceRoot) : Effect.void;
-
-  const startup = snapshots.getProjectShells().pipe(
-    Effect.flatMap((projects) =>
-      Effect.forEach(projects, (project) => worker.enqueue(project.workspaceRoot), {
-        discard: true,
-      }),
+  // Each project folder once; the first pass is the startup pass.
+  const seen = new Set<string>();
+  const queueNewProjects = projects.snapshot.pipe(
+    Effect.flatMap((snapshot) =>
+      Effect.forEach(
+        snapshot.projects.filter(
+          (project) => project.deletedAt === null && !seen.has(project.workspaceRoot),
+        ),
+        (project) => {
+          seen.add(project.workspaceRoot);
+          return worker.enqueue(project.workspaceRoot);
+        },
+        { discard: true },
+      ),
     ),
     Effect.catch((cause) => Effect.logWarning("Team warm-up could not list projects.", { cause })),
-    Effect.ensuring(Deferred.succeed(startupQueued, undefined)),
   );
 
-  yield* forkParked(startup.pipe(Effect.andThen(Stream.runForEach(events, onEvent))));
+  yield* forkParked(
+    queueNewProjects.pipe(
+      Effect.ensuring(Deferred.succeed(startupQueued, undefined)),
+      Effect.andThen(
+        queueNewProjects.pipe(Effect.repeat(Schedule.spaced(NEW_PROJECT_CHECK_INTERVAL))),
+      ),
+    ),
+  );
 
   return TeamWarmup.of({
-    drain: Deferred.await(startupQueued).pipe(Effect.andThen(worker.drain)),
+    // Looks for new projects first, so it covers every project known now.
+    drain: Deferred.await(startupQueued).pipe(
+      Effect.andThen(queueNewProjects),
+      Effect.andThen(worker.drain),
+    ),
   });
 });
 

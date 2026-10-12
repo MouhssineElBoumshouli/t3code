@@ -75,7 +75,7 @@ export const TeamPresenceChip = memo(function TeamPresenceChip(props: {
             type="button"
             data-team-presence
             aria-label={`Team ${team.name}: ${teammates.length} teammates, ${label.text}`}
-            className="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/70 px-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/70 px-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           />
         }
       >

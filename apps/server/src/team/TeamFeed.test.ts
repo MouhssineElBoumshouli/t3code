@@ -11,6 +11,8 @@ import {
   TeamFile,
   TeamId,
   type TeamFeedEvent,
+  TEAM_PLAN_ACTIVITY_KIND,
+  type TeamCardEntry,
   ThreadId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
@@ -20,7 +22,9 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ServerConfig from "../config.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as TeamCards from "./TeamCards.ts";
 import * as TeamFeed from "./TeamFeed.ts";
 import * as TeamService from "./TeamService.ts";
 import { makeTeamOrigin, testTeamServiceLayer, useTeamOrigin } from "./testing/teamState.ts";
@@ -55,19 +59,24 @@ const harness = (workspaceRoot: string) =>
           environmentId: ENVIRONMENT_ID,
           stateDirectory: yield* tempFolder("t3-team-feed-state-"),
         }),
-        Layer.mock(ProjectionSnapshotQuery)({
-          getProjectShells: () => Effect.succeed([project(workspaceRoot)]),
+        Layer.mock(ProjectService.ProjectService)({
+          listShells: () => Effect.succeed([project(workspaceRoot)]),
         }),
+        TeamCards.layer.pipe(
+          Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-team-feed-home-" })),
+          Layer.provide(NodeServices.layer),
+        ),
         NodeServices.layer,
       ),
     );
     const teams = yield* TeamService.TeamService.pipe(Effect.provide(context));
+    const cards = yield* TeamCards.TeamCards.pipe(Effect.provide(context));
     const feed = yield* TeamFeed.make.pipe(Effect.provide(context));
     const events = yield* Queue.unbounded<TeamFeedEvent>();
     const subscribe = Stream.runForEach(feed.subscribe, (event) => Queue.offer(events, event)).pipe(
       Effect.forkScoped,
     );
-    return { teams, subscribe, next: Queue.take(events), pending: Queue.size(events) };
+    return { teams, cards, subscribe, next: Queue.take(events), pending: Queue.size(events) };
   });
 
 const teamOf = (event: TeamFeedEvent) => {
@@ -75,7 +84,42 @@ const teamOf = (event: TeamFeedEvent) => {
   return event.team;
 };
 
+const planCard = (id: string): TeamCardEntry => ({
+  id,
+  kind: TEAM_PLAN_ACTIVITY_KIND,
+  summary: "Plan",
+  payload: { files: [] },
+  runId: null,
+  createdAt: "2026-10-11T10:00:00.000Z",
+});
+
 describe("TeamFeed", () => {
+  it.effect("sends the chats' cards in the snapshot, then a chat's cards when they change", () =>
+    Effect.gen(function* () {
+      const folder = yield* tempFolder("t3-team-feed-cards-");
+      const { cards, subscribe, next } = yield* harness(folder);
+      yield* cards.append({ threadId: THREAD_A.threadId, entry: planCard("plan-1") });
+      yield* subscribe;
+
+      const snapshot = yield* next;
+      assert.deepEqual(
+        snapshot._tag === "snapshot"
+          ? snapshot.threadCards?.map((thread) => [thread.threadId, thread.entries.length])
+          : undefined,
+        [[THREAD_A.threadId, 1]],
+      );
+
+      yield* cards.append({ threadId: THREAD_A.threadId, entry: planCard("plan-2") });
+      const changed = yield* next;
+      assert.deepEqual(
+        changed._tag === "threadCards"
+          ? changed.cards.entries.map((entry) => entry.id)
+          : changed._tag,
+        ["plan-1", "plan-2"],
+      );
+    }),
+  );
+
   it.effect("sends a solo project's state, then one view per change", () =>
     Effect.gen(function* () {
       const folder = yield* tempFolder("t3-team-feed-solo-");

@@ -9,14 +9,14 @@
  * It writes no activity line, and it is not the agent's handoff: no word cap,
  * and search ranks it below handoffs and decisions.
  *
- * Only `status: "ready"` diffs count: mid-turn placeholders have no files
- * (D6). In local mode a turn's diff also holds edits made by people or other
+ * Only a run's own checkpoint counts (`checkpoint.captured` with a `runId`
+ * and `status: "ready"`); the baselines captured before it have no files. In local mode a turn's diff also holds edits made by people or other
  * threads in the same checkout, so the note can name files this thread did
  * not write.
  *
  * @module TeamAutoNotes
  */
-import type { OrchestrationEvent, ThreadId } from "@t3tools/contracts";
+import type { OrchestrationV2StoredEvent, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -26,13 +26,13 @@ import * as Stream from "effect/Stream";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { currentCommit, hashFiles } from "../mcp/toolkits/team/memory.ts";
 import { makeTeamResolver } from "../mcp/toolkits/team/resolve.ts";
-import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { findRepoRoot } from "./TeamProjectFiles.ts";
 import * as TeamService from "./TeamService.ts";
 
-/** Turn diff paths are relative to the Git repo root; team paths to the folder holding `.team/`. */
+/** Checkpoint diff paths are relative to the Git repo root; team paths to the folder holding `.team/`. */
 export const diffToTeamPaths = (
   path: Path.Path,
   files: ReadonlyArray<string>,
@@ -51,14 +51,18 @@ export const diffToTeamPaths = (
 
 export const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
-  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+  const eventSink = yield* EventSink.EventSinkV2;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const path = yield* Path.Path;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
   const { resolve } = yield* makeTeamResolver;
 
-  // Subscribe now, so no event published before activation is missed.
-  const events = yield* engine.subscribeDomainEvents;
+  // From the sequence read now, so no checkpoint before activation is missed.
+  const fromSequence = yield* eventSink.latestSequence().pipe(Effect.orElseSucceed(() => 0));
+  const events = eventSink.stream({
+    afterSequence: fromSequence,
+    eventType: "checkpoint.captured",
+  });
 
   const toTeamPaths = (files: ReadonlyArray<string>, repoRoot: string, teamRoot: string) =>
     diffToTeamPaths(path, files, repoRoot, teamRoot);
@@ -92,12 +96,13 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const onEvent = (event: OrchestrationEvent) =>
-    event.type === "thread.turn-diff-completed" &&
+  const onEvent = ({ event }: OrchestrationV2StoredEvent) =>
+    event.type === "checkpoint.captured" &&
+    event.payload.runId !== null &&
     event.payload.status === "ready" &&
     event.payload.files.length > 0
       ? save(
-          event.payload.threadId,
+          event.threadId,
           event.payload.files.map((file) => file.path),
         )
       : Effect.void;

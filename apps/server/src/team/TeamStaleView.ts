@@ -23,6 +23,7 @@
  * @module TeamStaleView
  */
 import { type TeamHandoff, type ThreadId } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -32,7 +33,7 @@ import * as Path from "effect/Path";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { hashFiles, inHistory } from "../mcp/toolkits/team/memory.ts";
 import { makeTeamResolver, type TeamContext } from "../mcp/toolkits/team/resolve.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { holdersOf, sameThread } from "./heldElsewhere.ts";
 import { diffToTeamPaths } from "./TeamAutoNotes.ts";
@@ -76,7 +77,7 @@ export const renderStaleView = (files: ReadonlyArray<StaleFile>) => {
 
 export const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -144,16 +145,29 @@ export const make = Effect.gen(function* () {
   const staleFiles = (context: TeamContext) =>
     Effect.gen(function* () {
       const threadId = context.thread.threadId;
-      const checkpoints = Option.getOrUndefined(
-        yield* snapshots.getThreadCheckpointContext(threadId),
+      const records = yield* orchestrator.getThreadRecords(threadId, [
+        "checkpoints",
+        "checkpointScopes",
+      ]);
+      const subagentScopes = new Set(
+        records.checkpointScopes.flatMap((scope) => (scope.kind === "subagent" ? [scope.id] : [])),
+      );
+      // The chat's own run checkpoints; baselines have no run, subagents their own scope.
+      const runCheckpoints = records.checkpoints.filter(
+        (checkpoint) =>
+          checkpoint.runId !== null &&
+          checkpoint.appRunOrdinal !== null &&
+          !subagentScopes.has(checkpoint.scopeId),
       );
       // Its last turn's checkpoint: the newest ready one.
-      const last = checkpoints?.checkpoints
+      const last = runCheckpoints
         .filter((checkpoint) => checkpoint.status === "ready")
-        .toSorted((a, b) => b.checkpointTurnCount - a.checkpointTurnCount)[0];
+        .toSorted((a, b) => (b.appRunOrdinal ?? 0) - (a.appRunOrdinal ?? 0))[0];
       // The first turn has no earlier view.
-      if (checkpoints === undefined || last === undefined) return [];
-      const cwd = checkpoints.worktreePath ?? checkpoints.workspaceRoot;
+      if (last === undefined) return [];
+      const cwd =
+        records.checkpointScopes.find((scope) => scope.id === last.scopeId)?.cwd ??
+        context.workingFolder;
       const repoRoot = Option.getOrElse(yield* withFiles(findRepoRoot(cwd)), () => cwd);
       const teamId = context.teamFile.teamId;
       const [claims, members, notes] = yield* Effect.all([
@@ -163,7 +177,7 @@ export const make = Effect.gen(function* () {
       ]);
       const touched = diffToTeamPaths(
         path,
-        checkpoints.checkpoints.flatMap((checkpoint) => checkpoint.files.map((file) => file.path)),
+        runCheckpoints.flatMap((checkpoint) => checkpoint.files.map((file) => file.path)),
         repoRoot,
         context.teamRoot,
       );
@@ -175,7 +189,7 @@ export const make = Effect.gen(function* () {
 
       const toRepo = (file: string) =>
         path.relative(repoRoot, path.join(context.teamRoot, file)).replaceAll("\\", "/");
-      const before = yield* hashesAt(repoRoot, last.checkpointRef, files.map(toRepo));
+      const before = yield* hashesAt(repoRoot, last.ref, files.map(toRepo));
       if (before === undefined) return [];
       const now = yield* withFiles(hashFiles(git, context.teamRoot, files));
 
@@ -187,7 +201,7 @@ export const make = Effect.gen(function* () {
           : "another chat";
       const others = notes.filter((note) => !sameThread(note.thread, context.thread));
       const otherClaims = claims.filter((claim) => !sameThread(claim.thread, context.thread));
-      const since = Date.parse(last.completedAt);
+      const since = DateTime.toEpochMillis(last.capturedAt);
 
       const stale: Array<StaleFile> = [];
       for (const file of files) {

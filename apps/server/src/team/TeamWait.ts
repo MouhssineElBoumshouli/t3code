@@ -22,13 +22,12 @@
 import type { TeamPlanHolder, TeamChoiceActivityPayload } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { makeTeamResolver } from "../mcp/toolkits/team/resolve.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { holdersOf, sameThread } from "./heldElsewhere.ts";
@@ -46,7 +45,7 @@ const sameHolder = (a: TeamPlanHolder, b: TeamPlanHolder) =>
 export const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
   const choices = yield* TeamChoices.TeamChoices;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const path = yield* Path.Path;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
@@ -68,9 +67,10 @@ export const make = Effect.gen(function* () {
   /** Ends the card's wait if its holders let go; true when it ended. */
   const checkCard = (card: TeamChoiceActivityPayload) =>
     Effect.gen(function* () {
-      const shell = Option.getOrUndefined(yield* snapshots.getThreadShellById(card.threadId));
-      if (shell === undefined || shell.archivedAt !== null) return false;
-      if (shell.latestTurn?.state === "running") return false;
+      const shell = yield* orchestrator.getThreadShell(card.threadId);
+      if (shell === null || shell.archivedAt !== null) return false;
+      // A run still going may be the one that holds the call; its end comes first.
+      if (shell.activeRunId !== null) return false;
       const resolved = yield* resolve({ environmentId, threadId: card.threadId });
       if (resolved._tag === "NotInTeam") return false;
       const { context } = resolved;

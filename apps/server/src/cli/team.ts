@@ -21,7 +21,7 @@ import {
   type TeamLogin,
   TEAM_STATE_REF,
 } from "@t3tools/contracts";
-import { HostProcessWorkingDirectory } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -30,7 +30,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
-import { Argument, Command, Flag, GlobalFlag, Prompt } from "effect/unstable/cli";
+import { Argument, Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -75,7 +75,7 @@ const resolveTeamCliConfig = (command: string, baseDir: Option.Option<string>) =
 
 /** The home's identity and Git, as its server sees them. */
 const teamStateLayer = (config: ServerConfig.ServerConfig["Service"]) =>
-  Layer.mergeAll(ServerEnvironment.identityLayer, GitVcsDriver.layer, TeamHost.layer).pipe(
+  Layer.mergeAll(ServerEnvironment.layerIdentity, GitVcsDriver.layer, TeamHost.layer).pipe(
     Layer.provide(VcsProcess.layer),
     Layer.provide(ServerConfig.layer(config)),
     Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
@@ -218,9 +218,10 @@ export const runTeamInit = Effect.fn("runTeamInit")(function* (input: TeamInitIn
         })
         .pipe(
           // Timed out, or Git did not run: as unreachable as a failed command.
-          Effect.catchTag("GitCommandError", (error) =>
-            Effect.succeed({ exitCode: -1, stdout: "", stderr: error.detail }),
-          ),
+          Effect.catchTags({
+            GitCommandError: (error) =>
+              Effect.succeed({ exitCode: -1, stdout: "", stderr: error.detail }),
+          }),
         );
       if (state.exitCode !== 0) {
         return localOnly(
@@ -238,9 +239,10 @@ export const runTeamInit = Effect.fn("runTeamInit")(function* (input: TeamInitIn
         isPublic,
       } satisfies RemotePlan;
     }).pipe(
-      Effect.catchTag("GitCommandError", (error) =>
-        Effect.fail(new TeamProjectRegisterError({ detail: error.message, cause: error })),
-      ),
+      Effect.catchTags({
+        GitCommandError: (error) =>
+          Effect.fail(new TeamProjectRegisterError({ detail: error.message, cause: error })),
+      }),
     );
 
   let plan: RemotePlan = localOnly("not checked");
@@ -335,7 +337,7 @@ const confirmCreate = Effect.gen(function* () {
     });
   }
   return yield* Prompt.run(Prompt.Confirm({ message: "Create it?", initial: false })).pipe(
-    Effect.catchTag("QuitError", () => Effect.succeed(false)),
+    Effect.catchTags({ QuitError: () => Effect.succeed(false) }),
   );
 });
 
@@ -367,7 +369,7 @@ const teamInitCommand = Command.make("init", {
     Effect.fn("teamInitCommand")(function* (flags) {
       const path = yield* Path.Path;
       const config = yield* resolveTeamCliConfig("init", flags.baseDir);
-      const cwd = yield* HostProcessWorkingDirectory;
+      const cwd = yield* HostProcess.WorkingDirectory;
       const rawStart = Option.getOrUndefined(flags.workspaceRoot) ?? cwd;
       const startDirectory = path.resolve(yield* expandHomePath(rawStart));
       const promptContext = yield* Effect.context<Prompt.Environment>();

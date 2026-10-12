@@ -4,7 +4,7 @@
  * state (`TeamChoices.choose`); this module does the rest.
  *
  * - The asked person's server: each question to them shows on their chats of
- *   this server that hold one of its files (a `team.question` activity) and
+ *   this server that hold one of its files (a `team.question` card) and
  *   in the presence popover (the team feed). {@link TeamQuestions.answer}
  *   saves the answer to the team state and closes the chats' cards; an answer
  *   given on another of their servers, or a question the asker dropped,
@@ -18,14 +18,13 @@
  * @module TeamQuestions
  */
 import {
-  CommandId,
-  EventId,
   TEAM_QUESTION_ACTIVITY_KIND,
   TEAM_QUESTION_CLOSED_ACTIVITY_KIND,
   type TeamAnswer,
   TeamAnswerError,
   type TeamAnswerInput,
   type TeamAnswerResult,
+  type TeamCardKind,
   type TeamId,
   type TeamMemberId,
   type TeamQuestion,
@@ -47,9 +46,9 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as TeamCards from "./TeamCards.ts";
 import * as TeamChoices from "./TeamChoices.ts";
 import * as TeamService from "./TeamService.ts";
 
@@ -101,8 +100,8 @@ export const answerOf = (
 export const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
   const choices = yield* TeamChoices.TeamChoices;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const cards = yield* TeamCards.TeamCards;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
   // An answer and a check must not both close the same card.
   const lock = yield* Semaphore.make(1);
@@ -110,43 +109,36 @@ export const make = Effect.gen(function* () {
   const append = (
     threadId: ThreadId,
     id: string,
-    kind: string,
+    kind: TeamCardKind,
     summary: string,
     payload: unknown,
   ) =>
     Effect.gen(function* () {
-      const thread = Option.getOrUndefined(yield* snapshots.getThreadShellById(threadId));
-      if (thread === undefined || thread.archivedAt !== null) return;
-      const createdAt = DateTime.formatIso(yield* DateTime.now);
-      const turn = thread.latestTurn;
-      yield* engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.make(`server:${id}`),
+      const thread = yield* orchestrator.getThreadShell(threadId);
+      if (thread === null || thread.archivedAt !== null) return;
+      yield* cards.append({
         threadId,
-        activity: {
-          id: EventId.make(id),
-          tone: "info",
+        entry: {
+          id,
           kind,
           summary,
           payload,
-          turnId: turn?.state === "running" ? turn.turnId : null,
-          createdAt,
+          runId: thread.activeRunId,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
         },
-        createdAt,
       });
     });
 
   /** The question cards on this server's chats, and which of them are closed. */
   const shownCards = Effect.gen(function* () {
-    const shown = (yield* snapshots.listActivitiesByKind(TEAM_QUESTION_ACTIVITY_KIND)).flatMap(
-      (activity) => Option.toArray(decodeQuestion(activity.payload)),
+    const shown = (yield* cards.listByKind(TEAM_QUESTION_ACTIVITY_KIND)).flatMap(({ entry }) =>
+      Option.toArray(decodeQuestion(entry.payload)),
     );
     const closed = new Set(
-      (yield* snapshots.listActivitiesByKind(TEAM_QUESTION_CLOSED_ACTIVITY_KIND)).flatMap(
-        (activity) =>
-          Option.toArray(decodeClosed(activity.payload)).map(
-            (payload) => `${payload.questionId}|${payload.threadId}`,
-          ),
+      (yield* cards.listByKind(TEAM_QUESTION_CLOSED_ACTIVITY_KIND)).flatMap(({ entry }) =>
+        Option.toArray(decodeClosed(entry.payload)).map(
+          (payload) => `${payload.questionId}|${payload.threadId}`,
+        ),
       ),
     );
     return { shown, closed };

@@ -23,25 +23,22 @@
  * @module TeamClaimAutoRelease
  */
 import type {
-  OrchestrationEvent,
-  OrchestrationThreadShell,
+  OrchestrationV2AppThread,
+  OrchestrationV2StoredEvent,
   ThreadId,
   ThreadLinkedPullRequest,
-  ThreadPullRequestKey,
   ThreadPullRequestLink,
 } from "@t3tools/contracts";
-import {
-  threadPullRequestKeysEqual,
-  visibleThreadPullRequests,
-} from "@t3tools/shared/threadPullRequests";
+import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as TeamService from "./TeamService.ts";
@@ -63,10 +60,10 @@ type PullRequestMatch = (pullRequest: ThreadLinkedPullRequest | ThreadPullReques
  * and no other linked one is still open (a stack, or a follow-up pull request).
  */
 export function isThreadWorkMerged(
-  thread: OrchestrationThreadShell,
+  thread: Pick<OrchestrationV2AppThread, "pullRequests" | "branchPullRequest">,
   isMergedPullRequest: PullRequestMatch,
 ): boolean {
-  const links = visibleThreadPullRequests(thread.pullRequests);
+  const links = visibleThreadPullRequests(thread.pullRequests ?? []);
   const touched =
     links.some(isMergedPullRequest) ||
     (thread.branchPullRequest != null && isMergedPullRequest(thread.branchPullRequest));
@@ -75,13 +72,16 @@ export function isThreadWorkMerged(
 
 export const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
-  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const eventSink = yield* EventSink.EventSinkV2;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
 
-  // Subscribe now, so no event published before activation is missed.
-  const events = yield* engine.subscribeDomainEvents;
+  // From the sequence read now, so no event before activation is missed. A
+  // failed read starts from the beginning: releasing twice changes nothing.
+  const fromSequence = yield* eventSink.latestSequence().pipe(Effect.orElseSucceed(() => 0));
+  // One stream, in order: a merge and a later archive release in the order they happened.
+  const events = eventSink.stream({ afterSequence: fromSequence });
   const merges = yield* pullRequests.subscribeMerges;
 
   const release = (threadId: ThreadId, reason: string, claimedBefore?: string) =>
@@ -98,42 +98,44 @@ export const make = Effect.gen(function* () {
 
   /** The active thread, or none when it is archived, deleted or unreadable. */
   const activeThread = (threadId: ThreadId) =>
-    snapshots.getThreadShellById(threadId).pipe(
+    orchestrator.getThreadShell(threadId).pipe(
+      Effect.map((shell) =>
+        shell === null || shell.archivedAt !== null ? Option.none() : Option.some(shell),
+      ),
       Effect.catch((cause) =>
         Effect.logWarning("Team claim release could not read the thread.", {
           threadId,
           cause,
-        }).pipe(Effect.as(Option.none<OrchestrationThreadShell>())),
+        }).pipe(Effect.as(Option.none())),
       ),
     );
 
-  const onLinkSynced = (threadId: ThreadId, key: ThreadPullRequestKey, mergedAt: string) =>
+  /** The event carries the thread after the sync, so its links show the merge. */
+  const onPullRequestsSynced = (thread: OrchestrationV2AppThread, occurredAt: DateTime.Utc) =>
     Effect.gen(function* () {
-      // Archived or deleted threads are released by their own events.
-      const thread = yield* activeThread(threadId);
-      if (Option.isNone(thread)) return;
-      // Matched by key: the event's link may not be projected as merged yet.
-      const merged = isThreadWorkMerged(
-        thread.value,
-        (pullRequest) => "host" in pullRequest && threadPullRequestKeysEqual(pullRequest, key),
-      );
-      if (merged) yield* release(threadId, RELEASE_REASONS.merged, mergedAt);
+      // Archived threads are released by their own event.
+      if (thread.archivedAt !== null) return;
+      const isMerged = (pullRequest: ThreadLinkedPullRequest | ThreadPullRequestLink) =>
+        "snapshot" in pullRequest && pullRequest.snapshot?.state === "merged";
+      if (!isThreadWorkMerged(thread, isMerged)) return;
+      const mergedAt =
+        visibleThreadPullRequests(thread.pullRequests ?? [])
+          .flatMap((link) =>
+            isMerged(link) && link.snapshot?.mergedAt ? [link.snapshot.mergedAt] : [],
+          )
+          .toSorted()
+          .at(-1) ?? DateTime.formatIso(occurredAt);
+      yield* release(thread.id, RELEASE_REASONS.merged, mergedAt);
     });
 
-  const onEvent = (event: OrchestrationEvent) => {
+  const onEvent = ({ event }: OrchestrationV2StoredEvent) => {
     switch (event.type) {
       case "thread.archived":
-        return release(event.payload.threadId, RELEASE_REASONS.archived);
+        return release(event.threadId, RELEASE_REASONS.archived);
       case "thread.deleted":
-        return release(event.payload.threadId, RELEASE_REASONS.deleted);
+        return release(event.threadId, RELEASE_REASONS.deleted);
       case "thread.pull-request-synced":
-        return event.payload.snapshot.state === "merged"
-          ? onLinkSynced(
-              event.payload.threadId,
-              event.payload,
-              event.payload.snapshot.mergedAt ?? event.occurredAt,
-            )
-          : Effect.void;
+        return onPullRequestsSynced(event.payload, event.occurredAt);
     }
     return Effect.void;
   };
@@ -156,12 +158,10 @@ export const make = Effect.gen(function* () {
   /** Claims of threads archived or deleted while nothing was listening. */
   const releaseInactive = Effect.gen(function* () {
     for (const threadId of yield* teams.listClaimedThreads(environmentId)) {
-      const thread = yield* snapshots.getThreadShellById(threadId);
+      const thread = yield* activeThread(threadId);
       if (Option.isNone(thread)) yield* release(threadId, RELEASE_REASONS.inactive);
     }
-  }).pipe(
-    Effect.catch((cause) => Effect.logWarning("Team claim startup release failed.", { cause })),
-  );
+  });
 
   yield* forkParked(releaseInactive.pipe(Effect.andThen(Stream.runForEach(events, onEvent))));
   yield* forkParked(Stream.runForEach(merges, onMerge));

@@ -23,8 +23,8 @@ export const TEAM_AUTOMATIC_NOTE_MAX_FILES = 50;
 /** Folder inside {@link TEAM_DIRECTORY_NAME} that holds one Markdown file per decision. */
 export const TEAM_DECISIONS_DIRECTORY_NAME = "decisions";
 
-const teamEntityId = <Brand extends string>(brand: Brand) =>
-  TrimmedNonEmptyString.pipe(Schema.brand(brand));
+const teamEntityId = <Brand extends string>(brand: Parameters<typeof Schema.brand<Brand>>[0]) =>
+  TrimmedNonEmptyString.pipe(Schema.brand<Brand>(brand));
 
 export const TeamId = teamEntityId("TeamId");
 export type TeamId = typeof TeamId.Type;

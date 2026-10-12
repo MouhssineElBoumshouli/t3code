@@ -3,35 +3,26 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
-  EventId,
   ProjectId,
   ProviderInstanceId,
   TeamFile,
   TeamId,
   type TeamLogin,
   ThreadId,
-  type OrchestrationEvent,
-  type OrchestrationProjectShell,
-  type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
-import * as Stream from "effect/Stream";
 
-import * as McpProviderSession from "../mcp/McpProviderSession.ts";
 import { makeTeamBriefingResolver } from "../mcp/toolkits/team/briefing.ts";
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TeamHost from "./state/TeamHost.ts";
 import { renderTeamBriefing } from "./TeamBriefing.ts";
+import * as TeamOrchestrator from "./teamOrchestrator.testkit.ts";
 import * as TeamService from "./TeamService.ts";
 import { makeTeamOrigin, testTeamServiceLayer, useTeamOrigin } from "./testing/teamState.ts";
 import * as TeamWarmup from "./TeamWarmup.ts";
@@ -57,58 +48,8 @@ beforeEach(() => {
   useTeamOrigin(checkout, makeTeamOrigin(root));
 });
 afterEach(() => {
-  McpProviderSession.clearAllMcpProviderSessions();
   NodeFS.rmSync(root, { recursive: true, force: true });
 });
-
-const project: OrchestrationProjectShell = {
-  id: PROJECT_ID,
-  title: "Project",
-  workspaceRoot: "",
-  defaultModelSelection: null,
-  scripts: [],
-  repositoryIdentity: null,
-  createdAt: "2026-09-01T00:00:00.000Z",
-  updatedAt: "2026-09-01T00:00:00.000Z",
-};
-
-const thread: OrchestrationThreadShell = {
-  id: THREAD_ID,
-  projectId: PROJECT_ID,
-  title: "Thread",
-  modelSelection: { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" },
-  runtimeMode: "full-access",
-  interactionMode: "default",
-  branch: null,
-  worktreePath: null,
-  pullRequests: [],
-  latestTurn: null,
-  createdAt: "2026-09-01T00:00:00.000Z",
-  updatedAt: "2026-09-01T00:00:00.000Z",
-  archivedAt: null,
-  settledOverride: null,
-  settledAt: null,
-  session: null,
-  latestUserMessageAt: null,
-  hasPendingApprovals: false,
-  hasPendingUserInput: false,
-  hasActionableProposedPlan: false,
-};
-
-const projectCreated = (workspaceRoot: string) =>
-  ({
-    sequence: 1,
-    eventId: EventId.make("event-1"),
-    aggregateKind: "project",
-    aggregateId: PROJECT_ID,
-    occurredAt: "2026-09-01T00:00:00.000Z",
-    commandId: null,
-    causationEventId: null,
-    correlationId: null,
-    metadata: {},
-    type: "project.created",
-    payload: { ...project, workspaceRoot, projectId: PROJECT_ID },
-  }) as unknown as OrchestrationEvent;
 
 /**
  * This server after a restart: it joined the team before (its state repo is
@@ -116,7 +57,7 @@ const projectCreated = (workspaceRoot: string) =>
  * that every gh call hangs, like a gh slower than the briefing's 2 seconds.
  */
 const restartedServer = Effect.fn("restartedServer")(function* (options: {
-  readonly projectsAtStart: ReadonlyArray<OrchestrationProjectShell>;
+  readonly projectAtStart: boolean;
 }) {
   // The earlier run: the team was started from this server.
   yield* TeamService.TeamService.pipe(
@@ -143,40 +84,39 @@ const restartedServer = Effect.fn("restartedServer")(function* (options: {
     repoAccess: () => Effect.succeed({ status: "found", canPush: true, isPublic: false }),
     refChanged: () => Effect.succeed({ status: "unchanged" }),
   });
-  const events = yield* PubSub.unbounded<OrchestrationEvent>();
+
+  const base = yield* Layer.build(TeamOrchestrator.layer);
+  const addProject = TeamOrchestrator.seedThread({
+    projectId: PROJECT_ID,
+    threadId: THREAD_ID,
+    workspaceRoot: checkout,
+  }).pipe(Effect.provide(base));
+  if (options.projectAtStart) yield* addProject;
 
   const dependencies = Layer.mergeAll(
     testTeamServiceLayer({ environmentId: ENVIRONMENT_ID, stateDirectory, host }),
-    Layer.mock(ProjectionSnapshotQuery)({
-      getProjectShells: () => Effect.succeed(options.projectsAtStart),
-      getThreadShellById: (threadId) =>
-        Effect.succeed(threadId === THREAD_ID ? Option.some(thread) : Option.none()),
-      getProjectShellById: () =>
-        Effect.succeed(Option.some({ ...project, workspaceRoot: checkout })),
-    }),
-    Layer.mock(OrchestrationEngineService)({
-      subscribeDomainEvents: PubSub.subscribe(events).pipe(
-        Effect.map((subscription) => Stream.fromSubscription(subscription)),
-      ),
-    }),
-  ).pipe(Layer.provideMerge(NodeServices.layer));
+    McpProviderSessions.layer,
+    Layer.succeedContext(base),
+  );
   const context = yield* Layer.build(TeamWarmup.layer.pipe(Layer.provideMerge(dependencies)));
 
   /** A new turn: its briefing, with the real 2 second limit. */
   const firstTurnBriefing = Effect.gen(function* () {
-    McpProviderSession.setMcpProviderSession({
+    const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+    yield* mcpSessions.set({
       environmentId: ENVIRONMENT_ID,
       threadId: THREAD_ID,
       providerSessionId: "provider-session-1",
       providerInstanceId: ProviderInstanceId.make("claude"),
       endpoint: "http://127.0.0.1/mcp",
       authorizationHeader: "Bearer test",
+      browserToolsAvailable: false,
       capabilities: new Set(),
     });
     yield* Ref.set(ghIsSlow, true);
-    const resolver = yield* makeTeamBriefingResolver.pipe(Effect.provide(context));
+    const resolver = yield* makeTeamBriefingResolver;
     return yield* resolver(THREAD_ID);
-  });
+  }).pipe(Effect.provide(context));
 
   return {
     drain: TeamWarmup.TeamWarmup.pipe(
@@ -184,7 +124,7 @@ const restartedServer = Effect.fn("restartedServer")(function* (options: {
       Effect.provide(context),
     ),
     ghCalls,
-    publish: (event: OrchestrationEvent) => PubSub.publish(events, event),
+    addProject,
     firstTurnBriefing,
   };
 });
@@ -200,9 +140,7 @@ describe("TeamWarmup", () => {
   // briefing would hit the real 2 second limit.
   it.live("opens each project's team at start, so the first turn gets its briefing", () =>
     Effect.gen(function* () {
-      const server = yield* restartedServer({
-        projectsAtStart: [{ ...project, workspaceRoot: checkout }],
-      });
+      const server = yield* restartedServer({ projectAtStart: true });
       yield* server.drain;
 
       assert.strictEqual(yield* server.firstTurnBriefing, EXPECTED);
@@ -213,14 +151,15 @@ describe("TeamWarmup", () => {
 
   it.live("opens the team of a project added while the server runs", () =>
     Effect.gen(function* () {
-      const server = yield* restartedServer({ projectsAtStart: [] });
+      const server = yield* restartedServer({ projectAtStart: false });
       yield* server.drain;
       assert.equal(yield* Queue.size(server.ghCalls), 0);
 
-      yield* server.publish(projectCreated(checkout));
-      // gh was asked: the project is being opened. Wait until it is.
-      yield* Queue.take(server.ghCalls);
+      yield* server.addProject;
+      // The drain finds the new project, as the warm-up's 15 s check would.
       yield* server.drain;
+      assert.equal(yield* Queue.size(server.ghCalls), 1, "gh was asked once, by the warm-up");
+      yield* Queue.take(server.ghCalls);
 
       assert.strictEqual(yield* server.firstTurnBriefing, EXPECTED);
       assert.equal(yield* Queue.size(server.ghCalls), 0, "the turn did not ask gh again");
