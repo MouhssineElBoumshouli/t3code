@@ -59,7 +59,14 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
-import { MERGE_TREE_MIN_GIT, mergeTree, parseGitVersion, supportsMergeTree } from "./mergeTree.ts";
+import {
+  fetchIntoHiddenRef,
+  MERGE_TREE_MIN_GIT,
+  type MergeTreeResult,
+  mergeTree,
+  parseGitVersion,
+  supportsMergeTree,
+} from "./mergeTree.ts";
 import { soloTeamIdOf } from "./state/SoloTeam.ts";
 import { diffToTeamPaths } from "./TeamAutoNotes.ts";
 import {
@@ -72,7 +79,6 @@ import {
   pairKey,
   type PairSides,
 } from "./TeamMergeModel.ts";
-import type { MergeTreeResult } from "./mergeTree.ts";
 import { findRepoRoot, findTeamFile } from "./TeamProjectFiles.ts";
 import * as TeamService from "./TeamService.ts";
 
@@ -285,11 +291,7 @@ export const make = Effect.gen(function* () {
         "TeamMerging.peer",
       )).exitCode;
       if (present !== 0) {
-        yield* run(
-          repoRoot,
-          ["fetch", "--quiet", "--no-tags", "origin", `+refs/heads/${branch}:${ref}`],
-          "TeamMerging.fetchPeer",
-        );
+        yield* fetchIntoHiddenRef(git, repoRoot, branch, ref);
       }
       const set = yield* run(repoRoot, ["update-ref", ref, commit], "TeamMerging.peer");
       if (set.exitCode !== 0) {
@@ -325,11 +327,7 @@ export const make = Effect.gen(function* () {
       const last = baseFetchedAt.get(repoRoot);
       if (last === undefined || now - last >= Duration.toMillis(BASE_CHECK_INTERVAL)) {
         baseFetchedAt.set(repoRoot, now);
-        yield* run(
-          repoRoot,
-          ["fetch", "--quiet", "--no-tags", "origin", `+refs/heads/${branch}:${ref}`],
-          "TeamMerging.fetchBase",
-        );
+        yield* fetchIntoHiddenRef(git, repoRoot, branch, ref);
       }
       return { ref, branch };
     });

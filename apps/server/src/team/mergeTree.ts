@@ -58,6 +58,37 @@ export const isRegeneratedFile = (path: string) => {
   );
 };
 
+/**
+ * Fetches `origin`'s branch into a hidden ref only. `--refmap=` stops Git from
+ * also updating `origin/<branch>`, so the person's remote branches stay as
+ * they were. True when the fetch worked.
+ */
+export const fetchIntoHiddenRef = (
+  git: GitVcsDriver.GitVcsDriver["Service"],
+  cwd: string,
+  branch: string,
+  ref: string,
+) =>
+  git
+    .execute({
+      operation: "TeamMerging.fetch",
+      cwd,
+      args: [
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--refmap=",
+        "origin",
+        `+refs/heads/${branch}:${ref}`,
+      ],
+      allowNonZeroExit: true,
+      timeoutMs: MERGE_TREE_TIMEOUT_MS,
+    })
+    .pipe(
+      Effect.map((result) => result.exitCode === 0),
+      Effect.orElseSucceed(() => false),
+    );
+
 export interface MergeConflict {
   /** Relative to the repo root. */
   readonly path: string;

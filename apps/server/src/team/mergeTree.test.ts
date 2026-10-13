@@ -8,6 +8,7 @@ import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import {
+  fetchIntoHiddenRef,
   isRegeneratedFile,
   mergeStatusOf,
   mergeTree,
@@ -94,6 +95,26 @@ describe("mergeTree", () => {
         const result = yield* mergeTree(yield* GitVcsDriver.GitVcsDriver, root, ours, theirs);
         assert.deepEqual(result?.conflicts, []);
         assert.include(git(root, "show", `${result!.tree}:src/find.ts`), "theirs");
+      }),
+    );
+
+    it.effect("fetches a teammate's branch into a hidden ref only, not origin/<branch>", () =>
+      Effect.gen(function* () {
+        const origin = yield* tempRepo;
+        initRepo(origin, { "a.txt": "a\n" });
+        const pushed = branchWith(origin, "search", { "a.txt": "b\n" });
+        const root = yield* tempRepo;
+        git(root, "clone", "--quiet", origin, ".");
+        git(root, "update-ref", "-d", "refs/remotes/origin/search");
+        const fetched = yield* fetchIntoHiddenRef(
+          yield* GitVcsDriver.GitVcsDriver,
+          root,
+          "search",
+          "refs/t3-team/peers/sara/search",
+        );
+        assert.isTrue(fetched);
+        assert.equal(git(root, "rev-parse", "refs/t3-team/peers/sara/search"), pushed);
+        assert.equal(git(root, "for-each-ref", "refs/remotes/origin/search"), "");
       }),
     );
 
