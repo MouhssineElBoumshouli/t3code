@@ -29,6 +29,7 @@ import * as Schema from "effect/Schema";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { heldElsewhere } from "./heldElsewhere.ts";
+import { commitAll, git, writeFile } from "./testing/gitRepo.ts";
 import * as TeamCards from "./TeamCards.ts";
 import * as TeamChoices from "./TeamChoices.ts";
 import { checkTeamEdit, claudeTeamEditHooks } from "./teamEditCheck.ts";
@@ -382,6 +383,30 @@ describe("TeamGuard", () => {
           yield* guard.checkEdit(THREAD_A, [NodePath.join(root, "src/auth/session.ts")]),
         );
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("leaves out a file a merge in progress brought in unchanged", () =>
+    Effect.gen(function* () {
+      const { root, cards, omarClaims, turnDiff } = yield* makeHarness();
+      yield* omarClaims(["src/auth/"]);
+      // Omar's branch changes both files; a "Fix it" turn merges it in, then edits one of them.
+      writeFile(root, "src/auth/login.ts", "login 1\n");
+      writeFile(root, "src/auth/session.ts", "session 1\n");
+      commitAll(root, "base");
+      git(root, "checkout", "--quiet", "-b", "omar");
+      writeFile(root, "src/auth/login.ts", "login 2\n");
+      writeFile(root, "src/auth/session.ts", "session 2\n");
+      commitAll(root, "omar");
+      git(root, "checkout", "--quiet", "-");
+      git(root, "merge", "--quiet", "--no-commit", "--no-ff", "omar");
+      writeFile(root, "src/auth/session.ts", "session 2, and mine\n");
+      yield* turnDiff(THREAD_A, "turn-a", ["src/auth/login.ts", "src/auth/session.ts"], 12);
+      const [card] = yield* cards;
+      assert.deepEqual(
+        card?.files.map((file) => file.path),
+        ["src/auth/session.ts"],
+      );
+    }).pipe(Effect.scoped),
   );
 
   it.effect(

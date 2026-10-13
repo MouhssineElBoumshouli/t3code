@@ -239,7 +239,12 @@ export function TeamHomePage(props: {
 
             {team === null ? null : (
               <Section title="Merging">
-                <TeamMergingList team={team} projectId={projectId} pathPrefix={pathPrefix} />
+                <TeamMergingList
+                  environmentId={environmentId}
+                  team={team}
+                  projectId={projectId}
+                  pathPrefix={pathPrefix}
+                />
               </Section>
             )}
 

@@ -1,6 +1,6 @@
 # Merging help: plan (VISION.md step 5)
 
-Status: slice 1 (section 8, point 1) built 2026-10-13 (`TeamMergeCheck.ts`); the rest is plan. Covers VISION.md 3.4, and 3.6 points 1, 4, 6 and 7.
+Status: slice 1 (section 8, point 1) built 2026-10-13 (`TeamMergeCheck.ts`); slice 2 (point 2, "Fix it") and the turn-note line built 2026-10-13 (`TeamMergeFix.ts`); the rest is plan. Covers VISION.md 3.4, and 3.6 points 1, 4, 6 and 7.
 
 ## 1. Background test-combine
 
@@ -79,7 +79,14 @@ The rule is a pure function of shared data, so both people see the same suggesti
 - **What the agent does.** It merges or rebases, resolves, runs the Check command, and stops before committing. The person sees the diff and chooses:
   - Approve: commit, and push if the branch is pushed.
   - Undo: abort, or go back to the checkpoint.
-- **Limits.** The teammate's branch is never touched. The teammate gets a team note: "Mouhssine's agent merged your search changes into his branch; see `routes.ts`."
+- **Limits.** The teammate's branch is never touched. The teammate gets a team note: "Mouhssine's agent merged your search changes into their branch; see `routes.ts`."
+- **As built (slice 2).**
+  - Only chats with their own worktree: in the shared checkout a merge would change every chat there, so the button is disabled with that reason.
+  - Git refuses to merge over uncommitted edits to the same files, so the chat's uncommitted work is committed first ("Save the work of the chat …"); Undo takes that commit back and leaves the work uncommitted again.
+  - The server starts `git merge --no-commit` itself; the turn only resolves. Approve refuses while a file that conflicted still has markers.
+  - After Approve, the chat's side of the merge check is the merge commit (`refs/t3-team/fixed/<thread>`) until a newer checkpoint.
+  - Solo chat-vs-chat merges the other chat's checkpoint commit, so "t3 checkpoint …" commits enter history.
+  - The check command comes only from the rulebook's `## Check` section for now (no detection).
 
 ## 6. Solo
 

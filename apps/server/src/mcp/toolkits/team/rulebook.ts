@@ -5,6 +5,8 @@
  *   start test neither agent read `.team/rulebook.md` to answer a question, so
  *   both missed a folder the rulebook keeps for humans. The list comes with the
  *   board, short and capped; the rest of the rulebook stays in the file.
+ * - "Check" (team/MERGE_HELP_PLAN.md section 2): one command that checks a
+ *   merged result, e.g. a typecheck. "Fix it" turns run it.
  * - "Shared files" (team/VISION.md 3.6): files everyone adds to, such as a
  *   routes list or global styles. Someone else holding one never raises the
  *   warning card or the guard; the claim is still recorded, so the markers
@@ -36,6 +38,8 @@ export const TEAM_DO_NOT_TOUCH_LIMITS = {
 const HEADING = /^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/u;
 const DO_NOT_TOUCH_TITLE = /^(?:do not|don't|don’t) touch\b/iu;
 const SHARED_FILES_TITLE = /^shared files\b/iu;
+const CHECK_TITLE = /^check\b/iu;
+const CHECK_COMMAND_CHARACTERS = 300;
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/u;
 const FENCE = /^\s*(?:```|~~~)/u;
 
@@ -115,6 +119,43 @@ export function readSharedFilesSection(markdown: string): ReadonlyArray<string> 
   });
 }
 
+/**
+ * The "Check" section's command: the first line of its first code block, else
+ * the first `code span`, else its first line. Undefined when there is none.
+ */
+export function readCheckSection(markdown: string): string | undefined {
+  let sectionLevel = 0;
+  let inFence = false;
+  let firstText: string | undefined;
+  for (const line of markdown.split(/\r?\n/u)) {
+    if (FENCE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      if (sectionLevel > 0 && line.trim().length > 0) return cutCommand(line);
+      continue;
+    }
+    const heading = HEADING.exec(line);
+    if (heading !== null) {
+      const level = heading[1]!.length;
+      if (sectionLevel > 0 && level <= sectionLevel) break;
+      if (sectionLevel === 0 && CHECK_TITLE.test(heading[2]!)) sectionLevel = level;
+      continue;
+    }
+    if (sectionLevel === 0 || line.trim().length === 0) continue;
+    const span = /`([^`]+)`/u.exec(line)?.[1];
+    if (span !== undefined) return cutCommand(span);
+    firstText ??= (LIST_ITEM.exec(line)?.[1] ?? line).trim();
+  }
+  return firstText === undefined || firstText.length === 0 ? undefined : cutCommand(firstText);
+}
+
+const cutCommand = (command: string) => {
+  const trimmed = command.trim();
+  return trimmed.length === 0 || trimmed.length > CHECK_COMMAND_CHARACTERS ? undefined : trimmed;
+};
+
 /** Whether `path` is a shared file, or inside a shared folder. */
 export const isSharedPath = (path: string, shared: ReadonlyArray<string>) => {
   const file = normalizeTeamPath(path).toLowerCase();
@@ -151,3 +192,13 @@ export const readSharedFiles = (input: {
   readonly teamRoot: string;
   readonly workingFolder: string;
 }) => readRulebook(input, (markdown) => readSharedFilesSection(markdown));
+
+/** The rulebook's check command; undefined when the file or the section is missing. */
+export const readCheckCommand = (input: {
+  readonly teamRoot: string;
+  readonly workingFolder: string;
+}) =>
+  readRulebook(input, (markdown) => {
+    const command = readCheckSection(markdown);
+    return command === undefined ? [] : [command];
+  }).pipe(Effect.map((commands) => commands[0]));

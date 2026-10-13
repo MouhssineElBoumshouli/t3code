@@ -109,6 +109,75 @@ export function nextPair(input: {
   };
 }
 
+/**
+ * The clashes a chat's turn note has not told yet, marked told in `told`
+ * (`<pair>|<since>`, so a clash that ended and came back is told again). A
+ * chat is in a pair as its own side, as the other chat, or, in the shared
+ * checkout, through the checkout's side.
+ */
+export function newClashes(input: {
+  readonly pairs: ReadonlyMap<string, CheckedPair>;
+  readonly threadId: string;
+  readonly sharedCheckout: boolean;
+  readonly told: Set<string>;
+}): ReadonlyArray<TeamMergePair> {
+  const fresh: Array<TeamMergePair> = [];
+  for (const [key, { pair, shown }] of input.pairs) {
+    if (pair.status !== "clash" || !shown) continue;
+    const involved =
+      (pair.mine.worktree ? pair.mine.thread.threadId === input.threadId : input.sharedCheckout) ||
+      (pair.other._tag === "chat" && pair.other.thread.threadId === input.threadId);
+    const id = `${key}|${pair.since}`;
+    if (!involved || input.told.has(id)) continue;
+    input.told.add(id);
+    fresh.push(pair);
+  }
+  return fresh;
+}
+
+const CLASH_LINE_FILES = 2;
+
+/** "Sara's pushed branch `search`", "`main`", "the chat "B"", seen from `threadId`'s chat. */
+const otherSideOf = (
+  pair: TeamMergePair,
+  threadId: string,
+  nameOf: (memberId: string) => string,
+) => {
+  if (pair.other._tag === "chat" && pair.other.thread.threadId === threadId) {
+    return `the chat "${pair.mine.title}"`;
+  }
+  switch (pair.other._tag) {
+    case "chat":
+      return `the chat "${pair.other.title}"`;
+    case "branch":
+      return `${nameOf(pair.other.memberId)}'s pushed branch \`${pair.other.branch}\``;
+    case "base":
+      return `\`${pair.other.branch}\``;
+  }
+};
+
+/** The turn note's line for new clashes: what clashes, where, and that the person can fix it. */
+export function clashLine(input: {
+  readonly pairs: ReadonlyArray<TeamMergePair>;
+  readonly threadId: string;
+  readonly nameOf: (memberId: string) => string;
+  readonly solo: boolean;
+}): string {
+  const where = (pair: TeamMergePair) => {
+    const regenerate = pair.files.filter((file) => file.regenerate).length;
+    const named = pair.files
+      .filter((file) => !file.regenerate)
+      .slice(0, CLASH_LINE_FILES)
+      .map((file) => `\`${file.path}\``);
+    const more = pair.fileCount - regenerate - named.length;
+    return more > 0 ? `${named.join(", ")} and ${more} more` : named.join(" and ");
+  };
+  const clashes = input.pairs
+    .map((pair) => `${otherSideOf(pair, input.threadId, input.nameOf)} in ${where(pair)}`)
+    .join("; and with ");
+  return `<team_merge>Merge check: this chat's work clashes with ${clashes}. Tell the user; they can choose "Fix it" on ${input.solo ? "Today" : "Team home"}.</team_merge>`;
+}
+
 const STATUS_ORDER: Record<TeamMergeStatus, number> = { clash: 0, regenerate: 1, clean: 2 };
 
 /** One team's merging view: shown pairs, clashes first, newest first; undefined when empty. */

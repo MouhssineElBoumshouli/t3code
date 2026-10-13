@@ -79,6 +79,14 @@ export const TeamPresenceChip = memo(function TeamPresenceChip(props: {
   const questions = team.questions ?? [];
   const names = (memberId: string) =>
     team.members.find((member) => member.memberId === memberId)?.displayName ?? memberId;
+  // team-layer: fixes of clashes with this teammate's branch (MERGE_HELP_PLAN.md section 5).
+  const fixesWith = (memberId: string) =>
+    team.merging?.fixes?.filter(
+      (fix) =>
+        fix.projectId === props.projectId &&
+        fix.other._tag === "branch" &&
+        fix.other.memberId === memberId,
+    ) ?? [];
   const pairsWith = (memberId: string) =>
     branchPairs.filter((pair) => pair.other._tag === "branch" && pair.other.memberId === memberId);
   const clashes = branchPairs.filter((pair) => pair.status === "clash").length;
@@ -199,11 +207,13 @@ export const TeamPresenceChip = memo(function TeamPresenceChip(props: {
                             paths.length > MAX_PATHS ? ` +${paths.length - MAX_PATHS}` : ""
                           }`}
                     </div>
-                    {merges.length > 0 ? (
+                    {merges.length > 0 || fixesWith(teammate.member.memberId).length > 0 ? (
                       <div className="mt-1">
                         <MergePairList
+                          environmentId={props.environmentId}
                           team={team}
                           pairs={merges}
+                          fixes={fixesWith(teammate.member.memberId)}
                           pathPrefix={projectTeam?.pathPrefix ?? ""}
                         />
                       </div>

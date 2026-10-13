@@ -9,6 +9,8 @@ import type {
   ProjectId,
   TeamFeedTeam,
   TeamMergeFile,
+  TeamMergeFix,
+  TeamMergeOther,
   TeamMergePair,
   ThreadId,
 } from "@t3tools/contracts";
@@ -39,7 +41,10 @@ const memberName = (team: TeamFeedTeam, memberId: string) =>
 const code = (text: string) => `\`${text}\``;
 
 /** "Your "login" chat and Sara's `search` branch"; "Your chats "A" and "B"". */
-export function mergePairSubject(team: TeamFeedTeam, pair: TeamMergePair): string {
+export function mergePairSubject(
+  team: TeamFeedTeam,
+  pair: Pick<TeamMergePair, "mine" | "other">,
+): string {
   const mine = `"${pair.mine.title}"`;
   switch (pair.other._tag) {
     case "chat":
@@ -134,6 +139,56 @@ export function mergePairPending(team: TeamFeedTeam, pair: TeamMergePair): strin
       claim.pushedCommit !== other.commit,
   );
   return newer ? `${memberName(team, other.memberId)} pushed since; checking…` : null;
+}
+
+/** The project's fixes started with "Fix it". */
+export function projectMergeFixes(
+  team: TeamFeedTeam,
+  projectId: ProjectId | null,
+): ReadonlyArray<TeamMergeFix> {
+  if (projectId === null) return [];
+  return (team.merging?.fixes ?? []).filter((fix) => fix.projectId === projectId);
+}
+
+const sameOther = (a: TeamMergeOther, b: TeamMergeOther) => {
+  switch (a._tag) {
+    case "chat":
+      return b._tag === "chat" && a.thread.threadId === b.thread.threadId;
+    case "branch":
+      return b._tag === "branch" && a.memberId === b.memberId && a.branch === b.branch;
+    case "base":
+      return b._tag === "base" && a.branch === b.branch;
+  }
+};
+
+/** Whether the fix is for this pair: its chat and the same other side. */
+export const fixIsForPair = (fix: TeamMergeFix, pair: TeamMergePair) =>
+  fix.mine.thread.threadId === pair.mine.thread.threadId && sameOther(fix.other, pair.other);
+
+/**
+ * Whether "Fix it" can start for the pair; otherwise why not. A fix runs in
+ * the chat's own worktree, so the shared checkout is merged by hand.
+ */
+export function mergeFixBlocked(pair: TeamMergePair): string | null {
+  if (pair.status === "clean") return "It merges cleanly.";
+  if (!pair.mine.worktree) {
+    return "This chat works in the shared checkout, where a merge would change every chat there. Merge it by hand.";
+  }
+  return null;
+}
+
+/** One line for a fix: what is being merged, and what the person does next. */
+export function mergeFixSentence(
+  team: TeamFeedTeam,
+  fix: TeamMergeFix,
+  pathPrefix: string,
+): string {
+  const subject = mergePairSubject(team, fix);
+  const where =
+    fix.files.length === 0 ? "" : ` in ${fileList(fix.files, fix.files.length, pathPrefix)}`;
+  return fix.status === "working"
+    ? `${subject}: the agent is resolving the clash${where}.`
+    : `${subject}: the agent's fix${where} is ready. Read the diff in the chat, then approve or undo.`;
 }
 
 export interface MergeViewer {

@@ -372,6 +372,7 @@ import { TeamFeedEvent } from "./teamFeed.ts"; // team-layer
 import { TeamChoiceError, TeamChooseInput, TeamChooseResult } from "./teamChoice.ts"; // team-layer
 import { TeamAnswerError, TeamAnswerInput, TeamAnswerResult } from "./teamAsk.ts"; // team-layer
 import { TeamNoteError, TeamNoteInput, TeamNoteResult } from "./teamNotes.ts"; // team-layer
+import { TeamMergeFixError, TeamMergeFixInput, TeamMergeFixResult } from "./teamMerging.ts"; // team-layer
 
 export const WS_METHODS = {
   // Project registry methods
@@ -596,6 +597,8 @@ export const WS_METHODS = {
   teamAnswer: "team.answer",
   // team-layer: notes on Team home / Today (UI_PLAN.md slice 4).
   teamNote: "team.note",
+  // team-layer: "Fix it" on a merge clash, then approve or undo (MERGE_HELP_PLAN.md section 5).
+  teamMergeFix: "team.mergeFix",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -1892,6 +1895,13 @@ const WsTeamNoteRpc = Rpc.make(WS_METHODS.teamNote, {
   error: Schema.Union([TeamNoteError, EnvironmentAuthorizationError]),
 });
 
+// team-layer: "Fix it" on a merge clash (fork-only, see team/MERGE_HELP_PLAN.md section 5).
+const WsTeamMergeFixRpc = Rpc.make(WS_METHODS.teamMergeFix, {
+  payload: TeamMergeFixInput,
+  success: TeamMergeFixResult,
+  error: Schema.Union([TeamMergeFixError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeBackgroundPolicyRpc = Rpc.make(WS_METHODS.subscribeBackgroundPolicy, {
   payload: Schema.Struct({}),
   success: BackgroundPolicySnapshot,
@@ -2099,6 +2109,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsTeamChooseRpc, // team-layer
   WsTeamAnswerRpc, // team-layer
   WsTeamNoteRpc, // team-layer
+  WsTeamMergeFixRpc, // team-layer
   WsOrchestrationV2DispatchCommandRpc,
   WsOrchestrationV2GetWorkflowScriptRpc,
   WsOrchestrationV2StopWorkflowRpc,

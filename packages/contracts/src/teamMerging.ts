@@ -8,7 +8,13 @@
  */
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { TeamMemberId, TeamPath, TeamThreadRef } from "./team.ts";
 
 /**
@@ -79,11 +85,35 @@ export const TeamMergePair = Schema.Struct({
 });
 export type TeamMergePair = typeof TeamMergePair.Type;
 
+/**
+ * "Fix it" (MERGE_HELP_PLAN.md section 5): a turn in the person's own chat
+ * merges the other side and resolves the clash, without committing.
+ * - `working`: the merge is in the chat's copy and its turn runs.
+ * - `ready`: the turn ended; the person approves (commit, push if pushed) or undoes.
+ */
+export const TeamMergeFixStatus = Schema.Literals(["working", "ready"]);
+export type TeamMergeFixStatus = typeof TeamMergeFixStatus.Type;
+
+export const TeamMergeFix = Schema.Struct({
+  projectId: ProjectId,
+  mine: TeamMergeMine,
+  other: TeamMergeOther,
+  status: TeamMergeFixStatus,
+  /** The files Git could not combine when the merge started, relative to the team's root. */
+  files: Schema.Array(TeamPath),
+  /** This chat's uncommitted work was committed first so Git could merge; Undo takes it back. */
+  savedWork: Schema.Boolean,
+  startedAt: IsoDateTime,
+});
+export type TeamMergeFix = typeof TeamMergeFix.Type;
+
 export const TeamMerging = Schema.Struct({
   /** Why nothing is checked, e.g. Git is older than 2.38. */
   unavailable: Schema.optionalKey(TrimmedNonEmptyString),
   /** Clashes first. Pairs with nothing new on one side are left out. */
   pairs: Schema.Array(TeamMergePair),
+  /** Fixes started with "Fix it" that wait for their turn or for the person. */
+  fixes: Schema.optionalKey(Schema.Array(TeamMergeFix)),
 });
 export type TeamMerging = typeof TeamMerging.Type;
 
@@ -93,3 +123,33 @@ export const TEAM_MERGE_LIMITS = {
   /** Files listed per pair. */
   files: 10,
 } as const;
+
+/** What the person does with a clash: start a fix, then approve or undo it. */
+export const TeamMergeFixInput = Schema.Union([
+  Schema.TaggedStruct("start", {
+    projectId: ProjectId,
+    /** The pair's chat (its `mine` side). */
+    threadId: ThreadId,
+    other: TeamMergeOther,
+  }),
+  Schema.TaggedStruct("approve", { threadId: ThreadId }),
+  Schema.TaggedStruct("undo", { threadId: ThreadId }),
+]);
+export type TeamMergeFixInput = typeof TeamMergeFixInput.Type;
+
+export const TeamMergeFixResult = Schema.Struct({
+  /** After approve: what happened to the push. */
+  push: Schema.optionalKey(Schema.Literals(["pushed", "notPushed", "failed"])),
+  /** A sentence for the person, e.g. why the push failed. */
+  detail: Schema.optionalKey(Schema.String),
+});
+export type TeamMergeFixResult = typeof TeamMergeFixResult.Type;
+
+export class TeamMergeFixError extends Schema.TaggedError<TeamMergeFixError>()(
+  "TeamMergeFixError",
+  { detail: Schema.String },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}

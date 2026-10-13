@@ -41,5 +41,10 @@ export function createTeamFeedAtoms<R, E>(runtime: Atom.AtomRuntime<EnvironmentR
       label: "environment-data:team:note",
       tag: WS_METHODS.teamNote,
     }),
+    /** "Fix it" on a merge clash, then approve or undo (MERGE_HELP_PLAN.md section 5). */
+    mergeFix: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:team:merge-fix",
+      tag: WS_METHODS.teamMergeFix,
+    }),
   };
 }

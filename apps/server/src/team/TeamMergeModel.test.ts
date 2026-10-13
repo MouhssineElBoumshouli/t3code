@@ -16,7 +16,9 @@ import { MERGE_CHECK_DEBOUNCE, makeBatcher } from "./TeamMergeCheck.ts";
 import {
   BoundedCache,
   type CheckedPair,
+  clashLine,
   mergingView,
+  newClashes,
   nextPair,
   pairKey,
   type PairSides,
@@ -137,6 +139,59 @@ describe("TeamMergeModel", () => {
       unavailable: "Git too old",
       pairs: [],
     });
+  });
+
+  it("tells each chat a clash once, again after it ended and came back", () => {
+    const clash = step(undefined, sides("a1", "b1", "2026-10-13T10:00:00.000Z"), CLASH);
+    const solo = nextPair({
+      previous: undefined,
+      sides: {
+        ...sides("a1", "c1", "2026-10-13T10:00:00.000Z"),
+        other: {
+          _tag: "chat",
+          thread: { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("greet") },
+          title: "greet",
+          commit: "c1",
+        },
+      },
+      result: CLASH,
+      toTeamPath: (path) => path,
+      now: "2026-10-13T10:00:30.000Z",
+    });
+    const pairs = new Map([
+      ["sara", clash],
+      ["greet", solo],
+    ]);
+    const told = new Set<string>();
+    const first = newClashes({ pairs, threadId: "login", sharedCheckout: false, told });
+    assert.lengthOf(first, 2);
+    assert.lengthOf(newClashes({ pairs, threadId: "login", sharedCheckout: false, told }), 0);
+    // The other chat of a pair is told too, in its own words.
+    const greet = newClashes({ pairs, threadId: "greet", sharedCheckout: false, told: new Set() });
+    assert.equal(
+      clashLine({ pairs: greet, threadId: "greet", nameOf: (id) => id, solo: true }),
+      '<team_merge>Merge check: this chat\'s work clashes with the chat "login" in `src/routes.ts`. Tell the user; they can choose "Fix it" on Today.</team_merge>',
+    );
+    // A chat in no pair hears nothing.
+    assert.lengthOf(
+      newClashes({ pairs, threadId: "other", sharedCheckout: false, told: new Set() }),
+      0,
+    );
+    // Ended and back: a new `since`, told again.
+    const back = { ...clash, pair: { ...clash.pair, since: "2026-10-13T11:00:00.000Z" } };
+    assert.lengthOf(
+      newClashes({
+        pairs: new Map([["sara", back]]),
+        threadId: "login",
+        sharedCheckout: false,
+        told,
+      }),
+      1,
+    );
+    assert.equal(
+      clashLine({ pairs: [clash.pair], threadId: "login", nameOf: () => "Sara", solo: false }),
+      "<team_merge>Merge check: this chat's work clashes with Sara's pushed branch `search` in `src/routes.ts`. Tell the user; they can choose \"Fix it\" on Team home.</team_merge>",
+    );
   });
 
   it("forgets the least recently used result past its limit", () => {

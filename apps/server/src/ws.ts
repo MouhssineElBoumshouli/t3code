@@ -252,6 +252,7 @@ import * as TeamFeed from "./team/TeamFeed.ts"; // team-layer
 import * as TeamChoices from "./team/TeamChoices.ts"; // team-layer
 import * as TeamQuestions from "./team/TeamQuestions.ts"; // team-layer
 import * as TeamNotes from "./team/TeamNotes.ts"; // team-layer
+import * as TeamMergeFix from "./team/TeamMergeFix.ts"; // team-layer
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
@@ -1336,6 +1337,7 @@ const layerWsRpc = (
       const teamChoices = yield* TeamChoices.TeamChoices; // team-layer: the warning card
       const teamQuestions = yield* TeamQuestions.TeamQuestions; // team-layer: "Ask"
       const teamNotes = yield* TeamNotes.TeamNotes; // team-layer: notes
+      const teamMergeFix = yield* TeamMergeFix.TeamMergeFix; // team-layer: "Fix it"
       // A webhook URL starts agent runs, so only sessions that may operate
       // see it; read-only sessions still see the task itself.
       const withVisibleWebhookUrls = (result: ScheduledTaskListResult): ScheduledTaskListResult =>
@@ -3128,6 +3130,7 @@ const layerWsRpc = (
         [WS_METHODS.teamChoose]: (input) => teamChoices.choose(input),
         [WS_METHODS.teamAnswer]: (input) => teamQuestions.answer(input),
         [WS_METHODS.teamNote]: (input) => teamNotes.act(input), // team-layer
+        [WS_METHODS.teamMergeFix]: (input) => teamMergeFix.act(input), // team-layer
         [WS_METHODS.subscribeBackgroundPolicy]: (_input) =>
           Stream.unwrap(
             Effect.map(backgroundPolicy.subscribe, ({ latest, changes }) =>

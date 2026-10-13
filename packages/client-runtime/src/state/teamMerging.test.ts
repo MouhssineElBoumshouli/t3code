@@ -15,8 +15,11 @@ import { buildCatchUp } from "./teamHome.ts";
 import { fileHolders } from "./teamMarkers.ts";
 import {
   fileMergeMark,
+  fixIsForPair,
   foldedMergeLine,
   foldMergePairs,
+  mergeFixBlocked,
+  mergeFixSentence,
   mergePairPending,
   mergePairSentence,
   projectMergePairs,
@@ -165,6 +168,32 @@ describe("teamMerging", () => {
     );
     expect(foldedMergeLine(4, false)).toBe("4 other pairs merge cleanly");
     expect(foldedMergeLine(1, true)).toBe("1 pair merges cleanly");
+  });
+
+  it("words a fix and matches it to its pair; the shared checkout cannot be fixed here", () => {
+    const fix = {
+      projectId: PROJECT,
+      mine: pair().mine,
+      other: pair().other,
+      status: "working" as const,
+      files: ["app/src/api/routes.ts"],
+      savedWork: true,
+      startedAt: "2026-10-13T10:01:00.000Z",
+    };
+    expect(fixIsForPair(fix, pair())).toBe(true);
+    expect(fixIsForPair(fix, pair({ other: { _tag: "base", branch: "main", commit: "m1" } }))).toBe(
+      false,
+    );
+    expect(mergeFixSentence(team([]), fix, "app")).toBe(
+      'Your "login" chat and Sara\'s `search` branch: the agent is resolving the clash in `src/api/routes.ts`.',
+    );
+    expect(mergeFixSentence(team([]), { ...fix, status: "ready" }, "app")).toBe(
+      "Your \"login\" chat and Sara's `search` branch: the agent's fix in `src/api/routes.ts` is ready. Read the diff in the chat, then approve or undo.",
+    );
+    expect(mergeFixBlocked(pair())).toBeNull();
+    expect(mergeFixBlocked(pair({ mine: { ...pair().mine, worktree: false } }))).toContain(
+      "shared checkout",
+    );
   });
 
   it("says when a teammate pushed again since the check", () => {

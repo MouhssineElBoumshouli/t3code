@@ -1,27 +1,48 @@
 /**
- * team-layer: merging help, slice 1 (team/MERGE_HELP_PLAN.md section 3). The
- * server's merge checks as lines: clashes and files to regenerate first, then
- * clean pairs where both sides changed the same file, each with when it was
- * checked; other clean pairs fold into one line that opens on click. Used by Team home
- * / Today's "Merging" section and the presence popover. Times are worded
- * when drawn; nothing ticks.
+ * team-layer: merging help (team/MERGE_HELP_PLAN.md sections 3 and 5). The
+ * server's merge checks as lines: fixes under way first, then clashes and
+ * files to regenerate, then clean pairs where both sides changed the same
+ * file; other clean pairs fold into one line that opens on click. A clash
+ * has "Fix it"; a fix whose turn ended has Approve and Undo. Used by Team
+ * home / Today's "Merging" section and the presence popover. Times are
+ * worded when drawn; nothing ticks.
  */
+import { useAtomValue } from "@effect/atom-react";
 import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
+  fixIsForPair,
   foldedMergeLine,
   foldMergePairs,
+  mergeFixBlocked,
+  mergeFixSentence,
   mergePairPending,
   mergePairSentence,
+  projectMergeFixes,
   projectMergePairs,
 } from "@t3tools/client-runtime/state/teamMerging";
-import type { ProjectId, TeamFeedTeam, TeamMergePair } from "@t3tools/contracts";
-import { Fragment, useState } from "react";
+import type {
+  EnvironmentId,
+  ProjectId,
+  TeamFeedTeam,
+  TeamMergeFix,
+  TeamMergeFixInput,
+  TeamMergePair,
+} from "@t3tools/contracts";
+import { useNavigate } from "@tanstack/react-router";
+import { Fragment, type ReactNode, useCallback, useState } from "react";
 
 import { Button } from "~/components/ui/button";
+import { toastManager } from "~/components/ui/toast";
 import { cn } from "~/lib/utils";
+import { teamFeed } from "~/state/teamFeed";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 /** A pair's identity in a list: its chat and what it merges with. */
-export const mergePairKey = (pair: TeamMergePair) =>
+export const mergePairKey = (pair: Pick<TeamMergePair, "mine" | "other">) =>
   `${pair.mine.thread.threadId}|${
     pair.other._tag === "branch"
       ? `${pair.other.memberId}/${pair.other.branch}`
@@ -59,11 +80,12 @@ export function MergeSentence(props: { readonly text: string }) {
   );
 }
 
-/** One pair: a dot by status, the sentence, and when it was checked. */
+/** One pair: a dot by status, the sentence, when it was checked, and an action. */
 export function MergePairLine(props: {
   readonly team: TeamFeedTeam;
   readonly pair: TeamMergePair;
   readonly pathPrefix: string;
+  readonly action?: ReactNode;
 }) {
   const { team, pair } = props;
   const pending = mergePairPending(team, pair);
@@ -86,34 +108,198 @@ export function MergePairLine(props: {
           {" "}
           · {pending ?? `checked ${formatRelativeTimeLabel(pair.checkedAt)}`}
         </span>
+        {props.action}
       </span>
     </li>
   );
 }
 
-/** Pairs worth a line, then the other clean pairs folded into one that opens on click. */
+/** "Fix it", Approve and Undo, one at a time; a failure, and where the merge went, as a toast. */
+function useMergeFixAction(environmentId: EnvironmentId) {
+  const mergeFix = useAtomCommand(teamFeed.mergeFix, { reportFailure: false });
+  const allowed = useAtomValue(teamFeed.mergeFix.permissionAtom(environmentId));
+  const [pending, setPending] = useState(false);
+  const act = useCallback(
+    (input: TeamMergeFixInput, failedTitle: string) => {
+      setPending(true);
+      void mergeFix({ environmentId, input }).then((result) => {
+        setPending(false);
+        if (result._tag === "Failure") {
+          if (isAtomCommandInterrupted(result)) return;
+          const error = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: failedTitle,
+            description: error instanceof Error ? error.message : "Try again.",
+          });
+          return;
+        }
+        if (input._tag !== "approve") return;
+        const outcome = result.value;
+        toastManager.add(
+          outcome.push === "failed"
+            ? {
+                type: "warning",
+                title: "Merge committed, but the push failed",
+                description: outcome.detail ?? "Push it from the chat.",
+              }
+            : {
+                type: "success",
+                title:
+                  outcome.push === "pushed"
+                    ? "Merge committed and pushed"
+                    : "Merge committed (the branch is not pushed)",
+              },
+        );
+      });
+    },
+    [mergeFix, environmentId],
+  );
+  return { act, pending, allowed };
+}
+
+/** A fix under way: what it merges, then Open chat, and Approve and Undo once its turn ended. */
+function MergeFixLine(props: {
+  readonly environmentId: EnvironmentId;
+  readonly team: TeamFeedTeam;
+  readonly fix: TeamMergeFix;
+  readonly pathPrefix: string;
+}) {
+  const { fix } = props;
+  const navigate = useNavigate();
+  const { act, pending, allowed } = useMergeFixAction(props.environmentId);
+  const threadId = fix.mine.thread.threadId;
+  return (
+    <li className="flex items-start gap-2 text-xs" data-team-merge-fix={fix.status}>
+      <span
+        aria-hidden
+        className={cn(
+          "mt-1.5 size-1.5 shrink-0 rounded-full",
+          fix.status === "ready" ? "bg-info" : "bg-muted-foreground",
+        )}
+      />
+      <span className="flex min-w-0 flex-col gap-1">
+        <span>
+          <MergeSentence text={mergeFixSentence(props.team, fix, props.pathPrefix)} />
+          {fix.savedWork ? (
+            <span className="text-muted-foreground">
+              {" "}
+              · its uncommitted work was committed first
+            </span>
+          ) : null}
+        </span>
+        <span className="flex flex-wrap gap-1.5">
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() =>
+              void navigate({
+                to: "/$environmentId/$threadId",
+                params: { environmentId: fix.mine.thread.environmentId, threadId },
+              })
+            }
+          >
+            Open chat
+          </Button>
+          {fix.status === "ready" && allowed ? (
+            <>
+              <Button
+                size="xs"
+                disabled={pending}
+                onClick={() => act({ _tag: "approve", threadId }, "Could not approve the fix")}
+              >
+                Approve
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost-muted"
+                disabled={pending}
+                onClick={() => act({ _tag: "undo", threadId }, "Could not undo the fix")}
+              >
+                Undo
+              </Button>
+            </>
+          ) : null}
+        </span>
+      </span>
+    </li>
+  );
+}
+
+/** "Fix it" for a clash or files to regenerate; disabled, with why, when it cannot run here. */
+function FixItButton(props: {
+  readonly environmentId: EnvironmentId;
+  readonly pair: TeamMergePair;
+}) {
+  const { act, pending, allowed } = useMergeFixAction(props.environmentId);
+  if (props.pair.status === "clean" || !allowed) return null;
+  const blocked = mergeFixBlocked(props.pair);
+  return (
+    <>
+      {" "}
+      <Button
+        size="xs"
+        variant="outline"
+        disabled={pending || blocked !== null}
+        title={
+          blocked ??
+          "A turn in this chat merges the other side and resolves the clash, without committing. You approve or undo it after."
+        }
+        onClick={() =>
+          act(
+            {
+              _tag: "start",
+              projectId: props.pair.projectId,
+              threadId: props.pair.mine.thread.threadId,
+              other: props.pair.other,
+            },
+            "Could not start the fix",
+          )
+        }
+      >
+        Fix it
+      </Button>
+    </>
+  );
+}
+
+/** Fixes, then pairs worth a line, then the other clean pairs folded into one that opens on click. */
 export function MergePairList(props: {
+  readonly environmentId: EnvironmentId;
   readonly team: TeamFeedTeam;
   readonly pairs: ReadonlyArray<TeamMergePair>;
+  readonly fixes: ReadonlyArray<TeamMergeFix>;
   readonly pathPrefix: string;
 }) {
   const [open, setOpen] = useState(false);
-  const { shown, folded } = foldMergePairs(props.pairs);
+  const { shown, folded } = foldMergePairs(
+    props.pairs.filter((pair) => !props.fixes.some((fix) => fixIsForPair(fix, pair))),
+  );
   const line = (pair: TeamMergePair) => (
     <MergePairLine
       key={mergePairKey(pair)}
       team={props.team}
       pair={pair}
       pathPrefix={props.pathPrefix}
+      action={<FixItButton environmentId={props.environmentId} pair={pair} />}
     />
   );
   return (
     <ul className="flex flex-col gap-1.5">
+      {props.fixes.map((fix) => (
+        <MergeFixLine
+          key={`fix|${mergePairKey(fix)}`}
+          environmentId={props.environmentId}
+          team={props.team}
+          fix={fix}
+          pathPrefix={props.pathPrefix}
+        />
+      ))}
       {shown.map(line)}
       {folded.length > 0 ? (
         <li className="text-xs">
           <Button size="xs" variant="ghost-muted" onClick={() => setOpen((value) => !value)}>
-            {foldedMergeLine(folded.length, shown.length === 0)}
+            {foldedMergeLine(folded.length, shown.length === 0 && props.fixes.length === 0)}
           </Button>
         </li>
       ) : null}
@@ -124,6 +310,7 @@ export function MergePairList(props: {
 
 /** The "Merging" section's body on Team home / Today. */
 export function TeamMergingList(props: {
+  readonly environmentId: EnvironmentId;
   readonly team: TeamFeedTeam;
   readonly projectId: ProjectId;
   readonly pathPrefix: string;
@@ -134,7 +321,8 @@ export function TeamMergingList(props: {
   }
   // Clashes first, as the server orders them.
   const pairs = projectMergePairs(team, props.projectId);
-  if (pairs.length === 0) {
+  const fixes = projectMergeFixes(team, props.projectId);
+  if (pairs.length === 0 && fixes.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
         {team.solo
@@ -143,5 +331,13 @@ export function TeamMergingList(props: {
       </p>
     );
   }
-  return <MergePairList team={team} pairs={pairs} pathPrefix={props.pathPrefix} />;
+  return (
+    <MergePairList
+      environmentId={props.environmentId}
+      team={team}
+      pairs={pairs}
+      fixes={fixes}
+      pathPrefix={props.pathPrefix}
+    />
+  );
 }

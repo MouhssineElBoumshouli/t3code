@@ -334,6 +334,21 @@ it.layer(ReadOnlySocketLive, { timeout: STARTUP_TIMEOUT_MS + 30_000, excludeTest
       }),
     );
 
+    // team-layer: "Fix it" starts a turn and commits, so reading is not enough.
+    it.effect("teamMergeFix refuses an orchestration:read session", () =>
+      Effect.gen(function* () {
+        const { wsUrl } = yield* ReadOnlySocket;
+        const exit = yield* callByName(
+          wsUrl,
+          WS_METHODS.teamMergeFix,
+          yield* samplePayload(WS_METHODS.teamMergeFix),
+        );
+        const failure = failureOf(exit);
+        assert.strictEqual(failure?._tag, "EnvironmentAuthorizationError");
+        assert.strictEqual(failure?.requiredScope, "orchestration:operate");
+      }),
+    );
+
     it.effect.each(CHATGPT_RPCS)("%s refuses an orchestration:read session", (tag) =>
       Effect.gen(function* () {
         const { wsUrl } = yield* ReadOnlySocket;

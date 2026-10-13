@@ -15,6 +15,9 @@
  * turn's diff also holds the holder's own edits. A file is left out when that
  * chat ran a turn at the same time: the change cannot be told apart, and a
  * false alarm is worse than none (VISION.md section 3, "No false alarms").
+ * For the same reason, while a merge is in progress in the chat's folder (a
+ * "Fix it" turn, `TeamMergeFix`), a file exactly as the merged-in side has it
+ * came with the merge and is left out.
  *
  * @module TeamGuard
  */
@@ -41,6 +44,7 @@ import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { heldElsewhere } from "./heldElsewhere.ts";
 import { diffToTeamPaths } from "./TeamAutoNotes.ts";
 import * as TeamChoices from "./TeamChoices.ts";
@@ -80,8 +84,35 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
+  const git = yield* GitVcsDriver.GitVcsDriver;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
   const { resolve } = yield* makeTeamResolver;
+
+  /**
+   * The repo paths that differ from the commit being merged in; all of them
+   * when no merge is in progress in `folder`.
+   */
+  const notFromMerge = (folder: string, repoPaths: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const run = (args: ReadonlyArray<string>) =>
+        git.execute({ operation: "TeamGuard.merge", cwd: folder, args, allowNonZeroExit: true });
+      if (repoPaths.length === 0) return repoPaths;
+      if ((yield* run(["rev-parse", "-q", "--verify", "MERGE_HEAD"])).exitCode !== 0) {
+        return repoPaths;
+      }
+      const differ = yield* run([
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "-z",
+        "MERGE_HEAD",
+        "--",
+        ...repoPaths.map((file) => `:(top,literal)${file}`),
+      ]);
+      if (differ.exitCode !== 0) return repoPaths;
+      const changed = new Set(differ.stdout.split("\0"));
+      return repoPaths.filter((file) => changed.has(file));
+    }).pipe(Effect.orElseSucceed(() => repoPaths));
 
   // From the sequence read now, so no checkpoint before activation is missed.
   const fromSequence = yield* eventSink.latestSequence().pipe(Effect.orElseSucceed(() => 0));
@@ -227,7 +258,10 @@ export const make = Effect.gen(function* () {
       );
       const changed = diffToTeamPaths(
         path,
-        payload.files.map((file) => file.path),
+        yield* notFromMerge(
+          context.workingFolder,
+          payload.files.map((file) => file.path),
+        ),
         repoRoot,
         context.teamRoot,
       ) as ReadonlyArray<TeamPath>;

@@ -21,6 +21,11 @@
  * - Git older than 2.38 has no `merge-tree --write-tree`: nothing is checked
  *   and the feed says why.
  *
+ * The chat's turn note gets one line when a new clash appears for it (each
+ * clash once), so the agent tells the person. After an approved fix, the
+ * chat's side is its merge commit until a newer checkpoint (a ref, so it
+ * survives a restart).
+ *
  * Results live in memory; a restart checks again. Never touches a working copy.
  *
  * @module TeamMergeCheck
@@ -34,6 +39,7 @@ import {
   type TeamMemberId,
   type TeamMergeMine,
   type TeamMergeOther,
+  type TeamMergePair,
   TeamMerging,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -72,6 +78,8 @@ import { diffToTeamPaths } from "./TeamAutoNotes.ts";
 import {
   BoundedCache,
   type CheckedPair,
+  clashLine,
+  newClashes,
   commitPairKey,
   isChangeOfState,
   mergingView,
@@ -81,6 +89,7 @@ import {
 } from "./TeamMergeModel.ts";
 import { findRepoRoot, findTeamFile } from "./TeamProjectFiles.ts";
 import * as TeamService from "./TeamService.ts";
+import { installTeamTurnNote } from "./teamTurnNote.ts";
 
 export const MERGE_CHECK_DEBOUNCE = Duration.seconds(30);
 export const BASE_CHECK_INTERVAL = Duration.minutes(2);
@@ -91,6 +100,7 @@ const MAX_CHATS = 12;
 const GIT_TIMEOUT_MS = 60_000;
 const RESULT_CACHE_SIZE = 500;
 const PEER_REFS = "refs/t3-team/peers";
+const FIXED_REFS = "refs/t3-team/fixed";
 const BASE_REFS = "refs/t3-team/base";
 
 export class TeamMergeCheck extends Context.Service<
@@ -102,6 +112,21 @@ export class TeamMergeCheck extends Context.Service<
     readonly subscribeChanges: Effect.Effect<PubSub.Subscription<TeamId>, never, Scope.Scope>;
     /** Checks the project in the next batch. */
     readonly request: (projectId: ProjectId) => Effect.Effect<void>;
+    /** The pair of this chat and that other side, as last checked. */
+    readonly findPair: (
+      projectId: ProjectId,
+      threadId: ThreadId,
+      other: TeamMergeOther,
+    ) => Effect.Effect<TeamMergePair | undefined>;
+    /** After an approved fix: the chat's side is `commit` until a newer checkpoint. Checks again. */
+    readonly useCommitUntilNextTurn: (input: {
+      readonly projectId: ProjectId;
+      readonly threadId: ThreadId;
+      readonly repoRoot: string;
+      readonly commit: string;
+    }) => Effect.Effect<void>;
+    /** The turn-note line for clashes this chat was not told about yet; marks them told. */
+    readonly takeClashLine: (threadId: ThreadId) => Effect.Effect<string | undefined>;
   }
 >()("t3/team/TeamMergeCheck") {}
 
@@ -170,6 +195,8 @@ export const make = Effect.gen(function* () {
   /** `<folder>|<login>/<branch>` → the commit its peer ref holds, or `missing:<commit>`. */
   const peers = new Map<string, string>();
   const baseFetchedAt = new Map<string, number>();
+  /** Per chat, the clashes its turn note told (`<pair>|<since>`). */
+  const told = new Map<ThreadId, Set<string>>();
   let gitProblem: string | undefined | null = null;
 
   const run = (cwd: string, args: ReadonlyArray<string>, operation: string) =>
@@ -407,16 +434,23 @@ export const make = Effect.gen(function* () {
       }
       const base = yield* baseRef(repoRoot);
 
+      const fixedRefOf = (threadId: ThreadId) => `${FIXED_REFS}/${threadId}`;
       const refs = yield* readRefs(repoRoot, [
-        ...mineRefs.map((entry) => entry.ref),
+        ...mineRefs.flatMap((entry) => [entry.ref, fixedRefOf(entry.thread.id)]),
         ...peerRefs.map((entry) => entry.ref),
         ...(base ? [base.ref] : []),
       ]);
 
       const mineSides: Array<{ side: TeamMergeMine; info: RefInfo }> = [];
       for (const { thread, ref } of mineRefs) {
-        const info = refs.get(ref);
-        if (info === undefined) continue;
+        const checkpoint = refs.get(ref);
+        if (checkpoint === undefined) continue;
+        // An approved fix's merge commit stands for the chat until its next turn's checkpoint.
+        const fixed = refs.get(fixedRefOf(thread.id));
+        const info =
+          fixed !== undefined && Date.parse(fixed.committedAt) >= Date.parse(checkpoint.committedAt)
+            ? fixed
+            : checkpoint;
         mineSides.push({
           side: {
             thread: { environmentId, threadId: thread.id },
@@ -589,10 +623,73 @@ export const make = Effect.gen(function* () {
     ),
   );
 
+  const findPair = (projectId: ProjectId, threadId: ThreadId, other: TeamMergeOther) =>
+    Effect.sync(() => {
+      const pairs = byProject.get(projectId)?.pairs;
+      if (pairs === undefined) return undefined;
+      for (const checked of pairs.values()) {
+        const pair = checked.pair;
+        if (pair.mine.thread.threadId !== threadId) continue;
+        if (pairKey(projectId, pair.mine, other) === pairKey(projectId, pair.mine, pair.other)) {
+          return pair;
+        }
+      }
+      return undefined;
+    });
+
+  const useCommitUntilNextTurn = (input: {
+    readonly projectId: ProjectId;
+    readonly threadId: ThreadId;
+    readonly repoRoot: string;
+    readonly commit: string;
+  }) =>
+    // Kept in Git, so a restart still knows: `refs/t3-team/fixed/<thread>`, used while newer than the checkpoint.
+    run(
+      input.repoRoot,
+      ["update-ref", `${FIXED_REFS}/${input.threadId}`, input.commit],
+      "TeamMerging.fixed",
+    ).pipe(
+      Effect.andThen(batcher.request(input.projectId)),
+      Effect.orElseSucceed(() => undefined),
+    );
+
+  const takeClashLine = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const shell = yield* orchestrator.getThreadShell(threadId);
+      if (shell === null) return undefined;
+      const state = byProject.get(shell.projectId);
+      if (state === undefined) return undefined;
+      const seen = told.get(threadId) ?? new Set<string>();
+      told.set(threadId, seen);
+      const fresh = newClashes({
+        pairs: state.pairs,
+        threadId,
+        sharedCheckout: shell.worktreePath === null,
+        told: seen,
+      });
+      if (fresh.length === 0) return undefined;
+      const members = yield* teams.listMembers(state.teamId).pipe(Effect.orElseSucceed(() => []));
+      const names = new Map(
+        members.map((member) => [member.memberId as string, member.displayName]),
+      );
+      return clashLine({
+        pairs: fresh,
+        threadId,
+        nameOf: (memberId) => names.get(memberId) ?? memberId,
+        solo: yield* teams.isSolo(state.teamId),
+      });
+    }).pipe(Effect.orElseSucceed(() => undefined));
+
+  const uninstall = installTeamTurnNote(takeClashLine);
+  yield* Effect.addFinalizer(() => Effect.sync(uninstall));
+
   return TeamMergeCheck.of({
     forTeam: (teamId) => Effect.sync(() => teamView(teamId)),
     subscribeChanges: PubSub.subscribe(changes),
     request: batcher.request,
+    findPair,
+    useCommitUntilNextTurn,
+    takeClashLine,
   });
 });
 

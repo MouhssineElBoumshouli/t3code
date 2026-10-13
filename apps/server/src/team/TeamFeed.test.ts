@@ -29,6 +29,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as TeamCards from "./TeamCards.ts";
 import * as TeamFeed from "./TeamFeed.ts";
 import * as TeamMergeCheck from "./TeamMergeCheck.ts";
+import * as TeamMergeFix from "./TeamMergeFix.ts";
 import * as TeamService from "./TeamService.ts";
 import { makeTeamOrigin, testTeamServiceLayer, useTeamOrigin } from "./testing/teamState.ts";
 
@@ -59,6 +60,7 @@ const harness = (workspaceRoot: string) =>
     // Merge checks, set by the test: a view per team, and a change to push.
     const merging = new Map<TeamId, TeamMerging>();
     const mergeChanges = yield* PubSub.unbounded<TeamId>();
+    const fixChanges = yield* PubSub.unbounded<TeamId>();
     const setMerging = (teamId: TeamId, view: TeamMerging) =>
       Effect.suspend(() => {
         merging.set(teamId, view);
@@ -83,6 +85,17 @@ const harness = (workspaceRoot: string) =>
             forTeam: (teamId) => Effect.sync(() => merging.get(teamId)),
             subscribeChanges: PubSub.subscribe(mergeChanges),
             request: () => Effect.void,
+            findPair: () => Effect.succeed(undefined),
+            useCommitUntilNextTurn: () => Effect.void,
+            takeClashLine: () => Effect.succeed(undefined),
+          }),
+        ),
+        Layer.succeed(
+          TeamMergeFix.TeamMergeFix,
+          TeamMergeFix.TeamMergeFix.of({
+            act: () => Effect.succeed({}),
+            forTeam: () => Effect.succeed([]),
+            subscribeChanges: PubSub.subscribe(fixChanges),
           }),
         ),
         NodeServices.layer,

@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import { TEAM_RULEBOOK_TEMPLATE } from "../../../team/TeamProjectFiles.ts";
 import {
+  readCheckSection,
   isSharedPath,
   readDoNotTouchSection,
   readSharedFilesSection,
@@ -130,5 +131,24 @@ describe("readSharedFilesSection", () => {
   it("gives nothing without the section, or for the template's example line", () => {
     assert.deepEqual(readSharedFilesSection(rulebook("")), []);
     assert.deepEqual(readSharedFilesSection(TEAM_RULEBOOK_TEMPLATE), []);
+  });
+});
+
+describe("readCheckSection", () => {
+  it("reads a code block, a code span, or the first line of the section", () => {
+    const fenced =
+      "# Rules\n\n## Check\n\nRun before merging:\n\n```sh\npnpm typecheck\n```\n\n## Other\n`nope`\n";
+    assert.equal(readCheckSection(fenced), "pnpm typecheck");
+    assert.equal(
+      readCheckSection("## Check\n- `vitest related {files}` (under 2 min)\n"),
+      "vitest related {files}",
+    );
+    assert.equal(readCheckSection("## Check\ncargo check\n"), "cargo check");
+  });
+
+  it("gives nothing without the section or with an empty one", () => {
+    assert.isUndefined(readCheckSection("## Shared files\n- `a.ts`\n"));
+    assert.isUndefined(readCheckSection("## Check\n\n## Next\n`pnpm test`\n"));
+    assert.isUndefined(readCheckSection(TEAM_RULEBOOK_TEMPLATE));
   });
 });

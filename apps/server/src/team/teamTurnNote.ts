@@ -6,7 +6,9 @@
  * the message stored in the thread stays as the user wrote it.
  *
  * `ProviderCommandReactor` adds it with {@link withTeamTurnNote}; the team
- * layer installs the reader at startup (`TeamStaleView`).
+ * layer installs its readers at startup: the stale-view line and notes
+ * (`TeamStaleView`), and the merge check's line (`TeamMergeCheck`). Their
+ * parts are joined in the order they were installed.
  *
  * @module teamTurnNote
  */
@@ -16,13 +18,13 @@ import * as Effect from "effect/Effect";
 /** The thread's note for this turn, or `undefined` for none. Never fails. */
 export type TeamTurnNoteReader = (threadId: ThreadId) => Effect.Effect<string | undefined>;
 
-let installedReader: TeamTurnNoteReader | undefined;
+const installedReaders = new Set<TeamTurnNoteReader>();
 
-/** Installs the reader and returns a function that removes it again. */
+/** Installs a reader and returns a function that removes it again. */
 export function installTeamTurnNote(reader: TeamTurnNoteReader): () => void {
-  installedReader = reader;
+  installedReaders.add(reader);
   return () => {
-    if (installedReader === reader) installedReader = undefined;
+    installedReaders.delete(reader);
   };
 }
 
@@ -32,7 +34,12 @@ export function installTeamTurnNote(reader: TeamTurnNoteReader): () => void {
  */
 export function withTeamTurnNote(threadId: ThreadId, text: string): Effect.Effect<string> {
   if (text.trimStart().startsWith("/")) return Effect.succeed(text);
-  return Effect.suspend(() => installedReader?.(threadId) ?? Effect.succeed(undefined)).pipe(
-    Effect.map((note) => (note === undefined ? text : `${text}\n\n${note}`)),
+  return Effect.suspend(() =>
+    Effect.forEach([...installedReaders], (reader) => reader(threadId)),
+  ).pipe(
+    Effect.map((parts) => {
+      const notes = parts.filter((part) => part !== undefined);
+      return notes.length === 0 ? text : `${text}\n\n${notes.join("\n\n")}`;
+    }),
   );
 }
