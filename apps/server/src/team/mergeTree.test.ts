@@ -50,9 +50,25 @@ describe("mergeTree", () => {
         const theirs = branchWith(root, "theirs", { "src/b.ts": lines(5, { 1: "theirs" }) });
         const result = yield* mergeTree(yield* GitVcsDriver.GitVcsDriver, root, ours, theirs);
         assert.deepEqual(result?.conflicts, []);
+        assert.deepEqual(result?.bothChanged, []);
         assert.equal(mergeStatusOf(result!.conflicts), "clean");
         // The working copy is untouched.
         assert.equal(git(root, "status", "--porcelain"), "");
+      }),
+    );
+
+    it.effect("lists the files both sides changed when Git merges them", () =>
+      Effect.gen(function* () {
+        const root = yield* tempRepo;
+        initRepo(root, { "src/a.ts": lines(20), "src/b.ts": lines(5) });
+        const ours = branchWith(root, "ours", { "src/a.ts": lines(20, { 1: "ours" }) });
+        const theirs = branchWith(root, "theirs", {
+          "src/a.ts": lines(20, { 15: "theirs" }),
+          "src/b.ts": lines(5, { 1: "theirs" }),
+        });
+        const result = yield* mergeTree(yield* GitVcsDriver.GitVcsDriver, root, ours, theirs);
+        assert.deepEqual(result?.conflicts, []);
+        assert.deepEqual(result?.bothChanged, ["src/a.ts"]);
       }),
     );
 

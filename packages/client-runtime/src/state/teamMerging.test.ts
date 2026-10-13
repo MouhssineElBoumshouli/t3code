@@ -15,6 +15,8 @@ import { buildCatchUp } from "./teamHome.ts";
 import { fileHolders } from "./teamMarkers.ts";
 import {
   fileMergeMark,
+  foldedMergeLine,
+  foldMergePairs,
   mergePairPending,
   mergePairSentence,
   projectMergePairs,
@@ -39,6 +41,7 @@ const pair = (overrides: Partial<TeamMergePair> = {}): TeamMergePair => ({
   status: "clash",
   files: [file("app/src/api/routes.ts", 2)],
   fileCount: 1,
+  bothChanged: [],
   previous: null,
   since: "2026-10-13T10:00:00.000Z",
   checkedAt: "2026-10-13T10:00:30.000Z",
@@ -138,6 +141,30 @@ describe("teamMerging", () => {
         "",
       ),
     ).toBe('Your "login" chat and Sara\'s `search` branch merge cleanly now.');
+  });
+
+  it("gives a clean pair a line only when both sides changed the same file", () => {
+    const shared = pair({
+      status: "clean",
+      files: [],
+      fileCount: 0,
+      bothChanged: ["app/greet.ts"],
+    });
+    const quiet = pair({
+      status: "clean",
+      files: [],
+      fileCount: 0,
+      mine: { ...pair().mine, title: "quiet" },
+    });
+    const clash = pair();
+    const { shown, folded } = foldMergePairs([clash, shared, quiet]);
+    expect(shown).toEqual([clash, shared]);
+    expect(folded).toEqual([quiet]);
+    expect(mergePairSentence(team([]), shared, "app")).toBe(
+      'Your "login" chat and Sara\'s `search` branch both changed `greet.ts` and merge cleanly.',
+    );
+    expect(foldedMergeLine(4, false)).toBe("4 other pairs merge cleanly");
+    expect(foldedMergeLine(1, true)).toBe("1 pair merges cleanly");
   });
 
   it("says when a teammate pushed again since the check", () => {

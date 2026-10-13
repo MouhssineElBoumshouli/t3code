@@ -18,7 +18,7 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { TeamFace } from "./TeamHolderMarks";
-import { MergePairLine, mergePairKey } from "./TeamMerging";
+import { MergePairList } from "./TeamMerging";
 import { TeamAnswerForm, TeamQuestionText } from "./TeamQuestionCard";
 
 /** What the chip says about the team state. */
@@ -200,16 +200,13 @@ export const TeamPresenceChip = memo(function TeamPresenceChip(props: {
                           }`}
                     </div>
                     {merges.length > 0 ? (
-                      <ul className="mt-1 flex flex-col gap-1">
-                        {merges.slice(0, MAX_PATHS).map((pair) => (
-                          <MergePairLine
-                            key={mergePairKey(pair)}
-                            team={team}
-                            pair={pair}
-                            pathPrefix={projectTeam?.pathPrefix ?? ""}
-                          />
-                        ))}
-                      </ul>
+                      <div className="mt-1">
+                        <MergePairList
+                          team={team}
+                          pairs={merges}
+                          pathPrefix={projectTeam?.pathPrefix ?? ""}
+                        />
+                      </div>
                     ) : null}
                   </div>
                 </div>

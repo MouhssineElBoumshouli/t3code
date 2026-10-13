@@ -1,18 +1,22 @@
 /**
  * team-layer: merging help, slice 1 (team/MERGE_HELP_PLAN.md section 3). The
  * server's merge checks as lines: clashes and files to regenerate first, then
- * pairs that merge cleanly, each with when it was checked. Used by Team home
+ * clean pairs where both sides changed the same file, each with when it was
+ * checked; other clean pairs fold into one line that opens on click. Used by Team home
  * / Today's "Merging" section and the presence popover. Times are worded
  * when drawn; nothing ticks.
  */
 import {
+  foldedMergeLine,
+  foldMergePairs,
   mergePairPending,
   mergePairSentence,
   projectMergePairs,
 } from "@t3tools/client-runtime/state/teamMerging";
 import type { ProjectId, TeamFeedTeam, TeamMergePair } from "@t3tools/contracts";
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 
+import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
@@ -87,6 +91,37 @@ export function MergePairLine(props: {
   );
 }
 
+/** Pairs worth a line, then the other clean pairs folded into one that opens on click. */
+export function MergePairList(props: {
+  readonly team: TeamFeedTeam;
+  readonly pairs: ReadonlyArray<TeamMergePair>;
+  readonly pathPrefix: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const { shown, folded } = foldMergePairs(props.pairs);
+  const line = (pair: TeamMergePair) => (
+    <MergePairLine
+      key={mergePairKey(pair)}
+      team={props.team}
+      pair={pair}
+      pathPrefix={props.pathPrefix}
+    />
+  );
+  return (
+    <ul className="flex flex-col gap-1.5">
+      {shown.map(line)}
+      {folded.length > 0 ? (
+        <li className="text-xs">
+          <Button size="xs" variant="ghost-muted" onClick={() => setOpen((value) => !value)}>
+            {foldedMergeLine(folded.length, shown.length === 0)}
+          </Button>
+        </li>
+      ) : null}
+      {open ? folded.map(line) : null}
+    </ul>
+  );
+}
+
 /** The "Merging" section's body on Team home / Today. */
 export function TeamMergingList(props: {
   readonly team: TeamFeedTeam;
@@ -108,16 +143,5 @@ export function TeamMergingList(props: {
       </p>
     );
   }
-  return (
-    <ul className="flex flex-col gap-1.5">
-      {pairs.map((pair) => (
-        <MergePairLine
-          key={mergePairKey(pair)}
-          team={team}
-          pair={pair}
-          pathPrefix={props.pathPrefix}
-        />
-      ))}
-    </ul>
-  );
+  return <MergePairList team={team} pairs={pairs} pathPrefix={props.pathPrefix} />;
 }

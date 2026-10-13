@@ -28,6 +28,7 @@ import {
   type TeamId,
   teamNoteConcerns,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -229,6 +230,13 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
+  ).pipe(
+    // A client keeps showing the last state it got when its stream ends, so say why it ended.
+    Stream.tapCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.void
+        : Effect.logWarning("Team feed subscription failed.", { cause }),
+    ),
   );
 
   return TeamFeed.of({ subscribe });

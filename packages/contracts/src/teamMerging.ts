@@ -69,6 +69,8 @@ export const TeamMergePair = Schema.Struct({
   files: Schema.Array(TeamMergeFile),
   /** Conflicting files in all. */
   fileCount: NonNegativeInt,
+  /** A clean pair: files both sides changed, which Git merged; capped. Empty otherwise. */
+  bothChanged: Schema.Array(TeamPath),
   /** The status before the last change of state; null when first seen. */
   previous: Schema.NullOr(TeamMergeStatus),
   /** When this status began: the newer side's commit time. */

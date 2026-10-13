@@ -52,13 +52,15 @@ export function mergePairSubject(team: TeamFeedTeam, pair: TeamMergePair): strin
 }
 
 /** "`a.ts`", "`a.ts` and `b.ts`", "`a.ts`, `b.ts` and 3 more". */
-const fileList = (files: ReadonlyArray<TeamMergeFile>, total: number, pathPrefix: string) => {
-  const shown = files
+const fileList = (paths: ReadonlyArray<string>, total: number, pathPrefix: string) => {
+  const shown = paths
     .slice(0, MAX_NAMED_FILES)
-    .map((file) => code(mergePathInProject(file.path, pathPrefix)));
+    .map((path) => code(mergePathInProject(path, pathPrefix)));
   const rest = total - shown.length;
   return rest > 0 ? `${shown.join(", ")} and ${rest} more` : shown.join(" and ");
 };
+
+const paths = (files: ReadonlyArray<TeamMergeFile>) => files.map((file) => file.path);
 
 /** One line for a pair: what clashes and where, what to regenerate, or that it merges cleanly. */
 export function mergePairSentence(
@@ -74,21 +76,47 @@ export function mergePairSentence(
   const regenerateLine =
     regenerate.length === 0
       ? ""
-      : ` Regenerate ${fileList(regenerate, regenerate.length, pathPrefix)} after merging.`;
+      : ` Regenerate ${fileList(paths(regenerate), regenerate.length, pathPrefix)} after merging.`;
   switch (pair.status) {
-    case "clean":
-      return `${subject} merge cleanly${pair.previous !== null && pair.previous !== "clean" ? " now" : ""}.`;
+    case "clean": {
+      const now = pair.previous !== null && pair.previous !== "clean" ? " now" : "";
+      return pair.bothChanged.length === 0
+        ? `${subject} merge cleanly${now}.`
+        : `${subject} both changed ${fileList(pair.bothChanged, pair.bothChanged.length, pathPrefix)} and merge cleanly${now}.`;
+    }
     case "regenerate":
-      return `${subject} both changed ${fileList(regenerate, regenerate.length, pathPrefix)}: regenerate ${regenerate.length === 1 ? "it" : "them"} after merging.`;
+      return `${subject} both changed ${fileList(paths(regenerate), regenerate.length, pathPrefix)}: regenerate ${regenerate.length === 1 ? "it" : "them"} after merging.`;
     case "clash": {
       const only = clashes.length === 1 && clashCount === 1 ? clashes[0]! : undefined;
       const where =
         only !== undefined
           ? `${only.places > 1 ? `${only.places} places in ` : ""}${code(mergePathInProject(only.path, pathPrefix))}`
-          : `${clashCount} files: ${fileList(clashes, clashCount, pathPrefix)}`;
+          : `${clashCount} files: ${fileList(paths(clashes), clashCount, pathPrefix)}`;
       return `${subject} clash in ${where}.${regenerateLine}`;
     }
   }
+}
+
+/**
+ * The pairs worth a line, and the clean ones folded into one: a clean pair
+ * gets its own line only when both sides changed the same file.
+ */
+export function foldMergePairs(pairs: ReadonlyArray<TeamMergePair>): {
+  readonly shown: ReadonlyArray<TeamMergePair>;
+  readonly folded: ReadonlyArray<TeamMergePair>;
+} {
+  const shown: Array<TeamMergePair> = [];
+  const folded: Array<TeamMergePair> = [];
+  for (const pair of pairs) {
+    (pair.status === "clean" && pair.bothChanged.length === 0 ? folded : shown).push(pair);
+  }
+  return { shown, folded };
+}
+
+/** "4 other pairs merge cleanly"; without "other" when it is the only line. */
+export function foldedMergeLine(count: number, alone: boolean): string {
+  const other = alone ? "" : "other ";
+  return count === 1 ? `1 ${other}pair merges cleanly` : `${count} ${other}pairs merge cleanly`;
 }
 
 /**

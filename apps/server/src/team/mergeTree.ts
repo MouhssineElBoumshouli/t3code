@@ -102,6 +102,8 @@ export interface MergeTreeResult {
   readonly tree: string;
   /** Clashes first, then files to regenerate. */
   readonly conflicts: ReadonlyArray<MergeConflict>;
+  /** A clean merge: files both sides changed since they split (Git merged them). Empty otherwise. */
+  readonly bothChanged: ReadonlyArray<string>;
 }
 
 export const mergeStatusOf = (conflicts: ReadonlyArray<MergeConflict>): TeamMergeStatus =>
@@ -110,6 +112,25 @@ export const mergeStatusOf = (conflicts: ReadonlyArray<MergeConflict>): TeamMerg
     : conflicts.every((conflict) => conflict.regenerate)
       ? "regenerate"
       : "clash";
+
+type Run = (
+  args: ReadonlyArray<string>,
+) => ReturnType<GitVcsDriver.GitVcsDriver["Service"]["execute"]>;
+
+/** Files changed on both sides since their merge base; empty when Git cannot tell. */
+const changedOnBothSides = (run: Run, ours: string, theirs: string) =>
+  Effect.gen(function* () {
+    const base = yield* run(["merge-base", ours, theirs]);
+    if (base.exitCode !== 0) return [];
+    const changed = (commit: string) =>
+      run(["diff", "--name-only", "--no-renames", "-z", base.stdout.trim(), commit]).pipe(
+        Effect.map((result) =>
+          result.exitCode === 0 ? result.stdout.split("\0").filter((path) => path.length > 0) : [],
+        ),
+      );
+    const theirsChanged = new Set(yield* changed(theirs));
+    return (yield* changed(ours)).filter((path) => theirsChanged.has(path));
+  });
 
 /**
  * Merges `ours` and `theirs` (commits or refs) in the repo at `cwd`. Undefined
@@ -122,7 +143,7 @@ export const mergeTree = (
   theirs: string,
 ) =>
   Effect.gen(function* () {
-    const run = (args: ReadonlyArray<string>) =>
+    const run: Run = (args) =>
       git.execute({
         operation: "TeamMerging.mergeTree",
         cwd,
@@ -145,7 +166,7 @@ export const mergeTree = (
     if (tree === undefined || !/^[0-9a-f]{40,64}$/u.test(tree)) return undefined;
     const paths = [...new Set(rest.filter((entry) => entry.length > 0))];
     if (merged.exitCode === 0 || paths.length === 0) {
-      return { tree, conflicts: [] } satisfies MergeTreeResult;
+      return { tree, conflicts: [], bothChanged: yield* changedOnBothSides(run, ours, theirs) };
     }
 
     // Count marker blocks in the merged tree's copies, in one call.
@@ -180,5 +201,6 @@ export const mergeTree = (
         ...conflicts.filter((conflict) => !conflict.regenerate),
         ...conflicts.filter((conflict) => conflict.regenerate),
       ],
+      bothChanged: [],
     } satisfies MergeTreeResult;
   }).pipe(Effect.orElseSucceed(() => undefined));

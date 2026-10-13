@@ -88,6 +88,10 @@ export function nextPair(input: {
       ? []
       : [{ path, places: conflict.places, regenerate: conflict.regenerate }];
   });
+  const bothChanged = result.bothChanged.flatMap((repoPath) => {
+    const path = input.toTeamPath(repoPath);
+    return path === undefined ? [] : [path];
+  });
   return {
     shown: !holdsTheOther || endedAClash,
     pair: {
@@ -97,6 +101,7 @@ export function nextPair(input: {
       status,
       files: files.slice(0, TEAM_MERGE_LIMITS.files),
       fileCount: result.conflicts.length,
+      bothChanged: bothChanged.slice(0, TEAM_MERGE_LIMITS.files),
       previous: changed ? (previous?.pair.status ?? null) : previous!.pair.previous,
       since: changed ? sides.newerCommitAt : previous!.pair.since,
       checkedAt: input.now,

@@ -48,8 +48,9 @@ const sides = (ours: string, theirs: string, at: string): PairSides => ({
 const CLASH: MergeTreeResult = {
   tree: "merged",
   conflicts: [{ path: "src/routes.ts", places: 2, regenerate: false }],
+  bothChanged: [],
 };
-const CLEAN: MergeTreeResult = { tree: "merged", conflicts: [] };
+const CLEAN: MergeTreeResult = { tree: "merged", conflicts: [], bothChanged: [] };
 
 const step = (
   previous: CheckedPair | undefined,
@@ -93,13 +94,17 @@ describe("TeamMergeModel", () => {
   });
 
   it("hides a clean pair where one side holds the other, except when a clash just ended", () => {
-    const holds: MergeTreeResult = { tree: "tree-a1", conflicts: [] };
+    const holds: MergeTreeResult = { tree: "tree-a1", conflicts: [], bothChanged: [] };
     assert.isFalse(step(undefined, sides("a1", "b1", "t"), holds).shown);
     assert.isTrue(step(undefined, sides("a1", "b1", "t"), CLEAN).shown);
     const clash = step(undefined, sides("a0", "b1", "t"), CLASH);
     const merged = step(clash, sides("a1", "b1", "t2"), holds);
     assert.isTrue(merged.shown);
-    const later = step(merged, sides("a2", "b1", "t3"), { tree: "tree-a2", conflicts: [] });
+    const later = step(merged, sides("a2", "b1", "t3"), {
+      tree: "tree-a2",
+      conflicts: [],
+      bothChanged: [],
+    });
     assert.isFalse(later.shown);
   });
 
@@ -118,7 +123,11 @@ describe("TeamMergeModel", () => {
     const clean = step(undefined, sides("a1", "b1", "2026-10-13T09:50:00.000Z"), CLEAN);
     const old = step(undefined, sides("a2", "b2", "2026-10-13T08:00:00.000Z"), CLASH);
     const recent = step(undefined, sides("a3", "b3", "2026-10-13T09:00:00.000Z"), CLASH);
-    const hidden = step(undefined, sides("a4", "b4", "t"), { tree: "tree-a4", conflicts: [] });
+    const hidden = step(undefined, sides("a4", "b4", "t"), {
+      tree: "tree-a4",
+      conflicts: [],
+      bothChanged: [],
+    });
     assert.deepEqual(
       mergingView([clean, old, recent, hidden], undefined)?.pairs.map((pair) => pair.mine.commit),
       ["a3", "a2", "a1"],
