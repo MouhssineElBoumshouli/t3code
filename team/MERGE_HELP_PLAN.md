@@ -1,6 +1,6 @@
 # Merging help: plan (VISION.md step 5)
 
-Status: research only, 2026-10-12. Nothing built. Covers VISION.md 3.4, and 3.6 points 1, 4, 6 and 7.
+Status: slice 1 (section 8, point 1) built 2026-10-13 (`TeamMergeCheck.ts`); the rest is plan. Covers VISION.md 3.4, and 3.6 points 1, 4, 6 and 7.
 
 ## 1. Background test-combine
 
@@ -115,8 +115,8 @@ The same code, with my chats on both sides of each pair. It matters only for cha
 
 Solo comes with 1, since it is the same code.
 
-## Open questions (your call)
+## Decided (2026-10-13)
 
-1. **Teammates' unpushed work.** Should each chat push its latest checkpoint to a hidden ref (`refs/t3-team/wip/<login>/<thread>`), so clashes show before anyone pushes? It is fresher, but it puts work-in-progress code on the shared remote. I'd wait until slice 1 is used.
-2. **The check command** in a rulebook `## Check` section (my pick) or in t3.json.
-3. **Automatic typecheck on by default** (only idle and plugged in), or only "Check now" and before merging? I'd start with on-request only, given this laptop's memory, and turn on automatic after measuring.
+1. **Teammates' unpushed work:** not shared for now; checks use pushed work only. Revisit after slice 1 is in use.
+2. **The check command** lives in a `## Check` section of `.team/rulebook.md`, not in t3.json.
+3. **The typecheck** runs only on "Check now" and once before merging. Automatic can come later, after measuring.
