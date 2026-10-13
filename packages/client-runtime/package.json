@@ -131,6 +131,10 @@
       "types": "./src/state/teamNotes.ts",
       "default": "./src/state/teamNotes.ts"
     },
+    "./state/teamMerging": {
+      "types": "./src/state/teamMerging.ts",
+      "default": "./src/state/teamMerging.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"

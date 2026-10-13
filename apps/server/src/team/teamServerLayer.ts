@@ -6,7 +6,7 @@
  * warning card's hold (`TeamChoices`), the team feed, "Ask" and notes for
  * `ws.ts` and the team tools, and starts the background work: the briefing resolver, the
  * guard, claim release, automatic notes, the stale-view line, waits, questions,
- * pushed branches, the warm-up and card cleanup.
+ * pushed branches, merge checks, the warm-up and card cleanup.
  *
  * @module teamServerLayer
  */
@@ -20,6 +20,7 @@ import * as TeamCardsCleanup from "./TeamCardsCleanup.ts";
 import * as TeamChoices from "./TeamChoices.ts";
 import { TeamClaimAutoReleaseLive } from "./TeamClaimAutoRelease.ts";
 import * as TeamFeed from "./TeamFeed.ts";
+import * as TeamMergeCheck from "./TeamMergeCheck.ts";
 import { TeamGuardLive } from "./TeamGuard.ts";
 import { TeamPushedBranchesLive } from "./TeamPushedBranches.ts";
 import * as TeamNotes from "./TeamNotes.ts";
@@ -40,6 +41,7 @@ export const layer = Layer.mergeAll(
   TeamWarmup.layer,
   TeamFeed.layer,
 ).pipe(
+  Layer.provideMerge(TeamMergeCheck.layer),
   Layer.provideMerge(TeamQuestions.layer),
   Layer.provideMerge(TeamNotes.layer),
   Layer.provideMerge(TeamChoices.layer),

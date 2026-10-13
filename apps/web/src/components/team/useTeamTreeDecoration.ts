@@ -2,7 +2,9 @@
  * team-layer: holder marks in the file tree (team/UI_PLAN.md slice 1). The
  * tree draws a short text in its decoration lane: teammates' initials, or how
  * many of the person's chats hold the file, and "✎" for an open note on it
- * (slice 4). It reads the function from a ref,
+ * (slice 4). Merge checks (MERGE_HELP_PLAN.md slice 1) add "clash" on a file
+ * that would conflict, and a quiet "✓" on a holder's mark when their work
+ * merges cleanly with this chat. It reads the function from a ref,
  * so the tree is built once; `onChange` re-renders its rows when the marks change.
  */
 import {
@@ -10,6 +12,13 @@ import {
   findProjectTeam,
   type TeamHolder,
 } from "@t3tools/client-runtime/state/teamMarkers";
+import {
+  type FileMergeMark,
+  fileMergeMark,
+  mergePairSentence,
+  projectMergePairs,
+  viewerMergePairs,
+} from "@t3tools/client-runtime/state/teamMerging";
 import { fileNotes } from "@t3tools/client-runtime/state/teamNotes";
 import type { EnvironmentId, ScopedThreadRef, TeamFeedTeam, TeamNote } from "@t3tools/contracts";
 import { useEffect, useMemo, useRef } from "react";
@@ -45,6 +54,31 @@ function joinDecorations(
 ): TeamTreeDecoration | null {
   if (holders === null || notes === null) return holders ?? notes;
   return { text: `${holders.text} ${notes.text}`, title: `${holders.title}\n${notes.title}` };
+}
+
+/** Adds what the merge checks say to the row's holder marks. */
+function withMergeMark(
+  team: TeamFeedTeam,
+  holders: TeamTreeDecoration | null,
+  mark: FileMergeMark | null,
+  pathPrefix: string,
+): TeamTreeDecoration | null {
+  if (mark === null) return holders;
+  const sentence = (pair: Parameters<typeof mergePairSentence>[1]) =>
+    mergePairSentence(team, pair, pathPrefix).replaceAll("`", "");
+  if (mark.clashes.length > 0) {
+    const lines = [...new Set(mark.clashes.map(({ pair }) => sentence(pair)))];
+    return {
+      text: holders === null ? "clash" : `${holders.text} clash`,
+      title: [...(holders === null ? [] : [holders.title]), ...lines].join("\n"),
+    };
+  }
+  // Clean: quiet the holder's mark; nothing to add on a file nobody else holds.
+  if (holders === null) return null;
+  return {
+    text: `${holders.text} ✓`,
+    title: [holders.title, ...mark.clean.map(sentence)].join("\n"),
+  };
 }
 
 /** The text and tooltip for one row's holders; null when nothing is marked. */
@@ -88,6 +122,7 @@ export function useTeamTreeDecoration(input: {
   const teams = useTeamFeed(input.environmentId);
   const shell = useThreadShell(input.threadRef);
   const projectId = shell?.projectId ?? null;
+  const sharedCheckout = shell !== null && shell !== undefined && shell.worktreePath === null;
   // Keyed by the ids, not the ref object, which callers may rebuild each render.
   const environmentId = input.threadRef?.environmentId ?? null;
   const threadId = input.threadRef?.threadId ?? null;
@@ -96,12 +131,23 @@ export function useTeamTreeDecoration(input: {
     if (projectTeam === null) return noDecoration;
     const viewing =
       environmentId === null || threadId === null ? null : { environmentId, threadId };
-    return (path: string) =>
-      joinDecorations(
-        treeDecorationFor(fileHolders(projectTeam, path, viewing)),
+    const mergePairs = viewerMergePairs(
+      projectMergePairs(projectTeam.team, projectId),
+      viewing === null ? null : { ...viewing, sharedCheckout: sharedCheckout },
+    );
+    return (path: string) => {
+      const holders = fileHolders(projectTeam, path, viewing);
+      return joinDecorations(
+        withMergeMark(
+          projectTeam.team,
+          treeDecorationFor(holders),
+          fileMergeMark({ pairs: mergePairs, pathPrefix: projectTeam.pathPrefix, path, holders }),
+          projectTeam.pathPrefix,
+        ),
         notesDecoration(projectTeam.team, fileNotes(projectTeam, path)),
       );
-  }, [teams, projectId, environmentId, threadId]);
+    };
+  }, [teams, projectId, environmentId, threadId, sharedCheckout]);
   const decorateRef = useRef(decorate);
   const onChangeRef = useRef(input.onChange);
   onChangeRef.current = input.onChange;

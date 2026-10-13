@@ -50,6 +50,7 @@ import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { TeamFace } from "./TeamHolderMarks";
+import { TeamMergingList } from "./TeamMerging";
 import { TeamNotes } from "./TeamNotes";
 import { syncLabel } from "./TeamPresenceChip";
 
@@ -175,12 +176,13 @@ export function TeamHomePage(props: {
     () =>
       buildCatchUp({
         team,
+        projectId,
         pathPrefix,
         chats: chats.map((entry) => entry.chat),
         lastVisitAt: visit.last,
         now: visit.now,
       }),
-    [team, pathPrefix, chats, visit],
+    [team, projectId, pathPrefix, chats, visit],
   );
 
   const openChat = (threadId: string) =>
@@ -233,6 +235,12 @@ export function TeamHomePage(props: {
               <SoloChats chats={chats} team={team} pathPrefix={pathPrefix} openChat={openChat} />
             ) : (
               <TeamPeople team={team} pathPrefix={pathPrefix} />
+            )}
+
+            {team === null ? null : (
+              <Section title="Merging">
+                <TeamMergingList team={team} projectId={projectId} pathPrefix={pathPrefix} />
+              </Section>
             )}
 
             <div className="grid gap-4 md:grid-cols-2">

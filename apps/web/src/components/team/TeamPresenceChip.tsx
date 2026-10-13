@@ -2,10 +2,13 @@
  * team-layer: the presence chip in the chat header (team/UI_PLAN.md slice 1,
  * Option B's chip). Teammates' faces and whether the team state is current;
  * a click opens teammates' questions waiting for an answer ("Ask", slice 3d),
- * who is on what and the latest handoff notes. Solo projects show nothing
+ * who is on what, whether your chats merge with their pushed branches
+ * (MERGE_HELP_PLAN.md slice 1, a ring on the face for a clash) and the latest
+ * handoff notes. Solo projects show nothing
  * here. Times are worded when drawn; nothing ticks.
  */
 import { findProjectTeam, teammatesOf } from "@t3tools/client-runtime/state/teamMarkers";
+import { projectMergePairs } from "@t3tools/client-runtime/state/teamMerging";
 import type { EnvironmentId, ProjectId, TeamFeedTeam } from "@t3tools/contracts";
 import { memo, useMemo } from "react";
 
@@ -15,6 +18,7 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { TeamFace } from "./TeamHolderMarks";
+import { MergePairLine, mergePairKey } from "./TeamMerging";
 import { TeamAnswerForm, TeamQuestionText } from "./TeamQuestionCard";
 
 /** What the chip says about the team state. */
@@ -55,17 +59,29 @@ export const TeamPresenceChip = memo(function TeamPresenceChip(props: {
   readonly projectId: ProjectId | null;
 }) {
   const teams = useTeamFeed(props.environmentId);
-  const team = useMemo(
-    () => findProjectTeam(teams, props.projectId)?.team ?? null,
+  const projectTeam = useMemo(
+    () => findProjectTeam(teams, props.projectId),
     [teams, props.projectId],
   );
+  const team = projectTeam?.team ?? null;
   const teammates = useMemo(() => (team === null ? [] : teammatesOf(team)), [team]);
+  // team-layer: merge checks with each teammate's pushed branches (MERGE_HELP_PLAN.md slice 1).
+  const branchPairs = useMemo(
+    () =>
+      team === null
+        ? []
+        : projectMergePairs(team, props.projectId).filter((pair) => pair.other._tag === "branch"),
+    [team, props.projectId],
+  );
   // Solo: no faces, no empty team UI.
   if (team === null || team.solo) return null;
   const label = syncLabel(team.sync);
   const questions = team.questions ?? [];
   const names = (memberId: string) =>
     team.members.find((member) => member.memberId === memberId)?.displayName ?? memberId;
+  const pairsWith = (memberId: string) =>
+    branchPairs.filter((pair) => pair.other._tag === "branch" && pair.other.memberId === memberId);
+  const clashes = branchPairs.filter((pair) => pair.status === "clash").length;
 
   return (
     <Popover>
@@ -86,7 +102,11 @@ export const TeamPresenceChip = memo(function TeamPresenceChip(props: {
                 key={teammate.member.memberId}
                 initials={teammate.initials}
                 hue={teammate.hue}
-                className="ring-1 ring-background"
+                className={
+                  pairsWith(teammate.member.memberId).some((pair) => pair.status === "clash")
+                    ? "ring-1 ring-warning"
+                    : "ring-1 ring-background"
+                }
               />
             ))}
             {teammates.length > MAX_FACES ? (
@@ -104,6 +124,11 @@ export const TeamPresenceChip = memo(function TeamPresenceChip(props: {
         {questions.length > 0 ? (
           <span className="font-medium text-warning-foreground">
             · {questions.length} {questions.length === 1 ? "question" : "questions"}
+          </span>
+        ) : null}
+        {clashes > 0 ? (
+          <span className="font-medium text-warning-foreground">
+            · {clashes} {clashes === 1 ? "clash" : "clashes"}
           </span>
         ) : null}
       </PopoverTrigger>
@@ -142,9 +167,17 @@ export const TeamPresenceChip = memo(function TeamPresenceChip(props: {
           ) : (
             teammates.map((teammate) => {
               const paths = [...new Set(teammate.claims.flatMap((claim) => claim.paths))];
+              const merges = pairsWith(teammate.member.memberId);
               return (
                 <div key={teammate.member.memberId} className="flex items-start gap-2">
-                  <TeamFace initials={teammate.initials} hue={teammate.hue} size="md" />
+                  <TeamFace
+                    initials={teammate.initials}
+                    hue={teammate.hue}
+                    size="md"
+                    {...(merges.some((pair) => pair.status === "clash")
+                      ? { className: "ring-2 ring-warning" }
+                      : {})}
+                  />
                   <div className="min-w-0 flex-1 text-xs">
                     <div className="flex items-baseline justify-between gap-2">
                       <span className="truncate font-medium text-foreground">
@@ -166,6 +199,18 @@ export const TeamPresenceChip = memo(function TeamPresenceChip(props: {
                             paths.length > MAX_PATHS ? ` +${paths.length - MAX_PATHS}` : ""
                           }`}
                     </div>
+                    {merges.length > 0 ? (
+                      <ul className="mt-1 flex flex-col gap-1">
+                        {merges.slice(0, MAX_PATHS).map((pair) => (
+                          <MergePairLine
+                            key={mergePairKey(pair)}
+                            team={team}
+                            pair={pair}
+                            pathPrefix={projectTeam?.pathPrefix ?? ""}
+                          />
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                 </div>
               );

@@ -11,6 +11,7 @@ import {
   TeamFile,
   TeamId,
   type TeamFeedEvent,
+  type TeamMerging,
   TEAM_PLAN_ACTIVITY_KIND,
   type TeamCardEntry,
   ThreadId,
@@ -19,6 +20,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
@@ -26,6 +28,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as TeamCards from "./TeamCards.ts";
 import * as TeamFeed from "./TeamFeed.ts";
+import * as TeamMergeCheck from "./TeamMergeCheck.ts";
 import * as TeamService from "./TeamService.ts";
 import { makeTeamOrigin, testTeamServiceLayer, useTeamOrigin } from "./testing/teamState.ts";
 
@@ -53,6 +56,14 @@ const tempFolder = (prefix: string) =>
 /** The team service on a temp home, one project, and the feed's events in a queue. */
 const harness = (workspaceRoot: string) =>
   Effect.gen(function* () {
+    // Merge checks, set by the test: a view per team, and a change to push.
+    const merging = new Map<TeamId, TeamMerging>();
+    const mergeChanges = yield* PubSub.unbounded<TeamId>();
+    const setMerging = (teamId: TeamId, view: TeamMerging) =>
+      Effect.suspend(() => {
+        merging.set(teamId, view);
+        return PubSub.publish(mergeChanges, teamId);
+      });
     const context = yield* Layer.build(
       Layer.mergeAll(
         testTeamServiceLayer({
@@ -66,6 +77,14 @@ const harness = (workspaceRoot: string) =>
           Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-team-feed-home-" })),
           Layer.provide(NodeServices.layer),
         ),
+        Layer.succeed(
+          TeamMergeCheck.TeamMergeCheck,
+          TeamMergeCheck.TeamMergeCheck.of({
+            forTeam: (teamId) => Effect.sync(() => merging.get(teamId)),
+            subscribeChanges: PubSub.subscribe(mergeChanges),
+            request: () => Effect.void,
+          }),
+        ),
         NodeServices.layer,
       ),
     );
@@ -76,7 +95,14 @@ const harness = (workspaceRoot: string) =>
     const subscribe = Stream.runForEach(feed.subscribe, (event) => Queue.offer(events, event)).pipe(
       Effect.forkScoped,
     );
-    return { teams, cards, subscribe, next: Queue.take(events), pending: Queue.size(events) };
+    return {
+      teams,
+      cards,
+      setMerging,
+      subscribe,
+      next: Queue.take(events),
+      pending: Queue.size(events),
+    };
   });
 
 const teamOf = (event: TeamFeedEvent) => {
@@ -94,6 +120,33 @@ const planCard = (id: string): TeamCardEntry => ({
 });
 
 describe("TeamFeed", () => {
+  it.effect("pushes a team's view when its merge checks change, and not again for the same", () =>
+    Effect.gen(function* () {
+      const folder = yield* tempFolder("t3-team-feed-merging-");
+      const { teams, setMerging, subscribe, next, pending } = yield* harness(folder);
+      const opened = yield* teams.openSolo({ projectRoot: folder, name: "Notes app" });
+      if (opened.status !== "member") return assert.fail("not a member");
+      yield* subscribe;
+      const snapshot = yield* next;
+      assert.equal(snapshot._tag === "snapshot" ? snapshot.teams[0]?.merging : "none", undefined);
+
+      const view: TeamMerging = { unavailable: "Merge checks need Git 2.38 or newer.", pairs: [] };
+      yield* setMerging(opened.team.teamId, view);
+      assert.deepEqual(teamOf(yield* next).merging, view);
+      yield* setMerging(opened.team.teamId, view);
+      // The same view is not pushed again; a claim after it is the next event.
+      yield* teams.claimPaths({
+        teamId: opened.team.teamId,
+        memberId: opened.member.memberId,
+        thread: THREAD_A,
+        paths: ["src/a.ts"],
+      });
+      const afterClaim = teamOf(yield* next);
+      assert.deepEqual([afterClaim.claims.length, afterClaim.merging], [1, view]);
+      assert.equal(yield* pending, 0);
+    }),
+  );
+
   it.effect("sends the chats' cards in the snapshot, then a chat's cards when they change", () =>
     Effect.gen(function* () {
       const folder = yield* tempFolder("t3-team-feed-cards-");

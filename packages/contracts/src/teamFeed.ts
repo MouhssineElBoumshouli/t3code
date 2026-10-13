@@ -19,6 +19,7 @@ import {
 } from "./team.ts";
 import { TeamQuestion } from "./teamAsk.ts";
 import { type TeamCardEntry, TeamThreadCards } from "./teamCards.ts";
+import { TeamMerging } from "./teamMerging.ts";
 import { TeamNote } from "./teamNotes.ts";
 
 /**
@@ -83,6 +84,8 @@ export const TeamFeedTeam = Schema.Struct({
    * open ones, then done ones not dropped yet. Capped.
    */
   notes: Schema.optionalKey(Schema.Array(TeamNote)),
+  /** Whether this server's chats merge cleanly with teammates' branches, the base and each other. */
+  merging: Schema.optionalKey(TeamMerging),
   sync: TeamFeedSync,
 });
 export type TeamFeedTeam = typeof TeamFeedTeam.Type;

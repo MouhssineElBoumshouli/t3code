@@ -7,6 +7,9 @@
  * equal to the last one sent is not sent again, so a write that saves and
  * then reloads pushes once, and nothing is pushed while nothing changes.
  *
+ * It also carries merge checks (`TeamMergeCheck`, MERGE_HELP_PLAN.md slice 1),
+ * pushed when a team's result changes.
+ *
  * It also carries each chat's team cards (`TeamCards`, V2_PORT_PLAN.md D1):
  * all of them in the snapshot, then one chat's each time they change.
  *
@@ -39,6 +42,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import { soloTeamIdOf } from "./state/SoloTeam.ts";
 import { isNotePastKeeping } from "./state/TeamNotesModel.ts";
 import * as TeamCards from "./TeamCards.ts";
+import * as TeamMergeCheck from "./TeamMergeCheck.ts";
 import { findTeamFile } from "./TeamProjectFiles.ts";
 import * as TeamService from "./TeamService.ts";
 
@@ -62,6 +66,7 @@ export const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
   const projectService = yield* ProjectService.ProjectService;
   const cards = yield* TeamCards.TeamCards;
+  const mergeCheck = yield* TeamMergeCheck.TeamMergeCheck;
   const path = yield* Path.Path;
   const fileContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 
@@ -140,6 +145,7 @@ export const make = Effect.gen(function* () {
             ];
           }),
       });
+      const merging = yield* mergeCheck.forTeam(teamId);
       return Option.some<TeamFeedTeam>({
         teamId,
         name: team.value.name,
@@ -162,6 +168,7 @@ export const make = Effect.gen(function* () {
           })),
         ...(questions.length === 0 ? {} : { questions }),
         ...(teamNotes.length === 0 ? {} : { notes: teamNotes }),
+        ...(merging === undefined ? {} : { merging }),
         sync: yield* teams.syncState(teamId),
       });
     }).pipe(Effect.orElseSucceed(() => Option.none<TeamFeedTeam>()));
@@ -171,6 +178,7 @@ export const make = Effect.gen(function* () {
       // Subscribed before the snapshot is read, so no change is missed.
       const changes = yield* teams.subscribeChanges;
       const cardChanges = yield* cards.subscribeChanges;
+      const mergeChanges = yield* mergeCheck.subscribeChanges;
       const sent = new Map<TeamId, string>();
 
       const byTeam = yield* projectsByTeam;
@@ -205,7 +213,10 @@ export const make = Effect.gen(function* () {
       return Stream.concat(
         Stream.make(snapshot),
         Stream.merge(
-          Stream.fromSubscription(changes).pipe(
+          Stream.merge(
+            Stream.fromSubscription(changes),
+            Stream.fromSubscription(mergeChanges),
+          ).pipe(
             Stream.mapEffect(onChange),
             Stream.flatMap((events) => Stream.fromIterable(events)),
           ),

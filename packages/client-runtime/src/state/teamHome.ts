@@ -6,10 +6,11 @@
  * Times are ISO strings compared as instants. The caller keeps the last
  * visit; a first visit looks back one day.
  */
-import type { TeamClaim, TeamFeedTeam, TeamMemberId } from "@t3tools/contracts";
+import type { ProjectId, TeamClaim, TeamFeedTeam, TeamMemberId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { claimPathInProject } from "./teamMarkers.ts";
+import { mergeCatchUpSentences } from "./teamMerging.ts";
 
 /** One of the person's chats in the project, as the page needs it. */
 export interface TeamHomeChat {
@@ -25,6 +26,8 @@ export interface TeamHomeChat {
 export interface CatchUpInput {
   /** The project's team or solo state; null when the server has none open for it. */
   readonly team: TeamFeedTeam | null;
+  /** The page's project; its merge checks are told when given. */
+  readonly projectId?: ProjectId;
   readonly pathPrefix: string;
   readonly chats: ReadonlyArray<TeamHomeChat>;
   /** The previous visit to this page, or null for the first one. */
@@ -129,6 +132,16 @@ export function buildCatchUp(input: CatchUpInput): CatchUp {
     const newTasks = team.tasks.filter((task) => after(task.createdAt, sinceMs));
     if (newTasks.length === 1) sentences.push(`New task: ${quote(newTasks[0]!.title)}.`);
     else if (newTasks.length > 1) sentences.push(`${plural(newTasks.length, "new task")}.`);
+    if (input.projectId !== undefined) {
+      sentences.push(
+        ...mergeCatchUpSentences({
+          team,
+          projectId: input.projectId,
+          pathPrefix: input.pathPrefix,
+          sinceMs,
+        }),
+      );
+    }
     const movedTasks = team.tasks.filter(
       (task) => !after(task.createdAt, sinceMs) && after(task.updatedAt, sinceMs),
     );
