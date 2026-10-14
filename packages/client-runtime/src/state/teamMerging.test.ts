@@ -335,6 +335,9 @@ describe("teamMerging", () => {
         "app",
       ),
     ).toBe("Combined with Sara's `search` branch, `cargo check` finds nothing new.");
+    expect(combinedSentence(current, withCheck({ ...base, status: "running" }), "app")).toBe(
+      "Combined with Sara's `search` branch: checking…",
+    );
     expect(combinedSentence(current, clean, "app")).toBeNull();
 
     // A clean pair with news gets its own line; Fix it is open for new errors.

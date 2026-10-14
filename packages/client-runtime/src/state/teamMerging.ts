@@ -366,7 +366,10 @@ export function combinedSentence(
   const command = check.command === undefined ? "the check" : code(check.command);
   switch (check.status) {
     case "running":
-      return `${combined}: checking with ${command}…`;
+      // The command is known only once the combined result is in the copy.
+      return check.command === undefined
+        ? `${combined}: checking…`
+        : `${combined}: checking with ${command}…`;
     case "clean":
       return `${combined}, ${command} finds nothing new.`;
     case "skipped":
