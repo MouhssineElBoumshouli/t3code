@@ -280,7 +280,7 @@ export const make = Effect.fn("GitTeamService.make")(function* (options: GitTeam
   const scope = yield* Scope.Scope;
   const environmentId = options.environmentId;
 
-  const newId = crypto.randomUUIDv4.pipe(Effect.orDie);
+  const newId = crypto.randomUUIDv4().pipe(Effect.orDie);
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   const nowMillis = DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
   const storage =
