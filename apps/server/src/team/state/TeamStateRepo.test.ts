@@ -32,7 +32,7 @@ const bench = Effect.gen(function* () {
   const path = yield* Path.Path;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-state-" });
   const origin = path.join(root, "origin.git");
-  git(root, "init", "--quiet", "--bare", origin);
+  git(root, "init", "--quiet", "--bare", "-b", "main", origin);
   // Log every update of the ref, so the test can check each one was a fast-forward.
   git(origin, "config", "core.logAllRefUpdates", "always");
   const pushes: Array<ReadonlyArray<string>> = [];

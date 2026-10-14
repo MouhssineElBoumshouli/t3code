@@ -98,7 +98,7 @@ describe("mergeFixGit", () => {
       Effect.gen(function* () {
         const root = yield* tempDir;
         const remote = yield* tempDir;
-        git(remote, "init", "--quiet", "--bare");
+        git(remote, "init", "--quiet", "--bare", "-b", "main");
         const { theirs } = clashingRepo(root);
         git(root, "remote", "add", "origin", remote);
         git(root, "push", "--quiet", "-u", "origin", "mine");

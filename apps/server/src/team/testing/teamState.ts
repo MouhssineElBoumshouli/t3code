@@ -49,7 +49,7 @@ export const fakeTeamHost = (
 /** A bare repo `origin.git` in `root`; returns its `file://` URL. */
 export const makeTeamOrigin = (root: string) => {
   const origin = NodePath.join(root, "origin.git");
-  git(root, "init", "--quiet", "--bare", origin);
+  git(root, "init", "--quiet", "--bare", "-b", "main", origin);
   // Not `file://${origin}`: a Windows path would give `file://C:\...`, which Git does not read.
   return NodeURL.pathToFileURL(origin).href;
 };

@@ -76,7 +76,7 @@ const bench = Effect.gen(function* () {
   const path = yield* Path.Path;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-git-team-" });
   const origin = path.join(root, "origin.git");
-  git(root, "init", "--quiet", "--bare", origin);
+  git(root, "init", "--quiet", "--bare", "-b", "main", origin);
   const checkout = path.join(root, "project");
   git(root, "init", "--quiet", checkout);
   git(checkout, "remote", "add", "origin", NodeURL.pathToFileURL(origin).href);
