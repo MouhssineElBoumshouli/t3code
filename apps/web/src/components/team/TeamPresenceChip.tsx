@@ -7,7 +7,11 @@
  * handoff notes. Solo projects show nothing
  * here. Times are worded when drawn; nothing ticks.
  */
-import { findProjectTeam, teammatesOf } from "@t3tools/client-runtime/state/teamMarkers";
+import {
+  findProjectTeam,
+  teammatesOf,
+  teamMemberName,
+} from "@t3tools/client-runtime/state/teamMarkers";
 import { projectMergePairs } from "@t3tools/client-runtime/state/teamMerging";
 import type { EnvironmentId, ProjectId, TeamFeedTeam } from "@t3tools/contracts";
 import { memo, useMemo } from "react";
@@ -77,8 +81,7 @@ export const TeamPresenceChip = memo(function TeamPresenceChip(props: {
   if (team === null || team.solo) return null;
   const label = syncLabel(team.sync);
   const questions = team.questions ?? [];
-  const names = (memberId: string) =>
-    team.members.find((member) => member.memberId === memberId)?.displayName ?? memberId;
+  const names = (memberId: string) => teamMemberName(team, memberId);
   // team-layer: fixes of clashes with this teammate's branch (MERGE_HELP_PLAN.md section 5).
   const fixesWith = (memberId: string) =>
     team.merging?.fixes?.filter(

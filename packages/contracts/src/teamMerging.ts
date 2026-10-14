@@ -89,9 +89,11 @@ export type TeamMergePair = typeof TeamMergePair.Type;
  * "Fix it" (MERGE_HELP_PLAN.md section 5): a turn in the person's own chat
  * merges the other side and resolves the clash, without committing.
  * - `working`: the merge is in the chat's copy and its turn runs.
+ * - `asking`: the agent waits for the person's answer: a question during its
+ *   turn, or the turn ended with conflict markers still in a file.
  * - `ready`: the turn ended; the person approves (commit, push if pushed) or undoes.
  */
-export const TeamMergeFixStatus = Schema.Literals(["working", "ready"]);
+export const TeamMergeFixStatus = Schema.Literals(["working", "asking", "ready"]);
 export type TeamMergeFixStatus = typeof TeamMergeFixStatus.Type;
 
 export const TeamMergeFix = Schema.Struct({

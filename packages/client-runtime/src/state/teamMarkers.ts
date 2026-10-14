@@ -65,6 +65,12 @@ export function holderHue(key: string): number {
   return Math.abs(hash) % 360;
 }
 
+/** How the person sees a member: "You" for themselves, else the display name (the login if unknown). */
+export function teamMemberName(team: TeamFeedTeam, memberId: string): string {
+  if (memberId === team.me) return "You";
+  return team.members.find((member) => member.memberId === memberId)?.displayName ?? memberId;
+}
+
 /** Two letters for a chip: "Yassine Amrani" → "YA", "yassine" → "YA". */
 export function holderInitials(name: string): string {
   const words = name
@@ -90,12 +96,13 @@ const covers = (claimed: string, path: string) =>
   claimed === "" || path === claimed || path.startsWith(`${claimed}/`);
 
 const memberHolder = (team: TeamFeedTeam, memberId: TeamMemberId): TeamHolder => {
-  const name = team.members.find((member) => member.memberId === memberId)?.displayName ?? memberId;
+  const displayName =
+    team.members.find((member) => member.memberId === memberId)?.displayName ?? memberId;
   return {
     kind: "member",
     memberId,
-    name,
-    initials: holderInitials(name),
+    name: teamMemberName(team, memberId),
+    initials: holderInitials(displayName),
     hue: holderHue(`member:${memberId}`),
   };
 };

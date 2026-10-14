@@ -15,7 +15,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 
-import { claimPathInProject, type TeamHolder } from "./teamMarkers.ts";
+import { claimPathInProject, type TeamHolder, teamMemberName } from "./teamMarkers.ts";
 
 const MAX_NAMED_FILES = 2;
 
@@ -35,8 +35,7 @@ export function mergePathInProject(path: string, pathPrefix: string): string {
   return path.slice(path.length - inProject.length);
 }
 
-const memberName = (team: TeamFeedTeam, memberId: string) =>
-  team.members.find((member) => member.memberId === memberId)?.displayName ?? memberId;
+const memberName = teamMemberName;
 
 const code = (text: string) => `\`${text}\``;
 
@@ -186,9 +185,14 @@ export function mergeFixSentence(
   const subject = mergePairSubject(team, fix);
   const where =
     fix.files.length === 0 ? "" : ` in ${fileList(fix.files, fix.files.length, pathPrefix)}`;
-  return fix.status === "working"
-    ? `${subject}: the agent is resolving the clash${where}.`
-    : `${subject}: the agent's fix${where} is ready. Read the diff in the chat, then approve or undo.`;
+  switch (fix.status) {
+    case "working":
+      return `${subject}: the agent is resolving the clash${where}.`;
+    case "asking":
+      return `${subject}: the agent is waiting for your answer about the clash${where}. Reply in the chat.`;
+    case "ready":
+      return `${subject}: the agent's fix${where} is ready. Read the diff in the chat, then approve or undo.`;
+  }
 }
 
 export interface MergeViewer {

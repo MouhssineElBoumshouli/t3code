@@ -11,6 +11,7 @@ import {
   fileHolders,
   findProjectTeam,
   type TeamHolder,
+  teamMemberName,
 } from "@t3tools/client-runtime/state/teamMarkers";
 import {
   type FileMergeMark,
@@ -38,9 +39,10 @@ function notesDecoration(
 ): TeamTreeDecoration | null {
   if (notes.length === 0) return null;
   const lines = notes.map((note) => {
-    const from = team.solo
-      ? "Your note"
-      : `Note from ${team.members.find((member) => member.memberId === note.from)?.displayName ?? note.from}`;
+    const from =
+      team.solo || note.from === team.me
+        ? "Your note"
+        : `Note from ${teamMemberName(team, note.from)}`;
     const text = note.text.length > 80 ? `${note.text.slice(0, 79)}…` : note.text;
     return `${from}: "${text}"`;
   });

@@ -190,6 +190,9 @@ describe("teamMerging", () => {
     expect(mergeFixSentence(team([]), { ...fix, status: "ready" }, "app")).toBe(
       "Your \"login\" chat and Sara's `search` branch: the agent's fix in `src/api/routes.ts` is ready. Read the diff in the chat, then approve or undo.",
     );
+    expect(mergeFixSentence(team([]), { ...fix, status: "asking" }, "app")).toBe(
+      'Your "login" chat and Sara\'s `search` branch: the agent is waiting for your answer about the clash in `src/api/routes.ts`. Reply in the chat.',
+    );
     expect(mergeFixBlocked(pair())).toBeNull();
     expect(mergeFixBlocked(pair({ mine: { ...pair().mine, worktree: false } }))).toContain(
       "shared checkout",

@@ -17,6 +17,7 @@ import {
   planHolders,
   teammatesOf,
   threadHolders,
+  teamMemberName,
 } from "./teamMarkers.ts";
 
 const ENV = EnvironmentId.make("env-1");
@@ -68,6 +69,13 @@ const kinds = (holders: ReturnType<typeof fileHolders>) =>
   holders.map((holder) => (holder.kind === "member" ? holder.initials : holder.threadId));
 
 describe("team markers", () => {
+  it("names the person themselves You, others by display name, unknown ones by login", () => {
+    const core = team({ claims: [] });
+    expect(teamMemberName(core, "mouhssine")).toBe("You");
+    expect(teamMemberName(core, "yassine-a")).toBe("Yassine Amrani");
+    expect(teamMemberName(core, "omar")).toBe("omar");
+  });
+
   it("marks a teammate's file and everything under a claimed folder, whatever the case", () => {
     const projectTeam = findProjectTeam(
       [team({ claims: [claim("yassine-a", "their-thread", ["src/Auth"])] })],

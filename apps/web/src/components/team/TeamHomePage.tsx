@@ -16,6 +16,7 @@ import {
   findProjectTeam,
   holderHue,
   holderInitials,
+  teamMemberName,
   threadHolders,
 } from "@t3tools/client-runtime/state/teamMarkers";
 import {
@@ -261,8 +262,7 @@ export function TeamHomePage(props: {
   );
 }
 
-const memberName = (team: TeamFeedTeam, memberId: string) =>
-  team.members.find((member) => member.memberId === memberId)?.displayName ?? memberId;
+const memberName = teamMemberName;
 
 function TeamPeople(props: { readonly team: TeamFeedTeam; readonly pathPrefix: string }) {
   const { team } = props;
@@ -322,10 +322,14 @@ function PersonCard(props: {
           hue={holderHue(`member:${member.memberId}`)}
           size="md"
         />
-        <span className="grow truncate text-sm font-medium">{member.displayName}</span>
-        <span className="shrink-0 text-muted-foreground">
-          {isMe ? "you" : `seen ${formatRelativeTimeLabel(member.lastSeenAt)}`}
+        <span className="grow truncate text-sm font-medium">
+          {teamMemberName(team, member.memberId)}
         </span>
+        {isMe ? null : (
+          <span className="shrink-0 text-muted-foreground">
+            seen {formatRelativeTimeLabel(member.lastSeenAt)}
+          </span>
+        )}
       </div>
       {tasks.map((task) => (
         <div key={task.taskId} className="truncate">

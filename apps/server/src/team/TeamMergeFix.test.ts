@@ -178,6 +178,7 @@ const makeHarness = Effect.fn("makeTeamMergeFixHarness")(function* () {
     fixes,
     start,
     endTurn,
+    orchestration,
     turnTexts,
     usedCommits: Ref.get(usedCommits),
     /** The service again, as after a server restart: it reads the saved fixes. */
@@ -244,13 +245,37 @@ describe("TeamMergeFix", () => {
     }),
   );
 
-  it.effect("a restart still offers the waiting fix", () =>
+  it.effect("a turn that ends with markers left waits for the person's answer", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      yield* h.start(THREAD_A);
+      // The agent asked which side to keep and ended its turn without resolving.
+      yield* h.endTurn;
+      assert.equal((yield* h.fixes.forTeam(TEAM_ID))[0]?.status, "asking");
+      assert.include(
+        (yield* Effect.flip(h.fixes.act({ _tag: "approve", threadId: THREAD_A }))).detail,
+        "waiting for your answer",
+      );
+
+      // The person answers; the next turn resolves the file.
+      writeFile(h.worktree, ROUTES, "get /search/trimmed?tag\nget /login\n");
+      yield* TeamOrchestrator.setRun({
+        threadId: THREAD_A,
+        runId: RunId.make("run-answer"),
+        ordinal: 2,
+        status: "completed",
+      }).pipe(Effect.provide(h.orchestration));
+      assert.equal((yield* h.fixes.forTeam(TEAM_ID))[0]?.status, "ready");
+    }),
+  );
+
+  it.effect("a restart still offers the waiting fix, and Undo works while it asks", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness();
       yield* h.start(THREAD_A);
       yield* h.endTurn;
       const again = yield* h.restarted;
-      assert.equal((yield* again.forTeam(TEAM_ID))[0]?.status, "ready");
+      assert.equal((yield* again.forTeam(TEAM_ID))[0]?.status, "asking");
       yield* again.act({ _tag: "undo", threadId: THREAD_A });
       assert.equal(git(h.worktree, "rev-parse", "HEAD"), h.headBefore);
     }),

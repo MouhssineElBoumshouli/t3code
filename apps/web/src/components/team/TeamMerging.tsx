@@ -158,7 +158,10 @@ function useMergeFixAction(environmentId: EnvironmentId) {
   return { act, pending, allowed };
 }
 
-/** A fix under way: what it merges, then Open chat, and Approve and Undo once its turn ended. */
+/**
+ * A fix under way: what it merges, then Open chat; Undo while the agent waits
+ * for an answer; Approve and Undo once its turn ended.
+ */
 function MergeFixLine(props: {
   readonly environmentId: EnvironmentId;
   readonly team: TeamFeedTeam;
@@ -175,7 +178,11 @@ function MergeFixLine(props: {
         aria-hidden
         className={cn(
           "mt-1.5 size-1.5 shrink-0 rounded-full",
-          fix.status === "ready" ? "bg-info" : "bg-muted-foreground",
+          fix.status === "ready"
+            ? "bg-info"
+            : fix.status === "asking"
+              ? "bg-warning"
+              : "bg-muted-foreground",
         )}
       />
       <span className="flex min-w-0 flex-col gap-1">
@@ -201,6 +208,16 @@ function MergeFixLine(props: {
           >
             Open chat
           </Button>
+          {fix.status === "asking" && allowed ? (
+            <Button
+              size="xs"
+              variant="ghost-muted"
+              disabled={pending}
+              onClick={() => act({ _tag: "undo", threadId }, "Could not undo the fix")}
+            >
+              Undo
+            </Button>
+          ) : null}
           {fix.status === "ready" && allowed ? (
             <>
               <Button

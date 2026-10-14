@@ -9,7 +9,7 @@
 import type { ProjectId, TeamClaim, TeamFeedTeam, TeamMemberId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { claimPathInProject } from "./teamMarkers.ts";
+import { claimPathInProject, teamMemberName } from "./teamMarkers.ts";
 import { mergeCatchUpSentences } from "./teamMerging.ts";
 
 /** One of the person's chats in the project, as the page needs it. */
@@ -75,8 +75,7 @@ export function claimPathsInProject(claim: TeamClaim, pathPrefix: string): Reado
   });
 }
 
-const memberName = (team: TeamFeedTeam, memberId: TeamMemberId) =>
-  team.members.find((member) => member.memberId === memberId)?.displayName ?? memberId;
+const memberName = teamMemberName;
 
 const chatKey = (claim: TeamClaim) => `${claim.thread.environmentId}/${claim.thread.threadId}`;
 

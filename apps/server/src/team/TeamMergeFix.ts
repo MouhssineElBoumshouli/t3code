@@ -6,6 +6,8 @@
  *   (`mergeFixGit`), and a turn asks the agent to resolve the conflicts, with
  *   why each side changed those files and the rulebook's check command
  *   (`mergeFixPrompt`). The other side's branch is only read.
+ * - Asking: the agent waits for the person: a question during its turn, or
+ *   the turn ended with conflict markers still in a file. Open chat, or Undo.
  * - Ready: the turn ended. The person reads the diff in the chat, then:
  *   - Approve: commit the merge, push when the branch has an upstream, and
  *     tell a teammate whose branch was merged with a team note.
@@ -67,6 +69,8 @@ import * as TeamService from "./TeamService.ts";
 /** Notes read per fix, newest first. */
 const NOTES_READ = 100;
 const FILES_IN_TEAM_NOTE = 3;
+/** A conflict marker line, as Git writes it. */
+const CONFLICT_MARKER = /^(<<<<<<<|>>>>>>>)( |$)/mu;
 
 const StoredFix = Schema.Struct({
   teamId: Schema.String,
@@ -372,20 +376,22 @@ export const make = Effect.gen(function* () {
       return {};
     });
 
-  /** The fix, once its turn has ended. */
-  const readyFix = (threadId: ThreadId) =>
+  /** The fix, once its turn has ended; Undo also while the agent waits for an answer. */
+  const readyFix = (threadId: ThreadId, allowAsking: boolean) =>
     Effect.gen(function* () {
       const fix = fixes.get(threadId);
       if (fix === undefined) return yield* fail("No fix is waiting in this chat.");
-      if ((yield* statusOf(fix)) !== "ready") {
-        return yield* fail("The agent is still working on the fix.");
+      const status = yield* statusOf(fix);
+      if (status === "working") return yield* fail("The agent is still working on the fix.");
+      if (status === "asking" && !allowAsking) {
+        return yield* fail("The agent is waiting for your answer. Reply in the chat first.");
       }
       return fix;
     });
 
   const approve = (threadId: ThreadId) =>
     Effect.gen(function* () {
-      const fix = yield* readyFix(threadId);
+      const fix = yield* readyFix(threadId, false);
       const teamId = fix.teamId as TeamId;
       const nameOf = yield* nameOfMember(teamId);
       const outcome = yield* approveMerge(git, {
@@ -394,6 +400,7 @@ export const make = Effect.gen(function* () {
         conflicts: fix.conflicts,
       }).pipe(Effect.mapError((error) => new TeamMergeFixError({ detail: error.detail })));
       fixes.delete(threadId);
+      markersAfterRun.delete(threadId);
       yield* changed(teamId);
 
       const head = yield* git
@@ -449,26 +456,53 @@ export const make = Effect.gen(function* () {
 
   const undo = (threadId: ThreadId) =>
     Effect.gen(function* () {
-      const fix = yield* readyFix(threadId);
+      const fix = yield* readyFix(threadId, true);
       yield* undoMerge(git, fix).pipe(
         Effect.mapError((error) => new TeamMergeFixError({ detail: error.detail })),
       );
       fixes.delete(threadId);
+      markersAfterRun.delete(threadId);
       yield* changed(fix.teamId);
       yield* mergeCheck.request(fix.projectId as ProjectId);
       yield* Effect.logInfo("Team merge fix undone.", { threadId });
       return {};
     });
 
+  /** Per fix, the run whose end was read and whether a conflicting file still had markers then. */
+  const markersAfterRun = new Map<ThreadId, { runId: string; left: boolean }>();
+  const markersLeft = (fix: StoredFix, runId: string) =>
+    Effect.gen(function* () {
+      const known = markersAfterRun.get(fix.threadId);
+      if (known !== undefined && known.runId === runId) return known.left;
+      let left = false;
+      for (const file of fix.conflicts) {
+        const text = yield* fs
+          .readFileString(path.join(fix.folder, file))
+          .pipe(Effect.orElseSucceed(() => ""));
+        if (CONFLICT_MARKER.test(text)) {
+          left = true;
+          break;
+        }
+      }
+      markersAfterRun.set(fix.threadId, { runId, left });
+      return left;
+    });
+
+  /**
+   * Working while its turn runs; asking when the agent waits for the person (a
+   * question during the turn, or a turn that ended with markers left); else ready.
+   */
   const statusOf = (fix: StoredFix) =>
-    orchestrator.getThreadShell(fix.threadId).pipe(
-      Effect.map((shell) =>
-        shell !== null && shell.activeRunId === null && shell.latestRunId !== fix.runBefore
-          ? ("ready" as const)
-          : ("working" as const),
-      ),
-      Effect.orElseSucceed(() => "working" as const),
-    );
+    Effect.gen(function* () {
+      const shell = yield* orchestrator.getThreadShell(fix.threadId);
+      if (shell === null) return "working" as const;
+      if (shell.pendingRuntimeRequest !== null) return "asking" as const;
+      if (shell.activeRunId !== null || shell.latestRunId === null) return "working" as const;
+      if (shell.latestRunId === fix.runBefore) return "working" as const;
+      return (yield* markersLeft(fix, shell.latestRunId))
+        ? ("asking" as const)
+        : ("ready" as const);
+    }).pipe(Effect.orElseSucceed(() => "working" as const));
 
   const forTeam = (teamId: TeamId) =>
     Effect.forEach(
@@ -487,12 +521,15 @@ export const make = Effect.gen(function* () {
         ),
     );
 
-  // A fix's turn starting or ending changes what the feed shows.
+  // A fix's turn starting or ending, or its agent asking, changes what the feed shows.
   const eventSink = yield* EventSink.EventSinkV2;
   const fromSequence = yield* eventSink.latestSequence().pipe(Effect.orElseSucceed(() => 0));
   yield* forkParked(
     Stream.runForEach(
-      eventSink.stream({ afterSequence: fromSequence, eventType: "run.updated" }),
+      Stream.merge(
+        eventSink.stream({ afterSequence: fromSequence, eventType: "run.updated" }),
+        eventSink.stream({ afterSequence: fromSequence, eventType: "runtime-request.updated" }),
+      ),
       ({ event }) => {
         const fix = fixes.get(event.threadId);
         return fix === undefined ? Effect.void : PubSub.publish(changes, fix.teamId as TeamId);

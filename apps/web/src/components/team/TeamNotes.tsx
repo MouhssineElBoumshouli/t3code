@@ -11,7 +11,11 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { holderHue, holderInitials } from "@t3tools/client-runtime/state/teamMarkers";
+import {
+  holderHue,
+  holderInitials,
+  teamMemberName,
+} from "@t3tools/client-runtime/state/teamMarkers";
 import {
   notePathInProject,
   projectPathToTeamPath,
@@ -71,10 +75,7 @@ function useNoteAction(environmentId: EnvironmentId) {
   );
 }
 
-const nameOf = (team: TeamFeedTeam, memberId: TeamMemberId) =>
-  memberId === team.me
-    ? "You"
-    : (team.members.find((member) => member.memberId === memberId)?.displayName ?? memberId);
+const nameOf = (team: TeamFeedTeam, memberId: TeamMemberId) => teamMemberName(team, memberId);
 
 /** The three lists (team) or one (solo), the done ones folded, and the form. */
 export function TeamNotes(props: {
