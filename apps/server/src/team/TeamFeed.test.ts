@@ -88,6 +88,9 @@ const harness = (workspaceRoot: string) =>
             findPair: () => Effect.succeed(undefined),
             useCommitUntilNextTurn: () => Effect.void,
             takeClashLine: () => Effect.succeed(undefined),
+            placeOf: () => Effect.succeedNone,
+            setCombined: () => Effect.void,
+            combinedOf: () => Effect.succeed(undefined),
           }),
         ),
         Layer.succeed(

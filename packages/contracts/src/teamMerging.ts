@@ -87,6 +87,67 @@ export const TeamMergeOrder = Schema.Struct({
 });
 export type TeamMergeOrder = typeof TeamMergeOrder.Type;
 
+/**
+ * Typecheck on the combined result (MERGE_HELP_PLAN.md section 2): one error
+ * the combined result has and neither side has alone.
+ */
+export const TeamCombinedError = Schema.Struct({
+  /** Relative to the team's root; absent when the output named no file. */
+  path: Schema.optionalKey(TeamPath),
+  line: Schema.optionalKey(NonNegativeInt),
+  /** The tool's message, one line, capped. */
+  message: Schema.String,
+  /** A name the error says is missing, e.g. `getUser` in "Cannot find name 'getUser'". */
+  name: Schema.optionalKey(Schema.String),
+  /** The name the tool suggests instead ("Did you mean 'fetchUser'?"). */
+  suggestion: Schema.optionalKey(Schema.String),
+  /** Which side changed the file since they split. */
+  side: Schema.Literals(["mine", "other", "both", "neither"]),
+});
+export type TeamCombinedError = typeof TeamCombinedError.Type;
+
+/**
+ * Why a combined check did not run (the person may update anyway):
+ * - `memory`: less free memory than the floor.
+ * - `busy`: another check is running on this server.
+ * - `turnRunning`: an agent is working in this project.
+ * - `noCommand`: no `## Check` command and none detected.
+ * - `dependencies`: the dependencies changed and are installed only on "Check now".
+ * - `timeout`: the check ran past its time limit and was stopped.
+ * - `failed`: the check or the install could not run.
+ */
+export const TeamCombinedSkip = Schema.Literals([
+  "memory",
+  "busy",
+  "turnRunning",
+  "noCommand",
+  "dependencies",
+  "timeout",
+  "failed",
+]);
+export type TeamCombinedSkip = typeof TeamCombinedSkip.Type;
+
+/**
+ * The project's check command run on the two sides combined, only on "Check
+ * now" and once before an update. Its commits say which pair it was for.
+ * - `running`: under way. `clean`: nothing new (errors either side already had
+ *   are left out). `broken`: new errors. `skipped`: did not run, see `skip`.
+ */
+export const TeamCombinedCheck = Schema.Struct({
+  mineCommit: TrimmedNonEmptyString,
+  otherCommit: TrimmedNonEmptyString,
+  status: Schema.Literals(["running", "clean", "broken", "skipped"]),
+  skip: Schema.optionalKey(TeamCombinedSkip),
+  /** What ran, e.g. `npm run typecheck`. */
+  command: Schema.optionalKey(Schema.String),
+  /** New errors, capped. */
+  errors: Schema.Array(TeamCombinedError),
+  /** New errors in all. */
+  errorCount: NonNegativeInt,
+  checkedAt: IsoDateTime,
+});
+export type TeamCombinedCheck = typeof TeamCombinedCheck.Type;
+
 export const TeamMergePair = Schema.Struct({
   projectId: ProjectId,
   mine: TeamMergeMine,
@@ -100,6 +161,8 @@ export const TeamMergePair = Schema.Struct({
   bothChanged: Schema.Array(TeamPath),
   /** Which to merge first, for a clashing or overlapping pair with a teammate's branch or a chat. */
   order: Schema.optionalKey(TeamMergeOrder),
+  /** The combined check for these two commits, when one ran or runs. */
+  combined: Schema.optionalKey(TeamCombinedCheck),
   /** The status before the last change of state; null when first seen. */
   previous: Schema.NullOr(TeamMergeStatus),
   /** When this status began: the newer side's commit time. */
@@ -147,12 +210,15 @@ export const TEAM_MERGE_LIMITS = {
   pairs: 30,
   /** Files listed per pair. */
   files: 10,
+  /** New errors listed per combined check. */
+  combinedErrors: 5,
 } as const;
 
 /**
- * What the person does with a pair: start a fix, then approve or undo it; or
+ * What the person does with a pair: start a fix, then approve or undo it;
  * update a chat's copy (a rebase) on top of the other side once that side is
- * first (the base after a merge, or the chat that finished first).
+ * first (the base after a merge, or the chat that finished first), after one
+ * combined check; or run the combined check now.
  */
 export const TeamMergeFixInput = Schema.Union([
   Schema.TaggedStruct("start", {
@@ -167,6 +233,14 @@ export const TeamMergeFixInput = Schema.Union([
     threadId: ThreadId,
     /** What it moves on top of: the base or another chat. */
     other: TeamMergeOther,
+    /** Skip the combined check (it found new errors or could not run). */
+    anyway: Schema.optionalKey(Schema.Boolean),
+  }),
+  /** "Check now": the combined check for this pair; the result arrives on the pair. */
+  Schema.TaggedStruct("check", {
+    projectId: ProjectId,
+    threadId: ThreadId,
+    other: TeamMergeOther,
   }),
   Schema.TaggedStruct("approve", { threadId: ThreadId }),
   Schema.TaggedStruct("undo", { threadId: ThreadId }),
@@ -176,8 +250,12 @@ export type TeamMergeFixInput = typeof TeamMergeFixInput.Type;
 export const TeamMergeFixResult = Schema.Struct({
   /** After approve: what happened to the push. */
   push: Schema.optionalKey(Schema.Literals(["pushed", "notPushed", "failed"])),
-  /** After update: moved, or Git stopped on a conflict and nothing changed. */
-  update: Schema.optionalKey(Schema.Literals(["updated", "conflict"])),
+  /**
+   * After update: moved; Git stopped on a conflict and nothing changed; or
+   * `checked`: not moved, the combined check found new errors or could not
+   * run (see the pair).
+   */
+  update: Schema.optionalKey(Schema.Literals(["updated", "conflict", "checked"])),
   /** A sentence for the person, e.g. why the push failed. */
   detail: Schema.optionalKey(Schema.String),
 });

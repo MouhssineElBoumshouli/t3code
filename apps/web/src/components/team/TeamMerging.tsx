@@ -6,7 +6,9 @@
  * has "Fix it"; a fix whose turn ended has Approve and Undo. A pair that
  * clashes or overlaps says which side to merge first (section 4); a clean
  * overlap with the base, or with the chat that goes first, offers an update
- * (a rebase), and an update that stops on a conflict offers "Fix it". Used by
+ * (a rebase), and an update that stops on a conflict offers "Fix it". A
+ * clean pair offers "Check now" (the combined check); its result shows under
+ * the line, with "Fix it" for new errors and "Update anyway". Used by
  * Team home / Today's "Merging" section and the presence popover. Times are
  * worded when drawn; nothing ticks.
  */
@@ -16,6 +18,8 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  combinedCheckOffered,
+  combinedSentence,
   fixIsForPair,
   foldedMergeLine,
   foldMergePairs,
@@ -98,6 +102,7 @@ export function MergePairLine(props: {
   const { team, pair } = props;
   const pending = mergePairPending(team, pair);
   const order = mergeOrderSentence(team, pair);
+  const combined = combinedSentence(team, pair, props.pathPrefix);
   return (
     <li className="flex items-start gap-2 text-xs" data-team-merge={pair.status}>
       <span
@@ -120,6 +125,20 @@ export function MergePairLine(props: {
         {order === null ? null : (
           <span className="block text-muted-foreground">
             <MergeSentence text={order} />
+          </span>
+        )}
+        {combined === null ? null : (
+          <span
+            className={cn(
+              "block",
+              pair.combined?.status === "broken" ? "text-foreground" : "text-muted-foreground",
+            )}
+            data-team-combined={pair.combined?.status}
+          >
+            <MergeSentence text={combined} />
+            {pair.combined?.status === "running"
+              ? null
+              : ` · checked ${formatRelativeTimeLabel(pair.combined!.checkedAt)}`}
           </span>
         )}
         {props.action}
@@ -162,7 +181,13 @@ function useMergeFixAction(environmentId: EnvironmentId, onUpdateConflict?: () =
                   title: "Not updated: Git stopped on a conflict",
                   description: outcome.detail ?? "Use Fix it to merge instead.",
                 }
-              : { type: "success", title: "Copy updated" },
+              : outcome.update === "checked"
+                ? {
+                    type: "warning",
+                    title: "Not updated yet",
+                    description: outcome.detail ?? "See the combined check on the line.",
+                  }
+                : { type: "success", title: "Copy updated" },
           );
           return;
         }
@@ -286,7 +311,10 @@ function FixItButton(props: {
 }) {
   const { act, pending, allowed } = useMergeFixAction(props.environmentId);
   const { afterConflict } = props;
-  if ((props.pair.status === "clean" && afterConflict === undefined) || !allowed) return null;
+  const breaks = props.pair.combined?.status === "broken";
+  if ((props.pair.status === "clean" && !breaks && afterConflict === undefined) || !allowed) {
+    return null;
+  }
   const blocked = afterConflict === undefined ? mergeFixBlocked(props.pair) : null;
   return (
     <>
@@ -297,7 +325,9 @@ function FixItButton(props: {
         disabled={pending || blocked !== null}
         title={
           blocked ??
-          "A turn in this chat merges the other side and resolves the clash, without committing. You approve or undo it after."
+          (breaks && afterConflict === undefined
+            ? "A turn in this chat merges the other side and fixes what the combination breaks, without committing. You approve or undo it after."
+            : "A turn in this chat merges the other side and resolves the clash, without committing. You approve or undo it after.")
         }
         onClick={() =>
           act(
@@ -336,7 +366,9 @@ function UpdateButton(props: {
         disabled={pending || offer.blocked !== null}
         title={
           offer.blocked ??
-          "Moves the chat's branch on top of the other side (a rebase). Not while its agent works or with uncommitted changes."
+          (offer.anyway
+            ? "Moves the chat's branch on top of the other side (a rebase) without the combined check. Not while its agent works or with uncommitted changes."
+            : "Checks the combined result once, then moves the chat's branch on top of the other side (a rebase). Not while its agent works or with uncommitted changes.")
         }
         onClick={() =>
           act(
@@ -345,12 +377,46 @@ function UpdateButton(props: {
               projectId: props.pair.projectId,
               threadId: offer.threadId,
               other: offer.other,
+              ...(offer.anyway ? { anyway: true } : {}),
             },
             "Could not update",
           )
         }
       >
         {offer.label}
+      </Button>
+    </>
+  );
+}
+
+/** "Check now": the project's check command on the combined result; it shows on the line. */
+function CheckNowButton(props: {
+  readonly environmentId: EnvironmentId;
+  readonly pair: TeamMergePair;
+}) {
+  const { act, pending, allowed } = useMergeFixAction(props.environmentId);
+  if (!allowed || !combinedCheckOffered(props.pair)) return null;
+  return (
+    <>
+      {" "}
+      <Button
+        size="xs"
+        variant="ghost-muted"
+        disabled={pending}
+        title="Runs the project's check (typecheck) on the two combined, at low priority, and shows only errors neither side has alone. Installs changed dependencies first."
+        onClick={() =>
+          act(
+            {
+              _tag: "check",
+              projectId: props.pair.projectId,
+              threadId: props.pair.mine.thread.threadId,
+              other: props.pair.other,
+            },
+            "Could not start the check",
+          )
+        }
+      >
+        Check now
       </Button>
     </>
   );
@@ -387,6 +453,7 @@ export function MergePairList(props: {
               pair={pair}
               {...(afterConflict === undefined ? {} : { afterConflict })}
             />
+            <CheckNowButton environmentId={props.environmentId} pair={pair} />
             {offer !== null && afterConflict === undefined ? (
               <UpdateButton
                 environmentId={props.environmentId}

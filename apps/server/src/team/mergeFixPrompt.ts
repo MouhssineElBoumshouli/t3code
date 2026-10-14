@@ -2,7 +2,7 @@
  * The message of a "Fix it" turn (fork-only, team/MERGE_HELP_PLAN.md section
  * 5): which files Git could not combine, why each side changed them (handoff
  * and automatic notes, claim notes, task titles), decisions on those files,
- * the check command, and what not to do. Capped at about 600 tokens: the
+ * the errors the combined check found, the check command, and what not to do. Capped at about 600 tokens: the
  * files and the rules always fit; notes are added newest first until the cap.
  *
  * @module mergeFixPrompt
@@ -33,6 +33,8 @@ export interface MergeFixPromptInput {
   readonly check: string | undefined;
   /** The chat's uncommitted work was committed first. */
   readonly savedWork: boolean;
+  /** Errors the combined check found and neither side has alone: "`src/me.ts:3`: Cannot find name 'getUser'.". */
+  readonly combinedErrors?: ReadonlyArray<string>;
 }
 
 const oneLine = (text: string) => {
@@ -52,7 +54,17 @@ export function buildMergeFixPrompt(input: MergeFixPromptInput): string {
     files.length > 0
       ? `Git could not combine:\n${files.join("\n")}`
       : "Git combined every file; check that both changes still work together.",
-    "Resolve every conflict so both sides' changes keep working.",
+    ...((input.combinedErrors ?? []).length === 0
+      ? []
+      : [
+          `Combined, the check finds errors neither side has alone:\n${(input.combinedErrors ?? [])
+            .slice(0, LISTED_FILES)
+            .map((error) => `- ${oneLine(error)}`)
+            .join("\n")}`,
+        ]),
+    files.length > 0
+      ? "Resolve every conflict so both sides' changes keep working."
+      : "Make both sides' changes work together.",
   ];
   const tail = [
     input.check === undefined

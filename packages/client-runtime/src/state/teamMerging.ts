@@ -7,6 +7,9 @@
 import type {
   EnvironmentId,
   ProjectId,
+  TeamCombinedCheck,
+  TeamCombinedError,
+  TeamCombinedSkip,
   TeamFeedTeam,
   TeamMergeFile,
   TeamMergeFix,
@@ -102,9 +105,14 @@ export function mergePairSentence(
   }
 }
 
+/** Whether the pair's combined check has news: it runs, found new errors, or could not run. */
+const combinedNews = (pair: TeamMergePair) =>
+  pair.combined !== undefined && pair.combined.status !== "clean";
+
 /**
  * The pairs worth a line, and the clean ones folded into one: a clean pair
- * gets its own line only when both sides changed the same file.
+ * gets its own line only when both sides changed the same file, or its
+ * combined check has news.
  */
 export function foldMergePairs(pairs: ReadonlyArray<TeamMergePair>): {
   readonly shown: ReadonlyArray<TeamMergePair>;
@@ -113,7 +121,10 @@ export function foldMergePairs(pairs: ReadonlyArray<TeamMergePair>): {
   const shown: Array<TeamMergePair> = [];
   const folded: Array<TeamMergePair> = [];
   for (const pair of pairs) {
-    (pair.status === "clean" && pair.bothChanged.length === 0 ? folded : shown).push(pair);
+    (pair.status === "clean" && pair.bothChanged.length === 0 && !combinedNews(pair)
+      ? folded
+      : shown
+    ).push(pair);
   }
   return { shown, folded };
 }
@@ -174,7 +185,7 @@ export const fixIsForPair = (fix: TeamMergeFix, pair: TeamMergePair) =>
  * the chat's own worktree, so the shared checkout is merged by hand.
  */
 export function mergeFixBlocked(pair: TeamMergePair): string | null {
-  if (pair.status === "clean") return "It merges cleanly.";
+  if (pair.status === "clean" && pair.combined?.status !== "broken") return "It merges cleanly.";
   if (!pair.mine.worktree) {
     return "This chat works in the shared checkout, where a merge would change every chat there. Merge it by hand.";
   }
@@ -223,6 +234,8 @@ export interface MergeUpdateOffer {
   readonly other: TeamMergeOther;
   readonly label: string;
   readonly blocked: string | null;
+  /** The combined check found new errors or could not run: update without it. */
+  readonly anyway: boolean;
 }
 
 /**
@@ -233,6 +246,15 @@ export interface MergeUpdateOffer {
  * A teammate's branch is merged first, then the base pair offers the update.
  */
 export function mergeUpdateOffer(pair: TeamMergePair): MergeUpdateOffer | null {
+  const offer = updateOfferOf(pair);
+  if (offer === null) return null;
+  const status = pair.combined?.status;
+  return status === "broken" || status === "skipped"
+    ? { ...offer, label: "Update anyway", anyway: true }
+    : { ...offer, anyway: false };
+}
+
+function updateOfferOf(pair: TeamMergePair): Omit<MergeUpdateOffer, "anyway"> | null {
   if (pair.status !== "clean" || pair.bothChanged.length === 0) return null;
   const other = pair.other;
   if (other._tag === "base") {
@@ -264,6 +286,100 @@ export function mergeUpdateOffer(pair: TeamMergePair): MergeUpdateOffer | null {
         label: `Update "${pair.mine.title}" on top of "${other.title}"`,
         blocked: null,
       };
+}
+
+/** "Check now" runs the combined check on a pair Git merges cleanly, unless one runs for it. */
+export const combinedCheckOffered = (pair: TeamMergePair) =>
+  pair.status === "clean" && pair.combined?.status !== "running";
+
+const SKIP_WORDS: Record<TeamCombinedSkip, string> = {
+  memory: "less than 1.5 GB of memory is free",
+  busy: "another check is running",
+  turnRunning: "an agent is working in this project",
+  noCommand: "no check command was found (add one under `## Check` in `.team/rulebook.md`)",
+  dependencies: "its dependencies changed; Check now installs them",
+  timeout: "it ran longer than 10 minutes and was stopped",
+  failed: "the check could not run",
+};
+
+/** "Sara's `search` branch", "`main`", "the chat "B"". */
+const otherName = (team: TeamFeedTeam, other: TeamMergeOther) => {
+  switch (other._tag) {
+    case "chat":
+      return `the chat "${other.title}"`;
+    case "branch":
+      return `${memberName(team, other.memberId)}'s ${code(other.branch)} branch`;
+    case "base":
+      return code(other.branch);
+  }
+};
+
+/** Whose change the file is: "(yours)", "(Sara's)", "(changed on `main`)". */
+const ownerWords = (team: TeamFeedTeam, pair: TeamMergePair, side: TeamCombinedError["side"]) => {
+  switch (side) {
+    case "mine":
+      return pair.other._tag === "chat" ? ` (in "${pair.mine.title}")` : " (yours)";
+    case "other":
+      return pair.other._tag === "branch"
+        ? ` (${memberName(team, pair.other.memberId)}'s)`
+        : pair.other._tag === "base"
+          ? ` (changed on ${code(pair.other.branch)})`
+          : ` (in "${pair.other.title}")`;
+    case "both":
+      return " (both changed it)";
+    case "neither":
+      return "";
+  }
+};
+
+const errorWords = (
+  team: TeamFeedTeam,
+  pair: TeamMergePair,
+  error: TeamCombinedError,
+  pathPrefix: string,
+) => {
+  const where = error.path === undefined ? "" : code(mergePathInProject(error.path, pathPrefix));
+  const owner = ownerWords(team, pair, error.side);
+  if (error.name !== undefined && where !== "") {
+    return error.suggestion === undefined
+      ? `${code(error.name)} is gone but still used in ${where}${owner}`
+      : `${code(error.name)} is renamed (to ${code(error.suggestion)}?) but still used in ${where}${owner}`;
+  }
+  // The sentence adds its own full stop.
+  const message = error.message.replace(/\.+$/u, "");
+  return where === "" ? `a new error: ${message}` : `a new error in ${where}${owner}: ${message}`;
+};
+
+/**
+ * The combined check's line (MERGE_HELP_PLAN.md section 2): "Combined with
+ * Sara's `search` branch, `getUser` is renamed (to `fetchUser`?) but still
+ * used in `src/api/me.ts` (yours)." Null when none ran for these commits.
+ */
+export function combinedSentence(
+  team: TeamFeedTeam,
+  pair: TeamMergePair,
+  pathPrefix: string,
+): string | null {
+  const check: TeamCombinedCheck | undefined = pair.combined;
+  if (check === undefined) return null;
+  const combined = `Combined with ${otherName(team, pair.other)}`;
+  const command = check.command === undefined ? "the check" : code(check.command);
+  switch (check.status) {
+    case "running":
+      return `${combined}: checking with ${command}…`;
+    case "clean":
+      return `${combined}, ${command} finds nothing new.`;
+    case "skipped":
+      return `${combined}: not checked, ${SKIP_WORDS[check.skip ?? "failed"]}.`;
+    case "broken": {
+      const [first] = check.errors;
+      if (first === undefined) return `${combined}, ${command} fails.`;
+      const more = check.errorCount - 1;
+      return `${combined}, ${errorWords(team, pair, first, pathPrefix)}.${
+        more > 0 ? ` And ${more} more new ${more === 1 ? "error" : "errors"}.` : ""
+      }`;
+    }
+  }
 }
 
 /** One line for a fix: what is being merged, and what the person does next. */

@@ -12,6 +12,7 @@ import {
   TeamFile,
   TeamId,
   TeamMemberId,
+  type TeamCombinedCheck,
   type TeamMergePair,
   ThreadId,
 } from "@t3tools/contracts";
@@ -31,6 +32,7 @@ import {
   testTeamServiceLayer,
   useTeamOrigin,
 } from "./testing/teamState.ts";
+import * as TeamCombineCheck from "./TeamCombineCheck.ts";
 import * as TeamMergeCheck from "./TeamMergeCheck.ts";
 import * as TeamMergeFix from "./TeamMergeFix.ts";
 import * as TeamOrchestrator from "./teamOrchestrator.testkit.ts";
@@ -123,6 +125,30 @@ const makeHarness = Effect.fn("makeTeamMergeFixHarness")(function* () {
       Ref.get(pairOverride).pipe(Effect.map((override) => override ?? pair(threadId))),
     useCommitUntilNextTurn: (input) => Ref.update(usedCommits, (all) => [...all, input.commit]),
     takeClashLine: () => Effect.succeed(undefined),
+    placeOf: () => Effect.succeedNone,
+    setCombined: () => Effect.void,
+    combinedOf: () => Effect.succeed(undefined),
+  });
+  /** What the combined check before an update finds; clean when unset. */
+  const combinedResult = yield* Ref.make<TeamCombinedCheck | undefined>(undefined);
+  const combinedRuns = yield* Ref.make(0);
+  const combineCheck = TeamCombineCheck.TeamCombineCheck.of({
+    start: () => Effect.void,
+    run: (request) =>
+      Ref.update(combinedRuns, (count) => count + 1).pipe(
+        Effect.andThen(Ref.get(combinedResult)),
+        Effect.map(
+          (found): TeamCombinedCheck =>
+            found ?? {
+              mineCommit: "mine",
+              otherCommit: request.other.commit,
+              status: "clean",
+              errors: [],
+              errorCount: 0,
+              checkedAt: "2026-10-14T10:00:00.000Z",
+            },
+        ),
+      ),
   });
 
   const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
@@ -135,6 +161,7 @@ const makeHarness = Effect.fn("makeTeamMergeFixHarness")(function* () {
     Layer.succeedContext(orchestration),
     TeamOrchestrator.layerRecordingDispatch(dispatched, orchestration),
     Layer.succeed(TeamMergeCheck.TeamMergeCheck, mergeCheck),
+    Layer.succeed(TeamCombineCheck.TeamCombineCheck, combineCheck),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
     }),
@@ -185,6 +212,8 @@ const makeHarness = Effect.fn("makeTeamMergeFixHarness")(function* () {
     turnTexts,
     usedCommits: Ref.get(usedCommits),
     setPair: (next: TeamMergePair | undefined) => Ref.set(pairOverride, next),
+    setCombined: (next: TeamCombinedCheck | undefined) => Ref.set(combinedResult, next),
+    combinedRuns: Ref.get(combinedRuns),
     pair,
     /** The service again, as after a server restart: it reads the saved fixes. */
     restarted: TeamMergeFix.make.pipe(Effect.provide(context)),
@@ -330,7 +359,34 @@ describe("TeamMergeFix", () => {
           status: "completed",
         }).pipe(Effect.provide(h.orchestration));
 
-        assert.deepEqual(yield* update, { update: "updated" });
+        // The combined check finds a new error: nothing moves until the person updates anyway.
+        yield* h.setCombined({
+          mineCommit: mine,
+          otherCommit: base,
+          status: "broken",
+          errors: [{ path: "src/api/me.ts", message: "Cannot find name 'getUser'.", side: "mine" }],
+          errorCount: 1,
+          checkedAt: "2026-10-14T10:00:00.000Z",
+        });
+        const stopped = yield* update;
+        assert.equal(stopped.update, "checked");
+        assert.include(stopped.detail, "a new error");
+        assert.equal(git(h.worktree, "rev-parse", "HEAD"), mine);
+        const runs = yield* h.combinedRuns;
+
+        assert.deepEqual(
+          yield* h.fixes.act({
+            _tag: "update",
+            projectId: PROJECT_ID,
+            threadId: THREAD_A,
+            other: onMain.other,
+            anyway: true,
+          }),
+          { update: "updated" },
+        );
+        // Anyway skips the check.
+        assert.equal(yield* h.combinedRuns, runs);
+        yield* h.setCombined(undefined);
         const head = git(h.worktree, "rev-parse", "HEAD");
         assert.notEqual(head, mine);
         assert.equal(git(h.worktree, "merge-base", base, "HEAD"), base);

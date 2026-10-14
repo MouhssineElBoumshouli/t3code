@@ -1,6 +1,6 @@
 # Merging help: plan (VISION.md step 5)
 
-Status: slice 1 (section 8, point 1) built 2026-10-13 (`TeamMergeCheck.ts`); slice 2 (point 2, "Fix it") and the turn-note line built 2026-10-13 (`TeamMergeFix.ts`); slice 3 (point 3, merge order and "Update my copy") built 2026-10-14 (`mergeOrder.ts`, `TeamMergeFix.ts`); the typecheck combine copy is plan. Covers VISION.md 3.4, and 3.6 points 1, 4, 6 and 7.
+Status: slice 1 (section 8, point 1) built 2026-10-13 (`TeamMergeCheck.ts`); slice 2 (point 2, "Fix it") and the turn-note line built 2026-10-13 (`TeamMergeFix.ts`); slice 3 (point 3, merge order and "Update my copy") built 2026-10-14 (`mergeOrder.ts`, `TeamMergeFix.ts`); slice 4 (point 4, the typecheck combine copy) built 2026-10-14 (`TeamCombineCheck.ts`, `combineCheck.ts`, `combineRunner.ts`). Covers VISION.md 3.4, and 3.6 points 1, 4, 6 and 7.
 
 ## 1. Background test-combine
 
@@ -34,6 +34,15 @@ Status: slice 1 (section 8, point 1) built 2026-10-13 (`TeamMergeCheck.ts`); sli
 
 - **Keep it short.** Typecheck by default. Tests only when the rulebook command asks for them, ideally only the tests related to the changed files (`{files}` in the command expands to the files both sides changed, e.g. `vitest related {files}`). Aim for under 2 minutes; the Check section says so.
 - **No false alarms.** Report only errors that are new: present in the combined result, but not in mine alone and not in theirs alone. Each side's result is cached per commit and reused across pairs, so an error already on main never shows up as a clash.
+
+**As built (slice 4).**
+
+- Runs only on "Check now" (any clean pair) and once before "Update my copy" / "Update B on top of A". Never on its own, so `BackgroundPolicy` is not consulted.
+- The copy gets each tree with `git read-tree -u --reset` (no commit is made). Dependencies: the lockfile's package manager (`npm ci`, `pnpm install --frozen-lockfile`, …) when `package.json` or the lockfile changed since the last install, not t3.json's setup script (it also does worktree chores, like linking `.env`). Each side alone runs on the dependencies installed for the combined result.
+- The rulebook's `## Check` is read from the combined result. No `{files}` expansion.
+- A check that cannot start (another check running, a turn in the project, under 1.5 GB free) or cannot run (no command, dependencies changed before an update, 10 minutes, a failure) says why on the line. Before an update, that or new errors stop it; the line offers "Update anyway", and "Fix it" for new errors (its prompt lists them).
+- Errors are read from tsc's format, `path:line[:col]: message` and Rust's `-->`; output nothing reads counts as one new error only when both sides pass alone. Results live in memory, by the two commits.
+- The priority: a small Node launcher lowers its own and starts the shell, so every child inherits it. The timeout kills the launcher's process group (Unix) or `taskkill /T` its PID (Windows).
 
 ## 3. How we warn
 

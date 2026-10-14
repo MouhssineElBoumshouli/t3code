@@ -18,6 +18,9 @@
  * worktree moves on top of it with Wait's rebase (`teamCopy`): never while
  * its turn runs or with uncommitted changes. A rebase that stops on a
  * conflict is aborted and the person is sent to "Fix it", which then merges.
+ * Before it moves, the combined check runs once (`TeamCombineCheck`); new
+ * errors, or a check that could not run, stop it until the person chooses
+ * "Update anyway". "Check now" starts that check on its own.
  *
  * Fixes waiting are kept in `<stateDir>/team/merge-fixes.json`, so a restart
  * still offers Approve and Undo. The team feed shows them (`forTeam`).
@@ -69,6 +72,7 @@ import { approveMerge, startMerge, undoMerge } from "./mergeFixGit.ts";
 import { moveCopyOnto } from "./teamCopy.ts";
 import { buildMergeFixPrompt, type MergeFixSide } from "./mergeFixPrompt.ts";
 import { diffToTeamPaths } from "./TeamAutoNotes.ts";
+import * as TeamCombineCheck from "./TeamCombineCheck.ts";
 import * as TeamMergeCheck from "./TeamMergeCheck.ts";
 import { findRepoRoot } from "./TeamProjectFiles.ts";
 import * as TeamService from "./TeamService.ts";
@@ -150,6 +154,7 @@ export const otherSideWords = (other: TeamMergeOther, nameOf: (memberId: string)
 export const make = Effect.gen(function* () {
   const teams = yield* TeamService.TeamService;
   const mergeCheck = yield* TeamMergeCheck.TeamMergeCheck;
+  const combineCheck = yield* TeamCombineCheck.TeamCombineCheck;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const git = yield* GitVcsDriver.GitVcsDriver;
@@ -326,6 +331,7 @@ export const make = Effect.gen(function* () {
         workingFolder: folder,
       }).pipe(Effect.provide(fileContext));
       const places = new Map(pair.files.map((file) => [file.path, file.places]));
+      const combined = yield* mergeCheck.combinedOf(pair);
       const mine: MergeFixSide = { who: "This chat", reasons: reasons.mine };
       const theirs: MergeFixSide = { who: words.who, reasons: reasons.theirs };
       const text = buildMergeFixPrompt({
@@ -339,8 +345,16 @@ export const make = Effect.gen(function* () {
         mine,
         theirs,
         decisions,
-        check,
+        check: check ?? combined?.command,
         savedWork: started.savedWork !== null,
+        combinedErrors:
+          combined?.status === "broken"
+            ? combined.errors.map((error) =>
+                error.path === undefined
+                  ? error.message
+                  : `\`${error.path}${error.line === undefined ? "" : `:${error.line}`}\`: ${error.message}`,
+              )
+            : [],
       });
 
       // The fix's own message says it all; the clash line is not told again.
@@ -633,16 +647,40 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  const act = (input: TeamMergeFixInput) =>
-    lock.withPermits(1)(
-      input._tag === "start"
-        ? start(input)
-        : input._tag === "update"
-          ? update(input)
-          : input._tag === "approve"
-            ? approve(input.threadId)
-            : undo(input.threadId),
-    );
+  /** Words for a combined check that stopped an update. */
+  const checkedWords = (check: { readonly status: string; readonly errorCount: number }) =>
+    check.status === "broken"
+      ? `Combined, the check finds ${check.errorCount === 1 ? "a new error" : `${check.errorCount} new errors`}. Fix it, or update anyway.`
+      : "The combined check did not run; see why on the line. You can update anyway.";
+
+  const act = (input: TeamMergeFixInput): Effect.Effect<TeamMergeFixResult, TeamMergeFixError> => {
+    switch (input._tag) {
+      case "check":
+        return combineCheck
+          .start({ ...input, install: true })
+          .pipe(Effect.as({} satisfies TeamMergeFixResult));
+      case "update":
+        // The one combined check before merging runs outside the lock: it can take minutes.
+        return Effect.gen(function* () {
+          if (input.anyway !== true) {
+            const check = yield* combineCheck.run({ ...input, install: false });
+            if (check.status !== "clean") {
+              return {
+                update: "checked",
+                detail: checkedWords(check),
+              } satisfies TeamMergeFixResult;
+            }
+          }
+          return yield* lock.withPermits(1)(update(input));
+        });
+      case "start":
+        return lock.withPermits(1)(start(input));
+      case "approve":
+        return lock.withPermits(1)(approve(input.threadId));
+      case "undo":
+        return lock.withPermits(1)(undo(input.threadId));
+    }
+  };
 
   return TeamMergeFix.of({ act, forTeam, subscribeChanges: PubSub.subscribe(changes) });
 });

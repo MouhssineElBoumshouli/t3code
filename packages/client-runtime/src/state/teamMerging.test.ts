@@ -4,6 +4,7 @@ import {
   TeamClaimId,
   TeamId,
   TeamMemberId,
+  type TeamCombinedCheck,
   type TeamFeedTeam,
   type TeamMergeFile,
   type TeamMergePair,
@@ -14,6 +15,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { buildCatchUp } from "./teamHome.ts";
 import { fileHolders } from "./teamMarkers.ts";
 import {
+  combinedCheckOffered,
+  combinedSentence,
   fileMergeMark,
   fixIsForPair,
   foldedMergeLine,
@@ -232,6 +235,7 @@ describe("teamMerging", () => {
       other: onMain.other,
       label: "Update my copy",
       blocked: null,
+      anyway: false,
     });
     expect(mergeUpdateOffer({ ...onMain, bothChanged: [] })).toBeNull();
     expect(mergeUpdateOffer({ ...onMain, status: "clash" })).toBeNull();
@@ -255,6 +259,7 @@ describe("teamMerging", () => {
       other: { _tag: "chat", thread: LOGIN, title: "login", commit: "a1" },
       label: 'Update "search" on top of "login"',
       blocked: null,
+      anyway: false,
     });
     expect(
       mergeUpdateOffer({ ...chats, order: { first: "other", reason: "earlier" } })?.label,
@@ -270,6 +275,85 @@ describe("teamMerging", () => {
       startedAt: "2026-10-13T10:01:00.000Z",
     };
     expect(fixIsForPair(fix, chats)).toBe(true);
+  });
+
+  it("words the combined check, keeps its news unfolded, and offers Fix it and Update anyway", () => {
+    const at = "2026-10-14T10:00:00.000Z";
+    const clean = pair({
+      status: "clean",
+      files: [],
+      fileCount: 0,
+      bothChanged: [],
+    });
+    const withCheck = (combined: TeamCombinedCheck) => ({ ...clean, combined });
+    const base = { mineCommit: "a1", otherCommit: "b1", errors: [], errorCount: 0, checkedAt: at };
+    const renamed = withCheck({
+      ...base,
+      status: "broken",
+      command: "npm run typecheck",
+      errors: [
+        {
+          path: "app/src/api/me.ts",
+          line: 3,
+          message: "Cannot find name 'getUser'. Did you mean 'fetchUser'?",
+          name: "getUser",
+          suggestion: "fetchUser",
+          side: "mine",
+        },
+      ],
+      errorCount: 3,
+    });
+    const current = team([renamed]);
+    expect(combinedSentence(current, renamed, "app")).toBe(
+      "Combined with Sara's `search` branch, `getUser` is renamed (to `fetchUser`?) but still used in `src/api/me.ts` (yours). And 2 more new errors.",
+    );
+    expect(
+      combinedSentence(
+        current,
+        withCheck({
+          ...base,
+          status: "broken",
+          errors: [
+            { path: "app/src/x.ts", message: "Type 'string' is not assignable.", side: "other" },
+          ],
+          errorCount: 1,
+        }),
+        "app",
+      ),
+    ).toBe(
+      "Combined with Sara's `search` branch, a new error in `src/x.ts` (Sara's): Type 'string' is not assignable.",
+    );
+    expect(
+      combinedSentence(current, withCheck({ ...base, status: "skipped", skip: "memory" }), "app"),
+    ).toBe(
+      "Combined with Sara's `search` branch: not checked, less than 1.5 GB of memory is free.",
+    );
+    expect(
+      combinedSentence(
+        current,
+        withCheck({ ...base, status: "clean", command: "cargo check" }),
+        "app",
+      ),
+    ).toBe("Combined with Sara's `search` branch, `cargo check` finds nothing new.");
+    expect(combinedSentence(current, clean, "app")).toBeNull();
+
+    // A clean pair with news gets its own line; Fix it is open for new errors.
+    expect(foldMergePairs([clean, renamed]).shown).toEqual([renamed]);
+    expect(mergeFixBlocked(renamed)).toBeNull();
+    expect(mergeFixBlocked(clean)).toBe("It merges cleanly.");
+    expect(combinedCheckOffered(clean)).toBe(true);
+    expect(combinedCheckOffered(withCheck({ ...base, status: "running" }))).toBe(false);
+    expect(combinedCheckOffered(pair())).toBe(false);
+
+    const onMain = {
+      ...renamed,
+      other: { _tag: "base" as const, branch: "main", commit: "b1" },
+      bothChanged: ["app/src/api/routes.ts"],
+    };
+    expect(mergeUpdateOffer(onMain)).toMatchObject({ label: "Update anyway", anyway: true });
+    expect(
+      mergeUpdateOffer({ ...onMain, combined: { ...onMain.combined, status: "clean" } }),
+    ).toMatchObject({ label: "Update my copy", anyway: false });
   });
 
   it("says when a teammate pushed again since the check", () => {

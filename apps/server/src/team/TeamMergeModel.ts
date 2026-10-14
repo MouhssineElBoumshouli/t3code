@@ -12,6 +12,7 @@
  */
 import {
   TEAM_MERGE_LIMITS,
+  type TeamCombinedCheck,
   type TeamMergeMine,
   type TeamMergeOther,
   type TeamMergePair,
@@ -204,6 +205,31 @@ export function clashLine(input: {
     .map((pair) => `${otherSideOf(pair, input.threadId, input.nameOf)} in ${where(pair)}`)
     .join("; and with ");
   return `<team_merge>Merge check: this chat's work clashes with ${clashes}. Tell the user; they can choose "Fix it" on ${input.solo ? "Today" : "Team home"}.</team_merge>`;
+}
+
+/** Combined checks are kept by their two commits, either way round. */
+export const combinedKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
+const SWAPPED_SIDE = { mine: "other", other: "mine", both: "both", neither: "neither" } as const;
+
+/** A combined check as seen from `pair`: its sides swapped when it ran the other way round; undefined when it is for other commits. */
+export function orientCombined(
+  check: TeamCombinedCheck | undefined,
+  pair: Pick<TeamMergePair, "mine" | "other">,
+): TeamCombinedCheck | undefined {
+  if (check === undefined) return undefined;
+  if (check.mineCommit === pair.mine.commit && check.otherCommit === pair.other.commit) {
+    return check;
+  }
+  if (check.mineCommit !== pair.other.commit || check.otherCommit !== pair.mine.commit) {
+    return undefined;
+  }
+  return {
+    ...check,
+    mineCommit: check.otherCommit,
+    otherCommit: check.mineCommit,
+    errors: check.errors.map((error) => ({ ...error, side: SWAPPED_SIDE[error.side] })),
+  };
 }
 
 const STATUS_ORDER: Record<TeamMergeStatus, number> = { clash: 0, regenerate: 1, clean: 2 };

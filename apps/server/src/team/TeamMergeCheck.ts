@@ -32,6 +32,9 @@
  * chat's side is its merge commit until a newer checkpoint (a ref, so it
  * survives a restart).
  *
+ * The combined typecheck (`TeamCombineCheck`) stores its result here, by the
+ * two commits, and the view shows it on the pair while both stay.
+ *
  * Results live in memory; a restart checks again. Never touches a working copy.
  *
  * @module TeamMergeCheck
@@ -42,6 +45,7 @@ import {
   type OrchestrationV2ThreadShell,
   type ProjectId,
   type TeamClaim,
+  type TeamCombinedCheck,
   type TeamId,
   type TeamMemberId,
   type TeamMergeMine,
@@ -89,11 +93,13 @@ import {
   BoundedCache,
   type CheckedPair,
   clashLine,
+  combinedKey,
   newClashes,
   commitPairKey,
   isChangeOfState,
   mergingView,
   nextPair,
+  orientCombined,
   pairKey,
   type PairSides,
   swapChatPair,
@@ -139,6 +145,12 @@ export class TeamMergeCheck extends Context.Service<
     }) => Effect.Effect<void>;
     /** The turn-note line for clashes this chat was not told about yet; marks them told. */
     readonly takeClashLine: (threadId: ThreadId) => Effect.Effect<string | undefined>;
+    /** The project's team, its root, and the Git repo root. */
+    readonly placeOf: (projectId: ProjectId) => Effect.Effect<Option.Option<ProjectPlace>>;
+    /** A combined check's result (or that it runs), shown on its pair while both commits stay. */
+    readonly setCombined: (projectId: ProjectId, check: TeamCombinedCheck) => Effect.Effect<void>;
+    /** The combined check last stored for this pair, as seen from it. */
+    readonly combinedOf: (pair: TeamMergePair) => Effect.Effect<TeamCombinedCheck | undefined>;
   }
 >()("t3/team/TeamMergeCheck") {}
 
@@ -182,6 +194,12 @@ interface ProjectState {
   readonly pairs: ReadonlyMap<string, CheckedPair>;
   /** It had chats to check last time, so the base is polled for it. */
   readonly active: boolean;
+}
+
+export interface ProjectPlace {
+  readonly teamId: TeamId;
+  readonly teamRoot: string;
+  readonly repoRoot: string;
 }
 
 interface RefInfo {
@@ -228,11 +246,23 @@ export const make = Effect.gen(function* () {
       return gitProblem;
     });
 
+  /** Combined checks by their two commits (`combinedKey`). */
+  const combined = new BoundedCache<TeamCombinedCheck>(RESULT_CACHE_SIZE);
+  const withCombined = (checked: CheckedPair): CheckedPair => {
+    const { pair } = checked;
+    const check = orientCombined(
+      combined.get(combinedKey(pair.mine.commit, pair.other.commit)),
+      pair,
+    );
+    if (check === undefined) return checked;
+    return { ...checked, pair: { ...pair, combined: check } };
+  };
+
   const teamView = (teamId: TeamId) =>
     mergingView(
       [...byProject.values()]
         .filter((state) => state.teamId === teamId)
-        .flatMap((state) => [...state.pairs.values()]),
+        .flatMap((state) => [...state.pairs.values()].map(withCombined)),
       gitProblem ?? undefined,
     );
   const encodedView = (teamId: TeamId) => {
@@ -763,6 +793,27 @@ export const make = Effect.gen(function* () {
       });
     }).pipe(Effect.orElseSucceed(() => undefined));
 
+  const placeOfProject = (projectId: ProjectId) =>
+    projects.listShells().pipe(
+      Effect.flatMap((shells) => {
+        const project = shells.find((shell) => shell.id === projectId);
+        return project === undefined
+          ? Effect.succeed(Option.none<ProjectPlace>())
+          : placeOf(project);
+      }),
+      Effect.orElseSucceed(() => Option.none<ProjectPlace>()),
+    );
+
+  const setCombined = (projectId: ProjectId, check: TeamCombinedCheck) =>
+    Effect.gen(function* () {
+      const teamId = byProject.get(projectId)?.teamId;
+      const old = teamId === undefined ? "" : encodedView(teamId);
+      combined.set(combinedKey(check.mineCommit, check.otherCommit), check);
+      if (teamId !== undefined && encodedView(teamId) !== old) {
+        yield* PubSub.publish(changes, teamId);
+      }
+    });
+
   const uninstall = installTeamTurnNote(takeClashLine);
   yield* Effect.addFinalizer(() => Effect.sync(uninstall));
 
@@ -773,6 +824,12 @@ export const make = Effect.gen(function* () {
     findPair,
     useCommitUntilNextTurn,
     takeClashLine,
+    placeOf: placeOfProject,
+    setCombined,
+    combinedOf: (pair) =>
+      Effect.sync(() =>
+        orientCombined(combined.get(combinedKey(pair.mine.commit, pair.other.commit)), pair),
+      ),
   });
 });
 

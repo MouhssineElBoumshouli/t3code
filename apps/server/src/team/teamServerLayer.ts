@@ -20,6 +20,7 @@ import * as TeamCardsCleanup from "./TeamCardsCleanup.ts";
 import * as TeamChoices from "./TeamChoices.ts";
 import { TeamClaimAutoReleaseLive } from "./TeamClaimAutoRelease.ts";
 import * as TeamFeed from "./TeamFeed.ts";
+import * as TeamCombineCheck from "./TeamCombineCheck.ts";
 import * as TeamMergeCheck from "./TeamMergeCheck.ts";
 import * as TeamMergeFix from "./TeamMergeFix.ts";
 import { TeamGuardLive } from "./TeamGuard.ts";
@@ -43,6 +44,7 @@ export const layer = Layer.mergeAll(
   TeamFeed.layer,
 ).pipe(
   Layer.provideMerge(TeamMergeFix.layer),
+  Layer.provideMerge(TeamCombineCheck.layer),
   Layer.provideMerge(TeamMergeCheck.layer),
   Layer.provideMerge(TeamQuestions.layer),
   Layer.provideMerge(TeamNotes.layer),
