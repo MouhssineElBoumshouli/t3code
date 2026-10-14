@@ -35,6 +35,7 @@ import {
   TeamStateTeamNote as TeamStateTeamNoteSchema,
   type TeamTask,
   type TeamThreadRef,
+  type TeamClaimPullRequest,
   TEAM_AUTOMATIC_NOTE_MAX_FILES,
   TEAM_STATE_FORMAT,
   TEAM_STATE_LIMITS,
@@ -383,6 +384,7 @@ const toClaim = (team: TeamStateTeamFile, login: TeamLogin, claim: TeamStateClai
   note: claim.note,
   ...(claim.branch === undefined ? {} : { branch: claim.branch }),
   ...(claim.pushedCommit === undefined ? {} : { pushedCommit: claim.pushedCommit }),
+  ...(claim.pullRequest === undefined ? {} : { pullRequest: claim.pullRequest }),
   claimedAt: claim.claimedAt,
   releasedAt: claim.releasedAt,
 });
@@ -819,6 +821,8 @@ export const setClaimsPushed = (
     readonly thread: TeamThreadRef;
     readonly branch: string;
     readonly pushedCommit: string | undefined;
+    /** The branch's pull request (undefined: none synced); left as it is when not given. */
+    readonly pullRequest?: TeamClaimPullRequest | undefined;
   },
 ): TeamWriterFile => {
   let changed = false;
@@ -826,14 +830,24 @@ export const setClaimsPushed = (
     if (
       claim.releasedAt !== null ||
       claim.branch !== input.branch ||
-      !sameThread(claim.thread, input.thread) ||
-      claim.pushedCommit === input.pushedCommit
+      !sameThread(claim.thread, input.thread)
+    ) {
+      return claim;
+    }
+    const pullRequest = "pullRequest" in input ? input.pullRequest : claim.pullRequest;
+    if (
+      claim.pushedCommit === input.pushedCommit &&
+      JSON.stringify(claim.pullRequest) === JSON.stringify(pullRequest)
     ) {
       return claim;
     }
     changed = true;
-    const { pushedCommit: _old, ...rest } = claim;
-    return input.pushedCommit === undefined ? rest : { ...rest, pushedCommit: input.pushedCommit };
+    const { pushedCommit: _old, pullRequest: _oldPullRequest, ...rest } = claim;
+    return {
+      ...rest,
+      ...(input.pushedCommit === undefined ? {} : { pushedCommit: input.pushedCommit }),
+      ...(pullRequest === undefined ? {} : { pullRequest }),
+    };
   });
   return changed ? { ...file, claims } : file;
 };

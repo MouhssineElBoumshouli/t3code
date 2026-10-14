@@ -3,8 +3,11 @@
  * server's merge checks as lines: fixes under way first, then clashes and
  * files to regenerate, then clean pairs where both sides changed the same
  * file; other clean pairs fold into one line that opens on click. A clash
- * has "Fix it"; a fix whose turn ended has Approve and Undo. Used by Team
- * home / Today's "Merging" section and the presence popover. Times are
+ * has "Fix it"; a fix whose turn ended has Approve and Undo. A pair that
+ * clashes or overlaps says which side to merge first (section 4); a clean
+ * overlap with the base, or with the chat that goes first, offers an update
+ * (a rebase), and an update that stops on a conflict offers "Fix it". Used by
+ * Team home / Today's "Merging" section and the presence popover. Times are
  * worded when drawn; nothing ticks.
  */
 import { useAtomValue } from "@effect/atom-react";
@@ -18,8 +21,11 @@ import {
   foldMergePairs,
   mergeFixBlocked,
   mergeFixSentence,
+  mergeOrderSentence,
   mergePairPending,
   mergePairSentence,
+  type MergeUpdateOffer,
+  mergeUpdateOffer,
   projectMergeFixes,
   projectMergePairs,
 } from "@t3tools/client-runtime/state/teamMerging";
@@ -29,7 +35,9 @@ import type {
   TeamFeedTeam,
   TeamMergeFix,
   TeamMergeFixInput,
+  TeamMergeOther,
   TeamMergePair,
+  ThreadId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { Fragment, type ReactNode, useCallback, useState } from "react";
@@ -89,6 +97,7 @@ export function MergePairLine(props: {
 }) {
   const { team, pair } = props;
   const pending = mergePairPending(team, pair);
+  const order = mergeOrderSentence(team, pair);
   return (
     <li className="flex items-start gap-2 text-xs" data-team-merge={pair.status}>
       <span
@@ -108,14 +117,23 @@ export function MergePairLine(props: {
           {" "}
           · {pending ?? `checked ${formatRelativeTimeLabel(pair.checkedAt)}`}
         </span>
+        {order === null ? null : (
+          <span className="block text-muted-foreground">
+            <MergeSentence text={order} />
+          </span>
+        )}
         {props.action}
       </span>
     </li>
   );
 }
 
-/** "Fix it", Approve and Undo, one at a time; a failure, and where the merge went, as a toast. */
-function useMergeFixAction(environmentId: EnvironmentId) {
+/**
+ * "Fix it", Update, Approve and Undo, one at a time; a failure, where the
+ * merge went, and how an update ended, as a toast. `onUpdateConflict` hears
+ * an update that stopped on a conflict.
+ */
+function useMergeFixAction(environmentId: EnvironmentId, onUpdateConflict?: () => void) {
   const mergeFix = useAtomCommand(teamFeed.mergeFix, { reportFailure: false });
   const allowed = useAtomValue(teamFeed.mergeFix.permissionAtom(environmentId));
   const [pending, setPending] = useState(false);
@@ -134,8 +152,21 @@ function useMergeFixAction(environmentId: EnvironmentId) {
           });
           return;
         }
-        if (input._tag !== "approve") return;
         const outcome = result.value;
+        if (input._tag === "update") {
+          if (outcome.update === "conflict") onUpdateConflict?.();
+          toastManager.add(
+            outcome.update === "conflict"
+              ? {
+                  type: "warning",
+                  title: "Not updated: Git stopped on a conflict",
+                  description: outcome.detail ?? "Use Fix it to merge instead.",
+                }
+              : { type: "success", title: "Copy updated" },
+          );
+          return;
+        }
+        if (input._tag !== "approve") return;
         toastManager.add(
           outcome.push === "failed"
             ? {
@@ -153,7 +184,7 @@ function useMergeFixAction(environmentId: EnvironmentId) {
         );
       });
     },
-    [mergeFix, environmentId],
+    [mergeFix, environmentId, onUpdateConflict],
   );
   return { act, pending, allowed };
 }
@@ -243,14 +274,20 @@ function MergeFixLine(props: {
   );
 }
 
-/** "Fix it" for a clash or files to regenerate; disabled, with why, when it cannot run here. */
+/**
+ * "Fix it" for a clash or files to regenerate; disabled, with why, when it
+ * cannot run here. `afterConflict`: an update of this pair stopped on a
+ * conflict, so the fix merges in that chat, even though the pair merges cleanly.
+ */
 function FixItButton(props: {
   readonly environmentId: EnvironmentId;
   readonly pair: TeamMergePair;
+  readonly afterConflict?: { readonly threadId: ThreadId; readonly other: TeamMergeOther };
 }) {
   const { act, pending, allowed } = useMergeFixAction(props.environmentId);
-  if (props.pair.status === "clean" || !allowed) return null;
-  const blocked = mergeFixBlocked(props.pair);
+  const { afterConflict } = props;
+  if ((props.pair.status === "clean" && afterConflict === undefined) || !allowed) return null;
+  const blocked = afterConflict === undefined ? mergeFixBlocked(props.pair) : null;
   return (
     <>
       {" "}
@@ -267,14 +304,53 @@ function FixItButton(props: {
             {
               _tag: "start",
               projectId: props.pair.projectId,
-              threadId: props.pair.mine.thread.threadId,
-              other: props.pair.other,
+              threadId: afterConflict?.threadId ?? props.pair.mine.thread.threadId,
+              other: afterConflict?.other ?? props.pair.other,
             },
             "Could not start the fix",
           )
         }
       >
         Fix it
+      </Button>
+    </>
+  );
+}
+
+/** "Update my copy" / "Update "B" on top of "A"": a rebase, never during a turn or over uncommitted work. */
+function UpdateButton(props: {
+  readonly environmentId: EnvironmentId;
+  readonly pair: TeamMergePair;
+  readonly offer: MergeUpdateOffer;
+  readonly onConflict: () => void;
+}) {
+  const { offer } = props;
+  const { act, pending, allowed } = useMergeFixAction(props.environmentId, props.onConflict);
+  if (!allowed) return null;
+  return (
+    <>
+      {" "}
+      <Button
+        size="xs"
+        variant="outline"
+        disabled={pending || offer.blocked !== null}
+        title={
+          offer.blocked ??
+          "Moves the chat's branch on top of the other side (a rebase). Not while its agent works or with uncommitted changes."
+        }
+        onClick={() =>
+          act(
+            {
+              _tag: "update",
+              projectId: props.pair.projectId,
+              threadId: offer.threadId,
+              other: offer.other,
+            },
+            "Could not update",
+          )
+        }
+      >
+        {offer.label}
       </Button>
     </>
   );
@@ -289,18 +365,41 @@ export function MergePairList(props: {
   readonly pathPrefix: string;
 }) {
   const [open, setOpen] = useState(false);
+  // Pairs whose update stopped on a conflict, by key and checked commits: "Fix it" merges instead.
+  const [conflicted, setConflicted] = useState<ReadonlySet<string>>(() => new Set());
   const { shown, folded } = foldMergePairs(
     props.pairs.filter((pair) => !props.fixes.some((fix) => fixIsForPair(fix, pair))),
   );
-  const line = (pair: TeamMergePair) => (
-    <MergePairLine
-      key={mergePairKey(pair)}
-      team={props.team}
-      pair={pair}
-      pathPrefix={props.pathPrefix}
-      action={<FixItButton environmentId={props.environmentId} pair={pair} />}
-    />
-  );
+  const line = (pair: TeamMergePair) => {
+    const offer = mergeUpdateOffer(pair);
+    const conflictKey = `${mergePairKey(pair)}|${pair.mine.commit}|${pair.other.commit}`;
+    const afterConflict = offer !== null && conflicted.has(conflictKey) ? offer : undefined;
+    return (
+      <MergePairLine
+        key={mergePairKey(pair)}
+        team={props.team}
+        pair={pair}
+        pathPrefix={props.pathPrefix}
+        action={
+          <>
+            <FixItButton
+              environmentId={props.environmentId}
+              pair={pair}
+              {...(afterConflict === undefined ? {} : { afterConflict })}
+            />
+            {offer !== null && afterConflict === undefined ? (
+              <UpdateButton
+                environmentId={props.environmentId}
+                pair={pair}
+                offer={offer}
+                onConflict={() => setConflicted((keys) => new Set(keys).add(conflictKey))}
+              />
+            ) : null}
+          </>
+        }
+      />
+    );
+  };
   return (
     <ul className="flex flex-col gap-1.5">
       {props.fixes.map((fix) => (

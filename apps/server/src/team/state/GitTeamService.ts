@@ -227,6 +227,7 @@ const toClaim = (teamId: TeamId, login: TeamLogin, claim: TeamStateClaim): TeamC
   note: claim.note,
   ...(claim.branch === undefined ? {} : { branch: claim.branch }),
   ...(claim.pushedCommit === undefined ? {} : { pushedCommit: claim.pushedCommit }),
+  ...(claim.pullRequest === undefined ? {} : { pullRequest: claim.pullRequest }),
   claimedAt: claim.claimedAt,
   releasedAt: claim.releasedAt,
 });

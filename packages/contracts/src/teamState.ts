@@ -15,6 +15,7 @@ import {
   TeamActivityId,
   TeamActivityKind,
   TeamClaimId,
+  TeamClaimPullRequest,
   TeamHandoffId,
   TeamId,
   TeamPath,
@@ -79,6 +80,8 @@ export const TeamStateClaim = Schema.Struct({
    * branch is pushed, so a teammate can build on top of it (PREVENTION_PLAN.md 2).
    */
   pushedCommit: Schema.optionalKey(TrimmedNonEmptyString),
+  /** That branch's pull request as this server last synced it, for merge order (MERGE_HELP_PLAN.md 4). */
+  pullRequest: Schema.optionalKey(TeamClaimPullRequest),
   claimedAt: IsoDateTime,
   /** Null while the claim is active. */
   releasedAt: Schema.NullOr(IsoDateTime),

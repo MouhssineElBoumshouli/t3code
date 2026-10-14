@@ -113,11 +113,14 @@ const makeHarness = Effect.fn("makeTeamMergeFixHarness")(function* () {
     checkedAt: "2026-10-13T10:00:30.000Z",
   });
   const usedCommits = yield* Ref.make<ReadonlyArray<string>>([]);
+  /** The pair the merge check returns instead of the clash with Sara, when set. */
+  const pairOverride = yield* Ref.make<TeamMergePair | undefined>(undefined);
   const mergeCheck = TeamMergeCheck.TeamMergeCheck.of({
     forTeam: () => Effect.succeed(undefined),
     subscribeChanges: Effect.die("not used"),
     request: () => Effect.void,
-    findPair: (_projectId, threadId) => Effect.succeed(pair(threadId)),
+    findPair: (_projectId, threadId) =>
+      Ref.get(pairOverride).pipe(Effect.map((override) => override ?? pair(threadId))),
     useCommitUntilNextTurn: (input) => Ref.update(usedCommits, (all) => [...all, input.commit]),
     takeClashLine: () => Effect.succeed(undefined),
   });
@@ -181,6 +184,8 @@ const makeHarness = Effect.fn("makeTeamMergeFixHarness")(function* () {
     orchestration,
     turnTexts,
     usedCommits: Ref.get(usedCommits),
+    setPair: (next: TeamMergePair | undefined) => Ref.set(pairOverride, next),
+    pair,
     /** The service again, as after a server restart: it reads the saved fixes. */
     restarted: TeamMergeFix.make.pipe(Effect.provide(context)),
   };
@@ -278,6 +283,102 @@ describe("TeamMergeFix", () => {
       assert.equal((yield* again.forTeam(TEAM_ID))[0]?.status, "asking");
       yield* again.act({ _tag: "undo", threadId: THREAD_A });
       assert.equal(git(h.worktree, "rev-parse", "HEAD"), h.headBefore);
+    }),
+  );
+
+  it.effect(
+    "update moves a clean chat on top of main; never with uncommitted work or a clash",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        // `main` moved: a change to another file.
+        writeFile(h.root, "src/api/me.ts", "get /me\n");
+        const base = commitAll(h.root, "main: add me");
+        const onMain: TeamMergePair = {
+          ...h.pair(THREAD_A),
+          other: { _tag: "base", branch: "main", commit: base },
+          status: "clean",
+          files: [],
+          fileCount: 0,
+          bothChanged: [ROUTES],
+        };
+        yield* h.setPair(onMain);
+        const update = h.fixes.act({
+          _tag: "update",
+          projectId: PROJECT_ID,
+          threadId: THREAD_A,
+          other: onMain.other,
+        });
+
+        // The chat's work is uncommitted: nothing moves.
+        assert.include((yield* Effect.flip(update)).detail, "uncommitted changes");
+        assert.equal(git(h.worktree, "rev-parse", "HEAD"), h.headBefore);
+
+        // A turn runs: not now either.
+        const mine = commitAll(h.worktree, "Trim the search route");
+        yield* TeamOrchestrator.setRun({
+          threadId: THREAD_A,
+          runId: RunId.make("run-busy"),
+          ordinal: 1,
+          status: "running",
+        }).pipe(Effect.provide(h.orchestration));
+        assert.include((yield* Effect.flip(update)).detail, "agent is working");
+        yield* TeamOrchestrator.setRun({
+          threadId: THREAD_A,
+          runId: RunId.make("run-busy"),
+          ordinal: 1,
+          status: "completed",
+        }).pipe(Effect.provide(h.orchestration));
+
+        assert.deepEqual(yield* update, { update: "updated" });
+        const head = git(h.worktree, "rev-parse", "HEAD");
+        assert.notEqual(head, mine);
+        assert.equal(git(h.worktree, "merge-base", base, "HEAD"), base);
+        assert.equal(read(h.worktree, "src/api/me.ts"), "get /me\n");
+        assert.equal(read(h.worktree, ROUTES), "get /search/trimmed\nget /login\n");
+        // The merge check reads the moved copy until the chat's next turn.
+        assert.deepEqual(yield* h.usedCommits, [head]);
+
+        yield* h.setPair({ ...onMain, status: "clash" });
+        assert.include((yield* Effect.flip(update)).detail, "Use Fix it");
+      }),
+  );
+
+  it.effect("an update that stops on a conflict changes nothing, and Fix it merges instead", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      writeFile(h.root, ROUTES, "get /search/all\nget /login\n");
+      const base = commitAll(h.root, "main: search all");
+      const mine = commitAll(h.worktree, "Trim the search route");
+      // Checked clean, but replaying the chat's commit conflicts.
+      const onMain: TeamMergePair = {
+        ...h.pair(THREAD_A),
+        other: { _tag: "base", branch: "main", commit: base },
+        status: "clean",
+        files: [],
+        fileCount: 0,
+        bothChanged: [ROUTES],
+      };
+      yield* h.setPair(onMain);
+      const result = yield* h.fixes.act({
+        _tag: "update",
+        projectId: PROJECT_ID,
+        threadId: THREAD_A,
+        other: onMain.other,
+      });
+      assert.equal(result.update, "conflict");
+      assert.include(result.detail, "Fix it");
+      assert.equal(git(h.worktree, "rev-parse", "HEAD"), mine);
+      assert.equal(git(h.worktree, "status", "--porcelain"), "");
+
+      yield* h.fixes.act({
+        _tag: "start",
+        projectId: PROJECT_ID,
+        threadId: THREAD_A,
+        other: onMain.other,
+      });
+      assert.include(read(h.worktree, ROUTES), "<<<<<<< ");
+      assert.equal((yield* h.fixes.forTeam(TEAM_ID))[0]?.status, "working");
     }),
   );
 

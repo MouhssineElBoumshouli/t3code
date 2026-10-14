@@ -66,6 +66,27 @@ export const TeamMergeOther = Schema.Union([
 ]);
 export type TeamMergeOther = typeof TeamMergeOther.Type;
 
+/**
+ * Merge order (MERGE_HELP_PLAN.md section 4): the rule that decided which
+ * side to merge first. `earlier`: started earlier (a teammate's branch) or
+ * finished first (two chats). `tie`: nothing told them apart.
+ */
+export const TeamMergeOrderReason = Schema.Literals([
+  "pullRequestOpen",
+  "checksGreen",
+  "approved",
+  "smaller",
+  "earlier",
+  "tie",
+]);
+export type TeamMergeOrderReason = typeof TeamMergeOrderReason.Type;
+
+export const TeamMergeOrder = Schema.Struct({
+  first: Schema.Literals(["mine", "other"]),
+  reason: TeamMergeOrderReason,
+});
+export type TeamMergeOrder = typeof TeamMergeOrder.Type;
+
 export const TeamMergePair = Schema.Struct({
   projectId: ProjectId,
   mine: TeamMergeMine,
@@ -77,6 +98,8 @@ export const TeamMergePair = Schema.Struct({
   fileCount: NonNegativeInt,
   /** A clean pair: files both sides changed, which Git merged; capped. Empty otherwise. */
   bothChanged: Schema.Array(TeamPath),
+  /** Which to merge first, for a clashing or overlapping pair with a teammate's branch or a chat. */
+  order: Schema.optionalKey(TeamMergeOrder),
   /** The status before the last change of state; null when first seen. */
   previous: Schema.NullOr(TeamMergeStatus),
   /** When this status began: the newer side's commit time. */
@@ -126,12 +149,23 @@ export const TEAM_MERGE_LIMITS = {
   files: 10,
 } as const;
 
-/** What the person does with a clash: start a fix, then approve or undo it. */
+/**
+ * What the person does with a pair: start a fix, then approve or undo it; or
+ * update a chat's copy (a rebase) on top of the other side once that side is
+ * first (the base after a merge, or the chat that finished first).
+ */
 export const TeamMergeFixInput = Schema.Union([
   Schema.TaggedStruct("start", {
     projectId: ProjectId,
-    /** The pair's chat (its `mine` side). */
+    /** The chat to fix: the pair's `mine` side, or for two chats either one. */
     threadId: ThreadId,
+    other: TeamMergeOther,
+  }),
+  Schema.TaggedStruct("update", {
+    projectId: ProjectId,
+    /** The chat whose copy moves: the pair's `mine` side, or for two chats either one. */
+    threadId: ThreadId,
+    /** What it moves on top of: the base or another chat. */
     other: TeamMergeOther,
   }),
   Schema.TaggedStruct("approve", { threadId: ThreadId }),
@@ -142,6 +176,8 @@ export type TeamMergeFixInput = typeof TeamMergeFixInput.Type;
 export const TeamMergeFixResult = Schema.Struct({
   /** After approve: what happened to the push. */
   push: Schema.optionalKey(Schema.Literals(["pushed", "notPushed", "failed"])),
+  /** After update: moved, or Git stopped on a conflict and nothing changed. */
+  update: Schema.optionalKey(Schema.Literals(["updated", "conflict"])),
   /** A sentence for the person, e.g. why the push failed. */
   detail: Schema.optionalKey(Schema.String),
 });

@@ -20,8 +20,10 @@ import {
   foldMergePairs,
   mergeFixBlocked,
   mergeFixSentence,
+  mergeOrderSentence,
   mergePairPending,
   mergePairSentence,
+  mergeUpdateOffer,
   projectMergePairs,
   viewerMergePairs,
 } from "./teamMerging.ts";
@@ -197,6 +199,77 @@ describe("teamMerging", () => {
     expect(mergeFixBlocked(pair({ mine: { ...pair().mine, worktree: false } }))).toContain(
       "shared checkout",
     );
+  });
+
+  it("words the merge order from the pair's side", () => {
+    expect(mergeOrderSentence(team([]), pair())).toBeNull();
+    expect(
+      mergeOrderSentence(team([]), pair({ order: { first: "other", reason: "checksGreen" } })),
+    ).toBe("Merge Sara's `search` branch first; its checks are green.");
+    expect(
+      mergeOrderSentence(team([]), pair({ order: { first: "mine", reason: "earlier" } })),
+    ).toBe('Merge your "login" chat first; it started earlier.');
+    const chats = pair({
+      other: { _tag: "chat", thread: SEARCH, title: "search", commit: "c1" },
+      order: { first: "other", reason: "earlier" },
+    });
+    expect(mergeOrderSentence(team([]), chats)).toBe('Merge "search" first; it finished first.');
+    expect(
+      mergeOrderSentence(team([]), { ...chats, order: { first: "mine", reason: "tie" } }),
+    ).toBe('Merge "login" first.');
+  });
+
+  it("offers an update on top of the base or the chat that goes first, never over a clash", () => {
+    const onMain = pair({
+      other: { _tag: "base", branch: "main", commit: "m1" },
+      status: "clean",
+      files: [],
+      fileCount: 0,
+      bothChanged: ["app/src/api/routes.ts"],
+    });
+    expect(mergeUpdateOffer(onMain)).toEqual({
+      threadId: LOGIN.threadId,
+      other: onMain.other,
+      label: "Update my copy",
+      blocked: null,
+    });
+    expect(mergeUpdateOffer({ ...onMain, bothChanged: [] })).toBeNull();
+    expect(mergeUpdateOffer({ ...onMain, status: "clash" })).toBeNull();
+    expect(
+      mergeUpdateOffer({ ...onMain, mine: { ...onMain.mine, worktree: false } })?.blocked,
+    ).toContain("shared checkout");
+    // A teammate's branch merges first; the update comes on the base pair after.
+    expect(mergeUpdateOffer({ ...onMain, other: pair().other })).toBeNull();
+
+    const chats = pair({
+      other: { _tag: "chat", thread: SEARCH, title: "search", commit: "c1" },
+      status: "clean",
+      files: [],
+      fileCount: 0,
+      bothChanged: ["app/src/greet.ts"],
+      order: { first: "mine", reason: "earlier" },
+    });
+    // "login" finished first: "search" moves on top of it.
+    expect(mergeUpdateOffer(chats)).toEqual({
+      threadId: SEARCH.threadId,
+      other: { _tag: "chat", thread: LOGIN, title: "login", commit: "a1" },
+      label: 'Update "search" on top of "login"',
+      blocked: null,
+    });
+    expect(
+      mergeUpdateOffer({ ...chats, order: { first: "other", reason: "earlier" } })?.label,
+    ).toBe('Update "login" on top of "search"');
+    // A fix started from the other chat still belongs to the pair.
+    const fix = {
+      projectId: PROJECT,
+      mine: { thread: SEARCH, title: "search", worktree: true, commit: "c1" },
+      other: { _tag: "chat" as const, thread: LOGIN, title: "login", commit: "a1" },
+      status: "working" as const,
+      files: [],
+      savedWork: false,
+      startedAt: "2026-10-13T10:01:00.000Z",
+    };
+    expect(fixIsForPair(fix, chats)).toBe(true);
   });
 
   it("says when a teammate pushed again since the check", () => {

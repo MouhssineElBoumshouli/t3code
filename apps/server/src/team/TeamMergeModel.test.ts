@@ -22,6 +22,8 @@ import {
   nextPair,
   pairKey,
   type PairSides,
+  swapChatPair,
+  wantsOrder,
 } from "./TeamMergeModel.ts";
 
 const PROJECT = ProjectId.make("project-1");
@@ -245,4 +247,30 @@ describe("TeamMergeModel", () => {
       assert.deepEqual(log, ["start a", "end a", "start b", "end b"]);
     }).pipe(Effect.scoped),
   );
+
+  it("orders only clashing or overlapping pairs with a branch or a chat; swaps a chat pair", () => {
+    const pair = step(undefined, sides("a1", "b1", "2026-10-13T10:00:00.000Z"), CLASH).pair;
+    assert.isTrue(wantsOrder(pair));
+    assert.isFalse(wantsOrder({ ...pair, status: "clean", bothChanged: [] }));
+    assert.isTrue(wantsOrder({ ...pair, status: "clean", bothChanged: ["src/routes.ts"] }));
+    assert.isFalse(wantsOrder({ ...pair, other: { _tag: "base", branch: "main", commit: "m1" } }));
+
+    assert.isUndefined(swapChatPair(pair));
+    const other = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("search") };
+    const chats = {
+      ...pair,
+      other: { _tag: "chat" as const, thread: other, title: "search", commit: "c1" },
+      order: { first: "mine" as const, reason: "earlier" as const },
+    };
+    const swapped = swapChatPair(chats);
+    assert.equal(swapped?.mine.thread.threadId, "search");
+    assert.equal(swapped?.mine.commit, "c1");
+    assert.deepEqual(swapped?.other, {
+      _tag: "chat",
+      thread: pair.mine.thread,
+      title: "login",
+      commit: "a1",
+    });
+    assert.deepEqual(swapped?.order, { first: "other", reason: "earlier" });
+  });
 });

@@ -10,6 +10,7 @@ import type {
   TeamFeedTeam,
   TeamMergeFile,
   TeamMergeFix,
+  TeamMergeOrderReason,
   TeamMergeOther,
   TeamMergePair,
   ThreadId,
@@ -160,9 +161,13 @@ const sameOther = (a: TeamMergeOther, b: TeamMergeOther) => {
   }
 };
 
-/** Whether the fix is for this pair: its chat and the same other side. */
+/** Whether the fix is for this pair: its chat and the same other side; two chats either way round. */
 export const fixIsForPair = (fix: TeamMergeFix, pair: TeamMergePair) =>
-  fix.mine.thread.threadId === pair.mine.thread.threadId && sameOther(fix.other, pair.other);
+  (fix.mine.thread.threadId === pair.mine.thread.threadId && sameOther(fix.other, pair.other)) ||
+  (pair.other._tag === "chat" &&
+    fix.other._tag === "chat" &&
+    fix.mine.thread.threadId === pair.other.thread.threadId &&
+    fix.other.thread.threadId === pair.mine.thread.threadId);
 
 /**
  * Whether "Fix it" can start for the pair; otherwise why not. A fix runs in
@@ -174,6 +179,91 @@ export function mergeFixBlocked(pair: TeamMergePair): string | null {
     return "This chat works in the shared checkout, where a merge would change every chat there. Merge it by hand.";
   }
   return null;
+}
+
+const ORDER_REASONS: Record<Exclude<TeamMergeOrderReason, "tie" | "earlier">, string> = {
+  pullRequestOpen: "it has an open pull request",
+  checksGreen: "its checks are green",
+  approved: "it is approved and mergeable",
+  smaller: "its change is smaller",
+};
+
+/**
+ * The suggested merge order (MERGE_HELP_PLAN.md section 4): "Merge Sara's
+ * `search` branch first; its checks are green." Null when the pair has none.
+ */
+export function mergeOrderSentence(team: TeamFeedTeam, pair: TeamMergePair): string | null {
+  const order = pair.order;
+  if (order === undefined) return null;
+  const other = pair.other;
+  const first =
+    order.first === "mine"
+      ? other._tag === "chat"
+        ? `"${pair.mine.title}"`
+        : `your "${pair.mine.title}" chat`
+      : other._tag === "chat"
+        ? `"${other.title}"`
+        : other._tag === "branch"
+          ? `${memberName(team, other.memberId)}'s ${code(other.branch)} branch`
+          : code(other.branch);
+  const reason =
+    order.reason === "tie"
+      ? null
+      : order.reason === "earlier"
+        ? other._tag === "chat"
+          ? "it finished first"
+          : "it started earlier"
+        : ORDER_REASONS[order.reason];
+  return `Merge ${first} first${reason === null ? "" : `; ${reason}`}.`;
+}
+
+/** "Update my copy": which chat moves on top of what, the button's words, and why not when it cannot. */
+export interface MergeUpdateOffer {
+  readonly threadId: ThreadId;
+  readonly other: TeamMergeOther;
+  readonly label: string;
+  readonly blocked: string | null;
+}
+
+/**
+ * Whether a chat can move on top of the other side (a rebase), once that side
+ * is first and they overlap without a clash:
+ * - the base, after it took in work that touches this chat's files ("Update my copy");
+ * - two chats: the one to merge second moves on top of the first.
+ * A teammate's branch is merged first, then the base pair offers the update.
+ */
+export function mergeUpdateOffer(pair: TeamMergePair): MergeUpdateOffer | null {
+  if (pair.status !== "clean" || pair.bothChanged.length === 0) return null;
+  const other = pair.other;
+  if (other._tag === "base") {
+    return {
+      threadId: pair.mine.thread.threadId,
+      other,
+      label: "Update my copy",
+      blocked: pair.mine.worktree
+        ? null
+        : "This chat works in the shared checkout, where an update would move every chat there. Update it by hand.",
+    };
+  }
+  if (other._tag !== "chat" || pair.order === undefined) return null;
+  return pair.order.first === "mine"
+    ? {
+        threadId: other.thread.threadId,
+        other: {
+          _tag: "chat",
+          thread: pair.mine.thread,
+          title: pair.mine.title,
+          commit: pair.mine.commit,
+        },
+        label: `Update "${other.title}" on top of "${pair.mine.title}"`,
+        blocked: null,
+      }
+    : {
+        threadId: pair.mine.thread.threadId,
+        other,
+        label: `Update "${pair.mine.title}" on top of "${other.title}"`,
+        blocked: null,
+      };
 }
 
 /** One line for a fix: what is being merged, and what the person does next. */

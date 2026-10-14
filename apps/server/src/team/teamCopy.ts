@@ -25,7 +25,7 @@ export type CopyMove =
 
 export interface MoveCopyInput {
   readonly folder: string;
-  /** `git fetch` arguments after `fetch --quiet`. */
+  /** `git fetch` arguments after `fetch --quiet`; empty when the commit is already here. */
   readonly fetch: ReadonlyArray<string>;
   /** The commit to move onto once fetched, e.g. `origin/main`; a function to read it after the fetch. */
   readonly onto: string | ((run: Run) => Effect.Effect<string | undefined, GitCommandError>);
@@ -51,7 +51,10 @@ export const moveCopyOnto = (git: GitVcsDriver.GitVcsDriver["Service"], input: M
     const status = yield* run(["status", "--porcelain"]);
     if (status.exitCode !== 0) return { status: "unavailable" } as CopyMove;
     if (status.stdout.trim().length > 0) return { status: "dirty" } as CopyMove;
-    if ((yield* run(["fetch", "--quiet", ...input.fetch])).exitCode !== 0) {
+    if (
+      input.fetch.length > 0 &&
+      (yield* run(["fetch", "--quiet", ...input.fetch])).exitCode !== 0
+    ) {
       return { status: "unavailable" } as CopyMove;
     }
     const onto = typeof input.onto === "string" ? input.onto : yield* input.onto(run);

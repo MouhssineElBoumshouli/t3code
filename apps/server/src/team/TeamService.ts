@@ -32,6 +32,7 @@ import type {
   TeamTaskId,
   TeamTaskStatus,
   TeamThreadRef,
+  TeamClaimPullRequest,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -280,9 +281,9 @@ export class TeamService extends Context.Service<
       options?: { readonly thread?: TeamThreadRef; readonly limit?: number },
     ) => Effect.Effect<ReadonlyArray<TeamHandoff>, TeamServiceError>;
     /**
-     * Records where the thread's branch is on `origin` (undefined: not pushed)
-     * on this server's active claims of that thread and branch. Shared only
-     * when it changed.
+     * Records where the thread's branch is on `origin` (undefined: not pushed),
+     * and its pull request when given, on this server's active claims of that
+     * thread and branch. Shared only when it changed.
      */
     readonly setClaimsPushed: (input: {
       readonly teamId: TeamId;
@@ -290,6 +291,7 @@ export class TeamService extends Context.Service<
       readonly thread: TeamThreadRef;
       readonly branch: string;
       readonly pushedCommit: string | undefined;
+      readonly pullRequest?: TeamClaimPullRequest | undefined;
     }) => Effect.Effect<void, TeamServiceError>;
     /** "Ask" on the warning card: writes an open question, shared at once. */
     readonly askQuestion: (

@@ -13,6 +13,12 @@
  *     tell a teammate whose branch was merged with a team note.
  *   - Undo: back to the state before the fix.
  *
+ * Update (MERGE_HELP_PLAN.md sections 4 and 6): once the other side is first
+ * (the base after a merge, or the chat that finished first), a chat's own
+ * worktree moves on top of it with Wait's rebase (`teamCopy`): never while
+ * its turn runs or with uncommitted changes. A rebase that stops on a
+ * conflict is aborted and the person is sent to "Fix it", which then merges.
+ *
  * Fixes waiting are kept in `<stateDir>/team/merge-fixes.json`, so a restart
  * still offers Approve and Undo. The team feed shows them (`forTeam`).
  *
@@ -60,6 +66,7 @@ import { forkParked } from "../serverActivation.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { sameThread } from "./heldElsewhere.ts";
 import { approveMerge, startMerge, undoMerge } from "./mergeFixGit.ts";
+import { moveCopyOnto } from "./teamCopy.ts";
 import { buildMergeFixPrompt, type MergeFixSide } from "./mergeFixPrompt.ts";
 import { diffToTeamPaths } from "./TeamAutoNotes.ts";
 import * as TeamMergeCheck from "./TeamMergeCheck.ts";
@@ -268,7 +275,8 @@ export const make = Effect.gen(function* () {
         input.threadId,
         input.other,
       );
-      if (pair === undefined || pair.status === "clean") {
+      // A clean pair too: after an update stopped on a conflict, a merge goes through.
+      if (pair === undefined) {
         return yield* fail("This clash is gone or was not checked yet. Look again in a moment.");
       }
       const context = yield* contextOf(input.threadId);
@@ -374,6 +382,94 @@ export const make = Effect.gen(function* () {
       });
       yield* changed(teamId);
       return {};
+    });
+
+  /** Moves the chat's own worktree on top of the other side: the base or another chat. */
+  const update = (input: Extract<TeamMergeFixInput, { _tag: "update" }>) =>
+    Effect.gen(function* () {
+      const pair = yield* mergeCheck.findPair(input.projectId, input.threadId, input.other);
+      if (pair === undefined) {
+        return yield* fail("This pair is gone or was not checked yet. Look again in a moment.");
+      }
+      if (pair.other._tag === "branch") {
+        return yield* fail(
+          "A teammate's branch is merged first; then this chat updates on `main`.",
+        );
+      }
+      if (pair.status !== "clean") {
+        return yield* fail("These clash, so an update would stop on a conflict. Use Fix it.");
+      }
+      if (fixes.has(input.threadId)) return yield* fail("A fix is waiting in this chat.");
+      const shell = yield* orchestrator
+        .getThreadShell(input.threadId)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (shell === null || shell.archivedAt !== null)
+        return yield* fail("This chat was not found.");
+      if (shell.worktreePath === null) {
+        return yield* fail(
+          "This chat works in the shared checkout, where an update would move every chat there. Update it by hand.",
+        );
+      }
+      if (shell.activeRunId !== null) {
+        return yield* fail("This chat's agent is working. Try again when its turn ends.");
+      }
+      const context = yield* contextOf(input.threadId);
+      const repoRoot = yield* findRepoRoot(context.teamRoot).pipe(
+        Effect.provide(fileContext),
+        Effect.orElseSucceed(() => Option.none<string>()),
+      );
+      if (Option.isNone(repoRoot)) return yield* fail("The project's Git repo was not found.");
+
+      const moved = yield* moveCopyOnto(git, {
+        folder: shell.worktreePath,
+        fetch: [],
+        onto: pair.other.commit,
+        paths: [],
+        operation: "TeamMergeFix.update",
+      });
+      switch (moved.status) {
+        case "dirty":
+          return yield* fail(
+            "This chat has uncommitted changes. Commit them (or ask its agent to), then update.",
+          );
+        case "unavailable":
+          return yield* fail("Git could not update this chat's copy.");
+        case "conflict":
+          yield* Effect.logInfo("Team merge update stopped on a conflict.", {
+            threadId: input.threadId,
+          });
+          return {
+            update: "conflict" as const,
+            detail:
+              "Git stopped on a conflict while moving this chat's commits, so nothing changed. Fix it merges the two instead.",
+          };
+        case "updated": {
+          const head = yield* git
+            .execute({
+              operation: "TeamMergeFix.update",
+              cwd: shell.worktreePath,
+              args: ["rev-parse", "HEAD"],
+            })
+            .pipe(
+              Effect.map((result) => result.stdout.trim()),
+              Effect.orElseSucceed(() => ""),
+            );
+          // Its last checkpoint is from before the move; the new HEAD stands for it until its next turn.
+          if (head.length > 0) {
+            yield* mergeCheck.useCommitUntilNextTurn({
+              projectId: input.projectId,
+              threadId: input.threadId,
+              repoRoot: repoRoot.value,
+              commit: head,
+            });
+          }
+          yield* Effect.logInfo("Team merge update moved a chat's copy.", {
+            threadId: input.threadId,
+            onto: pair.other.commit,
+          });
+          return { update: "updated" as const };
+        }
+      }
     });
 
   /** The fix, once its turn has ended; Undo also while the agent waits for an answer. */
@@ -541,9 +637,11 @@ export const make = Effect.gen(function* () {
     lock.withPermits(1)(
       input._tag === "start"
         ? start(input)
-        : input._tag === "approve"
-          ? approve(input.threadId)
-          : undo(input.threadId),
+        : input._tag === "update"
+          ? update(input)
+          : input._tag === "approve"
+            ? approve(input.threadId)
+            : undo(input.threadId),
     );
 
   return TeamMergeFix.of({ act, forTeam, subscribeChanges: PubSub.subscribe(changes) });

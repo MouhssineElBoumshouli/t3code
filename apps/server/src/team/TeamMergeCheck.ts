@@ -21,6 +21,11 @@
  * - Git older than 2.38 has no `merge-tree --write-tree`: nothing is checked
  *   and the feed says why.
  *
+ * A clashing or overlapping pair with a teammate's branch or another chat
+ * gets a merge order (`mergeOrder`): the teammate's side from their claims
+ * (pull request, when they started), this server's chats from their own
+ * pull request and claims; two chats by which finished first.
+ *
  * The chat's turn note gets one line when a new clash appears for it (each
  * clash once), so the agent tells the person. After an approved fix, the
  * chat's side is its merge commit until a newer checkpoint (a ref, so it
@@ -35,9 +40,11 @@ import {
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadShell,
   type ProjectId,
+  type TeamClaim,
   type TeamId,
   type TeamMemberId,
   type TeamMergeMine,
+  type TeamMergeOrder,
   type TeamMergeOther,
   type TeamMergePair,
   TeamMerging,
@@ -75,6 +82,7 @@ import {
 } from "./mergeTree.ts";
 import { soloTeamIdOf } from "./state/SoloTeam.ts";
 import { diffToTeamPaths } from "./TeamAutoNotes.ts";
+import { claimPullRequestOf, mergeOrder, type MergeOrderSide } from "./mergeOrder.ts";
 import {
   BoundedCache,
   type CheckedPair,
@@ -86,6 +94,8 @@ import {
   nextPair,
   pairKey,
   type PairSides,
+  swapChatPair,
+  wantsOrder,
 } from "./TeamMergeModel.ts";
 import { findRepoRoot, findTeamFile } from "./TeamProjectFiles.ts";
 import * as TeamService from "./TeamService.ts";
@@ -112,7 +122,7 @@ export class TeamMergeCheck extends Context.Service<
     readonly subscribeChanges: Effect.Effect<PubSub.Subscription<TeamId>, never, Scope.Scope>;
     /** Checks the project in the next batch. */
     readonly request: (projectId: ProjectId) => Effect.Effect<void>;
-    /** The pair of this chat and that other side, as last checked. */
+    /** The pair of this chat and that other side, as last checked; two chats from either one. */
     readonly findPair: (
       projectId: ProjectId,
       threadId: ThreadId,
@@ -418,9 +428,11 @@ export const make = Effect.gen(function* () {
 
       // Theirs: teammates' pushed branches, and the base.
       const peerRefs: Array<{ memberId: TeamMemberId; branch: string; ref: string }> = [];
+      const teamClaims: ReadonlyArray<TeamClaim> =
+        !solo && Option.isSome(me) ? yield* teams.listActiveClaims(teamId) : [];
       if (!solo && Option.isSome(me)) {
         const seen = new Set<string>();
-        const claims = (yield* teams.listActiveClaims(teamId)).toReversed();
+        const claims = teamClaims.toReversed();
         for (const claim of claims) {
           if (claim.memberId === me.value.memberId) continue;
           if (claim.branch === undefined || claim.pushedCommit === undefined) continue;
@@ -520,6 +532,58 @@ export const make = Effect.gen(function* () {
         }
       }
 
+      // Merge order: both people read the same claims, so both servers suggest the same side.
+      const shells = new Map(mineRefs.map(({ thread }) => [thread.id as string, thread]));
+      const earliest = (claims: ReadonlyArray<TeamClaim>) =>
+        claims.map((claim) => claim.claimedAt).toSorted()[0];
+      const mineOrderSide = (thread: OrchestrationV2ThreadShell): MergeOrderSide => ({
+        key: Option.isSome(me) ? me.value.memberId : thread.title,
+        pullRequest: claimPullRequestOf(thread.pullRequests),
+        at:
+          earliest(
+            teamClaims.filter(
+              (claim) =>
+                claim.thread.environmentId === environmentId && claim.thread.threadId === thread.id,
+            ),
+          ) ?? DateTime.formatIso(thread.createdAt),
+      });
+      const chatOrderSide = (thread: OrchestrationV2ThreadShell): MergeOrderSide => ({
+        key: thread.title,
+        pullRequest: claimPullRequestOf(thread.pullRequests),
+        at:
+          thread.activeRunId === null && thread.latestRunCompletedAt != null
+            ? DateTime.formatIso(thread.latestRunCompletedAt)
+            : null,
+      });
+      const orderOf = (pair: TeamMergePair): TeamMergeOrder | undefined => {
+        if (!wantsOrder(pair)) return undefined;
+        const mineShell = shells.get(pair.mine.thread.threadId);
+        if (mineShell === undefined) return undefined;
+        const other = pair.other;
+        let sides: readonly [MergeOrderSide, MergeOrderSide];
+        if (other._tag === "chat") {
+          const otherShell = shells.get(other.thread.threadId);
+          if (otherShell === undefined) return undefined;
+          sides = [chatOrderSide(mineShell), chatOrderSide(otherShell)];
+        } else if (other._tag === "branch") {
+          const theirs = teamClaims
+            .filter((claim) => claim.memberId === other.memberId && claim.branch === other.branch)
+            .toSorted((a, b) => a.claimedAt.localeCompare(b.claimedAt));
+          sides = [
+            mineOrderSide(mineShell),
+            {
+              key: other.memberId,
+              pullRequest: theirs.findLast((claim) => claim.pullRequest)?.pullRequest ?? null,
+              at: theirs[0]?.claimedAt ?? null,
+            },
+          ];
+        } else {
+          return undefined;
+        }
+        const decided = mergeOrder(sides[0], sides[1]);
+        return { first: decided.first === "a" ? "mine" : "other", reason: decided.reason };
+      };
+
       const now = DateTime.formatIso(yield* DateTime.now);
       const toTeamPath = (repoPath: string) =>
         diffToTeamPaths(path, [repoPath], repoRoot, teamRoot)[0];
@@ -535,7 +599,13 @@ export const make = Effect.gen(function* () {
           results.set(cacheKey, result);
         }
         if (result === null) continue;
-        const checked = nextPair({ previous, sides, result, toTeamPath, now });
+        const fresh = nextPair({ previous, sides, result, toTeamPath, now });
+        const { order: _order, ...unordered } = fresh.pair;
+        const order = orderOf(unordered);
+        const checked: CheckedPair = {
+          ...fresh,
+          pair: order === undefined ? unordered : { ...unordered, order },
+        };
         if (previous !== undefined && isChangeOfState(previous, checked.pair.status)) {
           yield* Effect.logInfo("Team merge check: a pair changed.", {
             pair: key,
@@ -628,10 +698,11 @@ export const make = Effect.gen(function* () {
       const pairs = byProject.get(projectId)?.pairs;
       if (pairs === undefined) return undefined;
       for (const checked of pairs.values()) {
-        const pair = checked.pair;
-        if (pair.mine.thread.threadId !== threadId) continue;
-        if (pairKey(projectId, pair.mine, other) === pairKey(projectId, pair.mine, pair.other)) {
-          return pair;
+        for (const pair of [checked.pair, swapChatPair(checked.pair)]) {
+          if (pair === undefined || pair.mine.thread.threadId !== threadId) continue;
+          if (pairKey(projectId, pair.mine, other) === pairKey(projectId, pair.mine, pair.other)) {
+            return pair;
+          }
         }
       }
       return undefined;

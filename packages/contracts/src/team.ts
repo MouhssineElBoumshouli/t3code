@@ -6,7 +6,15 @@
  */
 import * as Schema from "effect/Schema";
 
-import { EnvironmentId, IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+import { PullRequestChecksState, PullRequestState } from "./pullRequest.ts";
 
 /** Folder at the project root that holds the team's checked-in files. */
 export const TEAM_DIRECTORY_NAME = ".team";
@@ -84,6 +92,19 @@ export const TeamThreadRef = Schema.Struct({
 });
 export type TeamThreadRef = typeof TeamThreadRef.Type;
 
+/** The claiming chat's pull request, as merge order reads it (team/MERGE_HELP_PLAN.md section 4). */
+export const TeamClaimPullRequest = Schema.Struct({
+  number: PositiveInt,
+  state: PullRequestState,
+  draft: Schema.Boolean,
+  checks: Schema.NullOr(PullRequestChecksState),
+  mergeable: Schema.Boolean,
+  approved: Schema.Boolean,
+  /** Lines added plus deleted; null when the host did not say. */
+  size: Schema.NullOr(NonNegativeInt),
+});
+export type TeamClaimPullRequest = typeof TeamClaimPullRequest.Type;
+
 export const TeamClaim = Schema.Struct({
   claimId: TeamClaimId,
   teamId: TeamId,
@@ -95,6 +116,8 @@ export const TeamClaim = Schema.Struct({
   branch: Schema.optionalKey(TrimmedNonEmptyString),
   /** Set once that branch is pushed: the commit `origin/<branch>` was at. */
   pushedCommit: Schema.optionalKey(TrimmedNonEmptyString),
+  /** That branch's pull request, as T3 last synced it. */
+  pullRequest: Schema.optionalKey(TeamClaimPullRequest),
   claimedAt: IsoDateTime,
   /** Null while the claim is active. */
   releasedAt: Schema.NullOr(IsoDateTime),

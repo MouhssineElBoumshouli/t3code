@@ -524,6 +524,37 @@ describe("TeamStateModel", () => {
       pushed,
       "no change, no write",
     );
+    // Its pull request rides along, written only when it changed.
+    const pullRequest = {
+      number: 7,
+      state: "open" as const,
+      draft: false,
+      checks: "passing" as const,
+      mergeable: true,
+      approved: false,
+      size: 12,
+    };
+    const withPullRequest = setClaimsPushed(pushed, {
+      thread: thread("env-omar", "t2"),
+      branch: "t3/omar",
+      pushedCommit: "abc123",
+      pullRequest,
+    });
+    assert.notEqual(withPullRequest, pushed);
+    assert.equal(
+      setClaimsPushed(withPullRequest, {
+        thread: thread("env-omar", "t2"),
+        branch: "t3/omar",
+        pushedCommit: "abc123",
+        pullRequest: { ...pullRequest },
+      }),
+      withPullRequest,
+    );
+    assert.deepEqual(
+      viewOf(tree(withPullRequest)).activeClaims.find((item) => item.branch === "t3/omar")
+        ?.pullRequest,
+      pullRequest,
+    );
     omar = addAnswer(pushed, { questionId: "q1", yes: false, text: "not now", answeredAt: at(4) });
     omar = addAnswer(omar, { questionId: "q1", yes: true, text: null, answeredAt: at(5) });
     let sara = addQuestion(writer("sara", "env-sara"), {

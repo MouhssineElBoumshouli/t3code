@@ -54,6 +54,34 @@ export const pairKey = (projectId: ProjectId, mine: TeamMergeMine, other: TeamMe
 };
 
 /** Whether the pair's status differs from what was known before (a first sighting counts). */
+/** Merge order is suggested for a clashing or overlapping pair with a teammate's branch or a chat. */
+export const wantsOrder = (pair: TeamMergePair) =>
+  pair.other._tag !== "base" && (pair.status !== "clean" || pair.bothChanged.length > 0);
+
+/** A pair of two chats as seen from its other chat: the same check with the sides swapped. */
+export const swapChatPair = (pair: TeamMergePair): TeamMergePair | undefined => {
+  if (pair.other._tag !== "chat") return undefined;
+  const { order, ...rest } = pair;
+  return {
+    ...rest,
+    mine: {
+      thread: pair.other.thread,
+      title: pair.other.title,
+      worktree: true,
+      commit: pair.other.commit,
+    },
+    other: {
+      _tag: "chat",
+      thread: pair.mine.thread,
+      title: pair.mine.title,
+      commit: pair.mine.commit,
+    },
+    ...(order === undefined
+      ? {}
+      : { order: { ...order, first: order.first === "mine" ? "other" : "mine" } }),
+  };
+};
+
 export const isChangeOfState = (previous: CheckedPair | undefined, status: TeamMergeStatus) =>
   previous === undefined || previous.pair.status !== status;
 

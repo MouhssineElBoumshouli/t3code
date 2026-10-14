@@ -114,7 +114,7 @@ export const teamChoiceMadeSummary = (
         case "done":
           return "Done waiting";
         case "conflict":
-          return "Done waiting: the copy could not be updated";
+          return "Done waiting: updating the copy hit a conflict; see Merging";
         default:
           return "Chose: wait";
       }

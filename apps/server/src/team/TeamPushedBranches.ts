@@ -5,7 +5,9 @@
  * this server looks at its own claims' branches and records the commit
  * `origin/<branch>` is at locally (Git updates it on push, so no network),
  * or that it is not pushed. Teammates read it from the team state: their
- * card's "Build on top" is enabled once it is set.
+ * card's "Build on top" is enabled once it is set. The same round records
+ * the chat's pull request as T3 last synced it, for merge order
+ * (team/MERGE_HELP_PLAN.md section 4).
  *
  * @module TeamPushedBranches
  */
@@ -18,6 +20,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { claimPullRequestOf } from "./mergeOrder.ts";
 import * as TeamService from "./TeamService.ts";
 
 export const PUSHED_CHECK_INTERVAL = "15 seconds";
@@ -74,6 +77,7 @@ export const make = Effect.gen(function* () {
           thread: claim.thread,
           branch,
           pushedCommit,
+          pullRequest: claimPullRequestOf(shell.pullRequests) ?? undefined,
         });
       }
     }
