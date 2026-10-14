@@ -454,7 +454,7 @@ describe("Build on top", () => {
       const answer = yield* Fiber.join(call);
       assert.equal(
         answer.instruction,
-        "User chose: build on top of Omar's work. Your copy is now on top of Omar's branch `t3/omar`, which is not merged yet: their changes to `src/auth/login.ts` are in it. Read those changes before editing it; you may edit it. Mention these files in your team_handoff.",
+        "User chose: build on top of Omar's work. Omar's branch `t3/omar` (not merged into the base yet) is now merged into your copy: their changes to `src/auth/login.ts` are in it. Read those changes before editing it; you may edit it. Mention these files in your team_handoff.",
       );
       assert.equal(
         NodeFS.readFileSync(NodePath.join(h.worktree, LOGIN), "utf8"),

@@ -203,6 +203,40 @@ describe("TeamCombineCheck", () => {
         }),
     );
 
+    it.effect("checks a fix's result against the two sides it merged, off the pair's line", () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness;
+        const resultOf = (meJs: string) => {
+          git(h.root, "checkout", "--quiet", "-b", `fix-${meJs.length}`, h.saraCommit);
+          writeFile(h.root, "src/me.js", meJs);
+          const tree = git(h.root, "rev-parse", `${commitAll(h.root, "Fix result")}^{tree}`);
+          git(h.root, "checkout", "--quiet", "main");
+          return tree;
+        };
+        const sides = {
+          projectId: PROJECT_ID,
+          mineCommit: h.mineCommit,
+          otherCommit: h.saraCommit,
+        };
+
+        const stillBroken = yield* h.service.checkResult({
+          ...sides,
+          tree: resultOf("defines: me\ncalls: getUser\n"),
+        });
+        assert.equal(stillBroken.status, "broken");
+        assert.equal(stillBroken.errors[0]?.message, "Cannot find name 'getUser'.");
+        assert.equal(stillBroken.mineCommit, h.mineCommit);
+
+        const fixed = yield* h.service.checkResult({
+          ...sides,
+          tree: resultOf("defines: me\ncalls: fetchUser\n"),
+        });
+        assert.equal(fixed.status, "clean");
+        // The pair's own line is left alone.
+        assert.deepEqual(yield* h.stored, []);
+      }),
+    );
+
     it.effect("does not start while an agent works in the project", () =>
       Effect.gen(function* () {
         const h = yield* makeHarness;

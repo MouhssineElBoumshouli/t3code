@@ -23,6 +23,8 @@
  *   either side has are left out.
  *
  * Results go on the pair (`TeamMergeCheck.setCombined`) while both commits stay.
+ * The same check also runs on a fix's result (`checkResult`): the files a "Fix
+ * it" turn left in the chat's copy, against the two sides it merged.
  *
  * @module TeamCombineCheck
  */
@@ -81,6 +83,21 @@ export interface CombineRequest {
   readonly install: boolean;
 }
 
+/** The two commits a check combines; `tree`, when set, is the result to check instead of their merge. */
+interface Sides {
+  readonly mine: string;
+  readonly other: string;
+  readonly tree?: string;
+}
+
+export interface ResultRequest {
+  readonly projectId: ProjectId;
+  /** The result: a tree of the chat copy's files. */
+  readonly tree: string;
+  readonly mineCommit: string;
+  readonly otherCommit: string;
+}
+
 export class TeamCombineCheck extends Context.Service<
   TeamCombineCheck,
   {
@@ -90,6 +107,8 @@ export class TeamCombineCheck extends Context.Service<
     readonly run: (
       request: CombineRequest,
     ) => Effect.Effect<TeamCombinedCheckView, TeamMergeFixError>;
+    /** Checks a fix's result and waits for it; installs changed dependencies. */
+    readonly checkResult: (request: ResultRequest) => Effect.Effect<TeamCombinedCheckView>;
   }
 >()("t3/team/TeamCombineCheck") {}
 
@@ -109,7 +128,7 @@ export const make = Effect.gen(function* () {
   const scope = yield* Effect.scope;
 
   /** Each side alone, by `<command>|<commit>`. */
-  const sides = new BoundedCache<SideResult>(SIDE_CACHE_SIZE);
+  const sideResults = new BoundedCache<SideResult>(SIDE_CACHE_SIZE);
   let busy = false;
 
   const run = (cwd: string, args: ReadonlyArray<string>) =>
@@ -231,9 +250,9 @@ export const make = Effect.gen(function* () {
     );
 
   /** Which side changed each file since they split, as team paths. */
-  const changedBy = (repoRoot: string, teamRoot: string, pair: TeamMergePair) =>
+  const changedBy = (repoRoot: string, teamRoot: string, sides: Sides) =>
     Effect.gen(function* () {
-      const base = yield* run(repoRoot, ["merge-base", pair.mine.commit, pair.other.commit]);
+      const base = yield* run(repoRoot, ["merge-base", sides.mine, sides.other]);
       const changed = (commit: string) =>
         base.exitCode !== 0
           ? Effect.succeed(new Set<string>())
@@ -257,13 +276,13 @@ export const make = Effect.gen(function* () {
                   ),
               ),
             );
-      return { mine: yield* changed(pair.mine.commit), other: yield* changed(pair.other.commit) };
+      return { mine: yield* changed(sides.mine), other: yield* changed(sides.other) };
     });
 
   const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
   const result = (
-    pair: TeamMergePair,
+    sides: Sides,
     status: TeamCombinedCheckView["status"],
     extra: {
       readonly skip?: TeamCombinedSkip;
@@ -274,8 +293,8 @@ export const make = Effect.gen(function* () {
   ) =>
     now.pipe(
       Effect.map((checkedAt): TeamCombinedCheckView => ({
-        mineCommit: pair.mine.commit,
-        otherCommit: pair.other.commit,
+        mineCommit: sides.mine,
+        otherCommit: sides.other,
         status,
         ...(extra.skip === undefined ? {} : { skip: extra.skip }),
         ...(extra.command === undefined ? {} : { command: extra.command }),
@@ -285,8 +304,16 @@ export const make = Effect.gen(function* () {
       })),
     );
 
+  const sidesOf = (pair: TeamMergePair): Sides => ({
+    mine: pair.mine.commit,
+    other: pair.other.commit,
+  });
+
   /** The check itself, once the gates let it start. */
-  const check = (pair: TeamMergePair, request: CombineRequest) =>
+  const check = (
+    sides: Sides,
+    request: { readonly projectId: ProjectId; readonly install: boolean },
+  ) =>
     Effect.gen(function* () {
       const startedAt = yield* Clock.currentTimeMillis;
       const remaining = Effect.map(
@@ -294,13 +321,16 @@ export const make = Effect.gen(function* () {
         (at) => COMBINE_TIMEOUT_MS - (at - startedAt),
       );
       const place = yield* mergeCheck.placeOf(request.projectId);
-      if (Option.isNone(place)) return yield* result(pair, "skipped", { skip: "failed" });
+      if (Option.isNone(place)) return yield* result(sides, "skipped", { skip: "failed" });
       const { repoRoot, teamRoot } = place.value;
-      const merged = yield* mergeTree(git, repoRoot, pair.mine.commit, pair.other.commit);
+      const merged =
+        sides.tree === undefined
+          ? yield* mergeTree(git, repoRoot, sides.mine, sides.other)
+          : { tree: sides.tree, conflicts: [] };
       if (merged === undefined || merged.conflicts.length > 0) {
-        return yield* result(pair, "skipped", { skip: "failed" });
+        return yield* result(sides, "skipped", { skip: "failed" });
       }
-      const folder = yield* ensureCopy(repoRoot, request.projectId, pair.mine.commit);
+      const folder = yield* ensureCopy(repoRoot, request.projectId, sides.mine);
       const checkFolder = path.join(folder, path.relative(repoRoot, teamRoot));
       yield* putTree(folder, merged.tree);
 
@@ -315,7 +345,7 @@ export const make = Effect.gen(function* () {
         install: request.install,
       });
       if (skip !== undefined) {
-        return yield* result(pair, "skipped", { skip, command: commands.command });
+        return yield* result(sides, "skipped", { skip, command: commands.command });
       }
       const command = commands.command!;
       const timed = (line: string) =>
@@ -328,8 +358,8 @@ export const make = Effect.gen(function* () {
         );
       const stopped = (ran: CombineRun | undefined) =>
         ran === undefined || ran.timedOut
-          ? result(pair, "skipped", { skip: "timeout", command })
-          : result(pair, "skipped", { skip: "failed", command });
+          ? result(sides, "skipped", { skip: "timeout", command })
+          : result(sides, "skipped", { skip: "failed", command });
 
       if (commands.install !== undefined && installed !== wanted) {
         const ran = yield* timed(commands.install);
@@ -348,13 +378,13 @@ export const make = Effect.gen(function* () {
       if (combined === undefined || combined.timedOut || combined.spawnError !== undefined) {
         return yield* stopped(combined);
       }
-      if (combined.exitCode === 0) return yield* result(pair, "clean", { command });
+      if (combined.exitCode === 0) return yield* result(sides, "clean", { command });
 
       // It fails combined: run each side alone to leave out what either already had.
       const alone = (commit: string) =>
         Effect.gen(function* () {
           const key = `${command}|${commit}`;
-          const known = sides.get(key);
+          const known = sideResults.get(key);
           if (known !== undefined) return { side: known };
           yield* putTree(folder, `${commit}^{tree}`);
           const ran = yield* timed(command);
@@ -362,12 +392,12 @@ export const make = Effect.gen(function* () {
             return { stopped: ran };
           }
           const side: SideResult = { exitCode: ran.exitCode, errors: ran.output.errors };
-          sides.set(key, side);
+          sideResults.set(key, side);
           return { side };
         });
-      const mineAlone = yield* alone(pair.mine.commit);
+      const mineAlone = yield* alone(sides.mine);
       if (!("side" in mineAlone)) return yield* stopped(mineAlone.stopped);
-      const otherAlone = yield* alone(pair.other.commit);
+      const otherAlone = yield* alone(sides.other);
       if (!("side" in otherAlone)) return yield* stopped(otherAlone.stopped);
       const mine = mineAlone.side;
       const other = otherAlone.side;
@@ -376,7 +406,7 @@ export const make = Effect.gen(function* () {
       if (combined.output.errors.length === 0) {
         // Nothing readable: new only when both sides pass alone.
         if (mine.exitCode !== 0 || other.exitCode !== 0) {
-          return yield* result(pair, "clean", { command });
+          return yield* result(sides, "clean", { command });
         }
         const last = combined.output.tail.findLast((line) => line.trim().length > 0);
         fresh = [
@@ -388,9 +418,9 @@ export const make = Effect.gen(function* () {
           },
         ];
       }
-      if (fresh.length === 0) return yield* result(pair, "clean", { command });
+      if (fresh.length === 0) return yield* result(sides, "clean", { command });
 
-      const changed = yield* changedBy(repoRoot, teamRoot, pair);
+      const changed = yield* changedBy(repoRoot, teamRoot, sides);
       const errors = fresh
         .slice(0, TEAM_MERGE_LIMITS.combinedErrors)
         .map((error): TeamCombinedError => {
@@ -420,7 +450,7 @@ export const make = Effect.gen(function* () {
                     : "neither",
           };
         });
-      return yield* result(pair, "broken", {
+      return yield* result(sides, "broken", {
         command,
         errors,
         errorCount: fresh.length + combined.output.uncounted,
@@ -428,8 +458,23 @@ export const make = Effect.gen(function* () {
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("Team combined check failed.", { cause }).pipe(
-          Effect.andThen(result(pair, "skipped", { skip: "failed" })),
+          Effect.andThen(result(sides, "skipped", { skip: "failed" })),
         ),
+      ),
+    );
+
+  /** Why a check cannot start now, if it cannot. */
+  const gate = (projectId: ProjectId) =>
+    orchestrator.getShellSnapshot().pipe(
+      Effect.orElseSucceed(() => ({ threads: [] as const })),
+      Effect.map(({ threads }) =>
+        startGate({
+          busy,
+          turnRunning: threads.some(
+            (thread) => thread.projectId === projectId && thread.activeRunId !== null,
+          ),
+          freeBytes: NodeOS.freemem(),
+        }),
       ),
     );
 
@@ -437,26 +482,17 @@ export const make = Effect.gen(function* () {
   const begin = (request: CombineRequest) =>
     Effect.gen(function* () {
       const pair = yield* findPair(request);
-      const threads = (yield* orchestrator
-        .getShellSnapshot()
-        .pipe(Effect.orElseSucceed(() => ({ threads: [] as const })))).threads;
-      const skip = startGate({
-        busy,
-        turnRunning: threads.some(
-          (thread) => thread.projectId === request.projectId && thread.activeRunId !== null,
-        ),
-        freeBytes: NodeOS.freemem(),
-      });
+      const skip = yield* gate(request.projectId);
       if (skip !== undefined) {
-        const skipped = yield* result(pair, "skipped", { skip });
+        const skipped = yield* result(sidesOf(pair), "skipped", { skip });
         // A check running for this pair keeps its line.
         const shown = yield* mergeCheck.combinedOf(pair);
         if (shown?.status !== "running") yield* mergeCheck.setCombined(request.projectId, skipped);
         return { pair, skipped } as const;
       }
       busy = true;
-      yield* mergeCheck.setCombined(request.projectId, yield* result(pair, "running"));
-      const fiber = yield* check(pair, request).pipe(
+      yield* mergeCheck.setCombined(request.projectId, yield* result(sidesOf(pair), "running"));
+      const fiber = yield* check(sidesOf(pair), request).pipe(
         Effect.tap((done) =>
           Effect.logInfo("Team combined check done.", {
             status: done.status,
@@ -482,6 +518,27 @@ export const make = Effect.gen(function* () {
         const begun = yield* begin(request);
         // The check goes on if the caller leaves; its result still lands on the pair.
         return "fiber" in begun ? yield* Fiber.join(begun.fiber) : begun.skipped;
+      }),
+    checkResult: (request) =>
+      Effect.gen(function* () {
+        const sides: Sides = {
+          mine: request.mineCommit,
+          other: request.otherCommit,
+          tree: request.tree,
+        };
+        const skip = yield* gate(request.projectId);
+        if (skip !== undefined) return yield* result(sides, "skipped", { skip });
+        busy = true;
+        return yield* check(sides, { projectId: request.projectId, install: true }).pipe(
+          Effect.tap((done) =>
+            Effect.logInfo("Team check on a fix's result done.", {
+              status: done.status,
+              skip: done.skip,
+              errors: done.errorCount,
+            }),
+          ),
+          Effect.ensuring(Effect.sync(() => (busy = false))),
+        );
       }),
   });
 });

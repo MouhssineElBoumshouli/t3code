@@ -311,7 +311,7 @@ describe("TeamWait", () => {
         "export const login = 2;\n",
       );
       assert.deepEqual(yield* h.turnStarts, [
-        "Done waiting: Omar let go of `src/auth/login.ts`. Your copy is now on top of `origin/main`, with their work. Re-read it, then continue the task. Call team_plan before editing.",
+        "Done waiting: Omar let go of `src/auth/login.ts`. `origin/main` is now merged into your copy, with their work. Re-read it, then continue the task. Call team_plan before editing.",
       ]);
       assert.deepEqual(
         (yield* h.made(choiceId)).map((record) => record.wait),
@@ -337,7 +337,7 @@ describe("TeamWait", () => {
       yield* h.teams.refresh(TEAM_ID);
       assert.deepEqual(yield* h.checkWaits, [choiceId]);
       assert.deepEqual(yield* h.turnStarts, [
-        "Done waiting: Omar let go of `src/auth/login.ts` without merging a change to it. Your copy is now on top of `origin/main`. Re-read it, then continue the task. Call team_plan before editing.",
+        "Done waiting: Omar let go of `src/auth/login.ts` without merging a change to it. `origin/main` is now merged into your copy. Re-read it, then continue the task. Call team_plan before editing.",
       ]);
     }).pipe(Effect.scoped),
   );
@@ -361,7 +361,7 @@ describe("TeamWait", () => {
       assert.deepEqual(yield* h.checkWaits, [choiceId]);
       assert.deepEqual(yield* h.turnStarts, []);
       assert.equal((yield* h.made(choiceId)).at(-1)?.wait, "conflict");
-      // The rebase was undone: same commit, nothing half-done.
+      // The merge was undone: same commit, nothing half-done.
       assert.equal(git(h.worktree!, "rev-parse", "HEAD"), before);
       assert.equal(git(h.worktree!, "status", "--porcelain"), "");
     }).pipe(Effect.scoped),

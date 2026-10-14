@@ -197,7 +197,7 @@ const itOrThem = (files: ReadonlyArray<unknown>) => (files.length === 1 ? "it" :
 
 /**
  * The turn that ends a wait. `copy`: "updated" when this chat's worktree was
- * moved on top of the base (`touched`: the commits it got change the files,
+ * updated with the base (`touched`: the commits it got change the files,
  * the holder's work merged), "unknown" when it was not touched.
  */
 export const waitDoneInstruction = (
@@ -210,11 +210,11 @@ export const waitDoneInstruction = (
   const who = waiteeWords(files);
   const it = itOrThem(files);
   if (copy.status === "updated" && !copy.touched) {
-    return `Done waiting: ${who} let go of ${paths} without merging a change to ${it}. Your copy is now on top of \`${copy.base}\`. Re-read ${it}, then continue the task. Call team_plan before editing.`;
+    return `Done waiting: ${who} let go of ${paths} without merging a change to ${it}. \`${copy.base}\` is now merged into your copy. Re-read ${it}, then continue the task. Call team_plan before editing.`;
   }
   const where =
     copy.status === "updated"
-      ? ` Your copy is now on top of \`${copy.base}\`, with their work.`
+      ? ` \`${copy.base}\` is now merged into your copy, with their work.`
       : who === "the other chat"
         ? ""
         : " Their work may not be in your copy yet.";
@@ -250,7 +250,7 @@ export const choiceInstruction = (
   }
   if (choice === "buildOnTop" && details.onTopOf !== undefined) {
     const { name, branch } = details.onTopOf;
-    const where = `your copy is now on top of ${name}'s branch \`${branch}\`, which is not merged yet: their changes to ${paths} are in it`;
+    const where = `${name}'s branch \`${branch}\` (not merged into the base yet) is now merged into your copy: their changes to ${paths} are in it`;
     return voice === "tool"
       ? `User chose: build on top of ${name}'s work. ${where.charAt(0).toUpperCase()}${where.slice(1)}. Read those changes before editing ${it}; you may edit ${it}. Mention these files in your team_handoff.`
       : `Build on top: ${where}. Read those changes before editing ${it}, then continue the task; you may edit ${it}. Mention these files in your team_handoff.`;
@@ -572,7 +572,7 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.catchCause(failed("The question could not be saved to the team.")));
     });
 
-  /** "Build on top": moves this chat's own copy onto the holder's pushed branch. */
+  /** "Build on top": merges the holder's pushed branch into this chat's own copy. */
   const moveOntoHolder = (card: TeamChoiceActivityPayload) =>
     Effect.gen(function* () {
       const context = yield* teamContextOf(card.threadId);

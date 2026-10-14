@@ -9,12 +9,14 @@
  * - Approve: stages everything, refuses while a conflicted file still has
  *   markers, commits the merge, and pushes when the branch has an upstream.
  * - Undo: back to the state before the fix, uncommitted work uncommitted again.
+ * - The fix's result as a tree, for the combined check (`workingTree`).
  *
  * @module mergeFixGit
  */
 import type { GitCommandError } from "@t3tools/contracts";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 
 import type * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 
@@ -212,3 +214,47 @@ export const undoMerge = (
     Effect.catchTags({ GitCommandError: (error) => Effect.fail(gitFailed(error)) }),
   );
 };
+
+/**
+ * The tree of the folder's files as they are now, new files included and
+ * ignored ones left out, for checking a fix's result. A copy of the folder's
+ * index takes them in; its own index and a merge under way stay untouched.
+ */
+export const workingTree = (git: Git, folder: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const { must } = runner(git, folder, "TeamMergeFix.workingTree");
+    const index = yield* must(
+      ["rev-parse", "--path-format=absolute", "--git-path", "index"],
+      "The copy's index was not found.",
+    );
+    const copy = `${index}.t3-team-check`;
+    const env = { ...process.env, GIT_INDEX_FILE: copy };
+    return yield* Effect.gen(function* () {
+      yield* fs.copyFile(index, copy);
+      const added = yield* git.execute({
+        operation: "TeamMergeFix.workingTree",
+        cwd: folder,
+        args: ["add", "-A"],
+        env,
+        allowNonZeroExit: true,
+        timeoutMs: GIT_TIMEOUT_MS,
+      });
+      if (added.exitCode !== 0) return undefined;
+      const tree = yield* git.execute({
+        operation: "TeamMergeFix.workingTree",
+        cwd: folder,
+        args: ["write-tree"],
+        env,
+        allowNonZeroExit: true,
+        timeoutMs: GIT_TIMEOUT_MS,
+      });
+      return tree.exitCode === 0 ? tree.stdout.trim() : undefined;
+    }).pipe(
+      Effect.ensuring(
+        Effect.forEach([copy, `${copy}.lock`], (file) => fs.remove(file, { force: true }), {
+          discard: true,
+        }).pipe(Effect.ignore),
+      ),
+    );
+  }).pipe(Effect.orElseSucceed(() => undefined));

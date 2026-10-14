@@ -11,8 +11,8 @@
  * shown are not waited for: the user chose to wait for these people.
  *
  * Team, in this chat's own worktree with no uncommitted changes: the copy is
- * moved on top of the fetched `origin/<base>` (a rebase, so committed work
- * stays). A conflict aborts the rebase and the card tells the user; no turn
+ * updated with the fetched `origin/<base>` (a merge, `teamCopy`, so committed
+ * work stays). A conflict aborts the merge and the card tells the user; no turn
  * starts. Uncommitted changes or the shared checkout are left as they are.
  * Then a turn continues the task. A chat busy with a turn is checked again
  * later.
@@ -51,7 +51,7 @@ export const make = Effect.gen(function* () {
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
   const { resolve } = yield* makeTeamResolver;
 
-  /** Moves a clean worktree on top of the fetched base branch (`origin/HEAD`, else `origin/main`). */
+  /** Merges the fetched base branch (`origin/HEAD`, else `origin/main`) into a clean worktree. */
   const updateCopy = (folder: string, paths: ReadonlyArray<string>) =>
     moveCopyOnto(git, {
       folder,

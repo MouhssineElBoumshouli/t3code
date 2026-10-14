@@ -72,15 +72,16 @@ When two branches clash or overlap, suggest the one that is ready first. We use 
 4. Then the smaller diff (`additions + deletions`).
 5. Then the older one.
 
-The rule is a pure function of shared data, so both people see the same suggestion; a tie goes to the login that sorts first. After the first one merges, the other chat's server sees it (`TeamClaimAutoRelease`, or base moved) and offers "Update my copy". This reuses Wait's rebase (`teamCopy.ts`): it is never done while a turn runs or with uncommitted changes. It happens automatically only if the person had chosen Wait. A rebase conflict goes to section 5.
+The rule is a pure function of shared data, so both people see the same suggestion; a tie goes to the login that sorts first. After the first one merges, the other chat's server sees it (`TeamClaimAutoRelease`, or base moved) and offers "Update my copy". This reuses Wait's update (`teamCopy.ts`): it is never done while a turn runs or with uncommitted changes. It happens automatically only if the person had chosen Wait. A conflict goes to section 5.
 
 **As built (slice 3).**
 
 - Each claim with a branch carries that branch's pull request as T3 last synced it (`TeamPushedBranches`, next to `pushedCommit`), so both servers rank the same data. "Older" is the earlier first claim of that chat; two chats use which finished its last turn first (a running chat goes last).
 - The order shows on a teammate-branch or chat pair that clashes, has files to regenerate, or where both changed a file. Never on a base pair.
 - The update is offered only on clean overlaps: a base pair ("Update my copy") and a two-chat pair (the second moves on top of the first, its checkpoint commit included). A teammate's branch is merged first; the base pair then offers the update. Own worktrees only.
-- After an update, the chat's side is its new HEAD until its next turn (the same ref as an approved fix). A rebase that stops on a conflict changes nothing and offers "Fix it", which then merges even though the pair checked clean.
-- Wait's own update (`TeamWait`) is unchanged and is the automatic path.
+- After an update, the chat's side is its new HEAD until its next turn (the same ref as an approved fix). An update that stops on a conflict changes nothing; the line says so and offers "Fix it", which merges even though the pair checked clean.
+- Wait's own update (`TeamWait`) is the automatic path.
+- **Every update is a merge** (decided 2026-10-14): "Update my copy", "Update B on top of A", Wait and "Build on top" merge the other side into the chat's branch, like GitHub's "Update branch". A rebase dropped an approved fix's merge commit (the fix lived only there) and stopped on conflicts the 3-way merge, and so the merge check, does not have.
 
 ## 5. When a clash happens
 
@@ -104,10 +105,11 @@ The rule is a pure function of shared data, so both people see the same suggesti
   - After Approve, the chat's side of the merge check is the merge commit (`refs/t3-team/fixed/<thread>`) until a newer checkpoint.
   - Solo chat-vs-chat merges the other chat's checkpoint commit, so "t3 checkpoint …" commits enter history.
   - The check command comes only from the rulebook's `## Check` section for now (no detection).
+  - When the fix's turn ends and the chat's copy has no dependencies (`package.json` without `node_modules`), the agent could not run the check, so the server runs it once on the fix's result (the copy's files, read through a copy of its index) in the combine copy, installing dependencies there if needed. The result shows on the fix's line; Approve does not wait for it.
 
 ## 6. Solo
 
-The same code, with my chats on both sides of each pair. It matters only for chats with their own worktree. Chats in the shared checkout edit the same files live, which the overlap warning and the stale-view line already cover. Today shows "Your chats 'A' and 'B' clash in `greet.ts`". The merge order is whichever chat finishes first, and "Update B on top of A" uses the same rebase. Mine against main also helps: after chat A's PR merges, B learns it is behind and will clash.
+The same code, with my chats on both sides of each pair. It matters only for chats with their own worktree. Chats in the shared checkout edit the same files live, which the overlap warning and the stale-view line already cover. Today shows "Your chats 'A' and 'B' clash in `greet.ts`". The merge order is whichever chat finishes first, and "Update B on top of A" uses the same update. Mine against main also helps: after chat A's PR merges, B learns it is behind and will clash.
 
 ## 7. Testing
 

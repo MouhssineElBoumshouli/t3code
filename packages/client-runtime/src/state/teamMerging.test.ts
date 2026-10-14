@@ -18,6 +18,7 @@ import {
   combinedCheckOffered,
   combinedSentence,
   fileMergeMark,
+  fixCheckSentence,
   fixIsForPair,
   foldedMergeLine,
   foldMergePairs,
@@ -27,6 +28,7 @@ import {
   mergePairPending,
   mergePairSentence,
   mergeUpdateOffer,
+  mergeUpdateStoppedSentence,
   projectMergePairs,
   viewerMergePairs,
 } from "./teamMerging.ts";
@@ -357,6 +359,69 @@ describe("teamMerging", () => {
     expect(
       mergeUpdateOffer({ ...onMain, combined: { ...onMain.combined, status: "clean" } }),
     ).toMatchObject({ label: "Update my copy", anyway: false });
+  });
+
+  it("says an update stopped on a conflict, and words the check on a fix's result", () => {
+    const onMain = pair({
+      other: { _tag: "base", branch: "main", commit: "m1" },
+      status: "clean",
+      files: [],
+      fileCount: 0,
+      bothChanged: ["app/src/api/routes.ts"],
+    });
+    expect(mergeUpdateStoppedSentence(team([onMain]), onMain)).toBe(
+      'Your "login" chat and `main`: the update stopped on a conflict, so nothing changed. Fix it lets the agent resolve it.',
+    );
+
+    const fix = {
+      projectId: PROJECT,
+      mine: onMain.mine,
+      other: onMain.other,
+      status: "ready" as const,
+      files: [],
+      savedWork: false,
+      startedAt: "2026-10-14T10:01:00.000Z",
+    };
+    const check = {
+      mineCommit: "a1",
+      otherCommit: "m1",
+      errors: [],
+      errorCount: 0,
+      checkedAt: "2026-10-14T10:02:00.000Z",
+    };
+    expect(fixCheckSentence(team([]), fix, "app")).toBeNull();
+    expect(
+      fixCheckSentence(team([]), { ...fix, check: { ...check, status: "running" } }, "app"),
+    ).toBe("On the fix: checking…");
+    expect(
+      fixCheckSentence(
+        team([]),
+        { ...fix, check: { ...check, status: "clean", command: "npm run typecheck" } },
+        "app",
+      ),
+    ).toBe("On the fix, `npm run typecheck` finds nothing new.");
+    expect(
+      fixCheckSentence(
+        team([]),
+        {
+          ...fix,
+          check: {
+            ...check,
+            status: "broken",
+            errors: [
+              {
+                path: "app/src/api/count.ts",
+                message: "Cannot find name 'searchPins'.",
+                name: "searchPins",
+                side: "mine",
+              },
+            ],
+            errorCount: 1,
+          },
+        },
+        "app",
+      ),
+    ).toBe("On the fix, `searchPins` is gone but still used in `src/api/count.ts` (yours).");
   });
 
   it("says when a teammate pushed again since the check", () => {

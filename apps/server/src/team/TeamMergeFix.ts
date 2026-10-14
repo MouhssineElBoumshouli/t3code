@@ -14,13 +14,19 @@
  *   - Undo: back to the state before the fix.
  *
  * Update (MERGE_HELP_PLAN.md sections 4 and 6): once the other side is first
- * (the base after a merge, or the chat that finished first), a chat's own
- * worktree moves on top of it with Wait's rebase (`teamCopy`): never while
- * its turn runs or with uncommitted changes. A rebase that stops on a
- * conflict is aborted and the person is sent to "Fix it", which then merges.
+ * (the base after a merge, or the chat that finished first), it is merged into
+ * a chat's own worktree, as Wait does (`teamCopy`): never while its turn runs
+ * or with uncommitted changes. A merge that stops on a conflict is aborted
+ * and the person is sent to "Fix it".
  * Before it moves, the combined check runs once (`TeamCombineCheck`); new
  * errors, or a check that could not run, stop it until the person chooses
  * "Update anyway". "Check now" starts that check on its own.
+ *
+ * When a fix's turn ends and the chat's copy has no dependencies installed (a
+ * `package.json` without `node_modules`), the agent could not run the check,
+ * so it runs once on the fix's result in the combine copy
+ * (`TeamCombineCheck.checkResult`) and shows on the fix's line. Approve does
+ * not wait for it.
  *
  * Fixes waiting are kept in `<stateDir>/team/merge-fixes.json`, so a restart
  * still offers Approve and Undo. The team feed shows them (`forTeam`).
@@ -31,6 +37,7 @@ import {
   CommandId,
   MessageId,
   type ProjectId,
+  type TeamCombinedCheck,
   type TeamId,
   type TeamMemberId,
   type TeamMergeFix as TeamMergeFixView,
@@ -68,7 +75,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import { forkParked } from "../serverActivation.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { sameThread } from "./heldElsewhere.ts";
-import { approveMerge, startMerge, undoMerge } from "./mergeFixGit.ts";
+import { approveMerge, startMerge, undoMerge, workingTree } from "./mergeFixGit.ts";
 import { moveCopyOnto } from "./teamCopy.ts";
 import { buildMergeFixPrompt, type MergeFixSide } from "./mergeFixPrompt.ts";
 import { diffToTeamPaths } from "./TeamAutoNotes.ts";
@@ -166,6 +173,7 @@ export const make = Effect.gen(function* () {
   const fileContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   const changes = yield* PubSub.unbounded<TeamId>();
   const lock = yield* Semaphore.make(1);
+  const scope = yield* Effect.scope;
 
   const filePath = path.join(config.stateDir, "team", "merge-fixes.json");
   const fixes = new Map<ThreadId, StoredFix>();
@@ -398,7 +406,7 @@ export const make = Effect.gen(function* () {
       return {};
     });
 
-  /** Moves the chat's own worktree on top of the other side: the base or another chat. */
+  /** Merges the other side (the base or another chat) into the chat's own worktree. */
   const update = (input: Extract<TeamMergeFixInput, { _tag: "update" }>) =>
     Effect.gen(function* () {
       const pair = yield* mergeCheck.findPair(input.projectId, input.threadId, input.other);
@@ -439,6 +447,7 @@ export const make = Effect.gen(function* () {
         fetch: [],
         onto: pair.other.commit,
         paths: [],
+        message: otherSideWords(pair.other, yield* nameOfMember(context.teamFile.teamId)).commit,
         operation: "TeamMergeFix.update",
       });
       switch (moved.status) {
@@ -455,7 +464,7 @@ export const make = Effect.gen(function* () {
           return {
             update: "conflict" as const,
             detail:
-              "Git stopped on a conflict while moving this chat's commits, so nothing changed. Fix it merges the two instead.",
+              "Git stopped on a conflict while merging, so nothing changed. Fix it lets the agent resolve it.",
           };
         case "updated": {
           const head = yield* git
@@ -511,6 +520,7 @@ export const make = Effect.gen(function* () {
       }).pipe(Effect.mapError((error) => new TeamMergeFixError({ detail: error.detail })));
       fixes.delete(threadId);
       markersAfterRun.delete(threadId);
+      resultChecks.delete(threadId);
       yield* changed(teamId);
 
       const head = yield* git
@@ -572,6 +582,7 @@ export const make = Effect.gen(function* () {
       );
       fixes.delete(threadId);
       markersAfterRun.delete(threadId);
+      resultChecks.delete(threadId);
       yield* changed(fix.teamId);
       yield* mergeCheck.request(fix.projectId as ProjectId);
       yield* Effect.logInfo("Team merge fix undone.", { threadId });
@@ -614,21 +625,86 @@ export const make = Effect.gen(function* () {
         : ("ready" as const);
     }).pipe(Effect.orElseSucceed(() => "working" as const));
 
+  /** Per fix, the turn whose result was looked at, and its check (none when the agent could run it). */
+  const resultChecks = new Map<
+    ThreadId,
+    { readonly runId: string; check: TeamCombinedCheck | undefined }
+  >();
+
+  /** Once per ended turn: the check on the fix's result, when the chat's copy has no dependencies. */
+  const checkResultOnce = (fix: StoredFix, runId: string) =>
+    Effect.gen(function* () {
+      if (resultChecks.get(fix.threadId)?.runId === runId) return;
+      const entry: { readonly runId: string; check: TeamCombinedCheck | undefined } = {
+        runId,
+        check: undefined,
+      };
+      resultChecks.set(fix.threadId, entry);
+      const place = yield* mergeCheck.placeOf(fix.projectId as ProjectId);
+      const checkFolder = Option.isSome(place)
+        ? path.join(fix.folder, path.relative(place.value.repoRoot, place.value.teamRoot))
+        : fix.folder;
+      const exists = (name: string) =>
+        fs.exists(path.join(checkFolder, name)).pipe(Effect.orElseSucceed(() => false));
+      if (!(yield* exists("package.json")) || (yield* exists("node_modules"))) return;
+      const sides = { mineCommit: fix.mine.commit, otherCommit: fix.other.commit };
+      entry.check = {
+        ...sides,
+        status: "running",
+        errors: [],
+        errorCount: 0,
+        checkedAt: DateTime.formatIso(yield* DateTime.now),
+      };
+      yield* Effect.gen(function* () {
+        const tree = yield* workingTree(git, fix.folder).pipe(Effect.provide(fileContext));
+        const done: TeamCombinedCheck =
+          tree === undefined
+            ? {
+                ...sides,
+                status: "skipped",
+                skip: "failed",
+                errors: [],
+                errorCount: 0,
+                checkedAt: DateTime.formatIso(yield* DateTime.now),
+              }
+            : yield* combineCheck.checkResult({
+                projectId: fix.projectId as ProjectId,
+                tree,
+                ...sides,
+              });
+        if (resultChecks.get(fix.threadId) !== entry) return;
+        entry.check = done;
+        yield* PubSub.publish(changes, fix.teamId as TeamId);
+      }).pipe(Effect.forkIn(scope));
+    });
+
   const forTeam = (teamId: TeamId) =>
     Effect.forEach(
       [...fixes.values()].filter((fix) => fix.teamId === teamId),
       (fix) =>
-        statusOf(fix).pipe(
-          Effect.map((status): TeamMergeFixView => ({
+        Effect.gen(function* () {
+          const status = yield* statusOf(fix);
+          const runId = (yield* orchestrator
+            .getThreadShell(fix.threadId)
+            .pipe(Effect.orElseSucceed(() => null)))?.latestRunId;
+          if (status === "ready" && runId !== null && runId !== undefined) {
+            yield* checkResultOnce(fix, runId);
+          }
+          const check =
+            resultChecks.get(fix.threadId)?.runId === runId
+              ? resultChecks.get(fix.threadId)?.check
+              : undefined;
+          return {
             projectId: fix.projectId as ProjectId,
             mine: fix.mine,
             other: fix.other,
             status,
             files: fix.files,
             savedWork: fix.savedWork !== null,
+            ...(check === undefined ? {} : { check }),
             startedAt: fix.startedAt,
-          })),
-        ),
+          } satisfies TeamMergeFixView;
+        }),
     );
 
   // A fix's turn starting or ending, or its agent asking, changes what the feed shows.

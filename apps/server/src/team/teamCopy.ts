@@ -1,9 +1,12 @@
 /**
- * Moves a chat's own worktree on top of another commit (fork-only): the base
- * after a "Wait" (team/TeamWait.ts) or a teammate's pushed branch for "Build
- * on top" (team/TeamChoices.ts). A rebase, so the chat's committed work stays;
- * a conflict is aborted and leaves the copy as it was. A copy with uncommitted
- * changes is never touched.
+ * Updates a chat's own worktree with another commit (fork-only): the base
+ * after a "Wait" (team/TeamWait.ts), a teammate's pushed branch for "Build on
+ * top" (team/TeamChoices.ts), or the other side of a merge pair ("Update my
+ * copy", team/TeamMergeFix.ts). A merge of that commit into the chat's
+ * branch, like GitHub's "Update branch", never a rebase: the chat's commits
+ * stay as they are, merge commits from an approved fix included, and it stops
+ * only where a 3-way merge does. A conflict is aborted and leaves the copy as
+ * it was. A copy with uncommitted changes is never touched.
  *
  * @module teamCopy
  */
@@ -31,6 +34,8 @@ export interface MoveCopyInput {
   readonly onto: string | ((run: Run) => Effect.Effect<string | undefined, GitCommandError>);
   /** Repo paths whose change in the moved-in commits sets `touched`. */
   readonly paths: ReadonlyArray<string>;
+  /** The merge commit's message; Git's own when absent. */
+  readonly message?: string;
   readonly operation: string;
 }
 
@@ -63,11 +68,22 @@ export const moveCopyOnto = (git: GitVcsDriver.GitVcsDriver["Service"], input: M
       return { status: "unavailable" } as CopyMove;
     }
     const forkPoint = yield* run(["merge-base", "HEAD", onto]);
-    if ((yield* run(["rebase", "--quiet", onto])).exitCode !== 0) {
-      yield* run(["rebase", "--abort"]);
+    // No commit hooks: Git writes this commit, not the person. A fast-forward when the chat has none of its own.
+    const merged = yield* run([
+      "merge",
+      "--quiet",
+      "--no-edit",
+      "--no-verify",
+      ...(input.message === undefined ? [] : ["-m", input.message]),
+      onto,
+    ]);
+    if (merged.exitCode !== 0) {
+      const stopped = (yield* run(["rev-parse", "-q", "--verify", "MERGE_HEAD"])).exitCode === 0;
+      if (!stopped) return { status: "unavailable" } as CopyMove;
+      yield* run(["merge", "--abort"]);
       return { status: "conflict", onto } as CopyMove;
     }
-    // No fork point (unrelated histories): count it as a change.
+    // No fork point: count it as a change.
     const touched =
       forkPoint.exitCode !== 0 ||
       input.paths.length === 0 ||

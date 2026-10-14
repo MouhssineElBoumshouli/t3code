@@ -191,6 +191,11 @@ export const TeamMergeFix = Schema.Struct({
   files: Schema.Array(TeamPath),
   /** This chat's uncommitted work was committed first so Git could merge; Undo takes it back. */
   savedWork: Schema.Boolean,
+  /**
+   * The check command on the fix's result, run once its turn ended, when the
+   * chat's copy has no dependencies installed (so the agent could not run it).
+   */
+  check: Schema.optionalKey(TeamCombinedCheck),
   startedAt: IsoDateTime,
 });
 export type TeamMergeFix = typeof TeamMergeFix.Type;
@@ -216,7 +221,7 @@ export const TEAM_MERGE_LIMITS = {
 
 /**
  * What the person does with a pair: start a fix, then approve or undo it;
- * update a chat's copy (a rebase) on top of the other side once that side is
+ * update a chat's copy (a merge of the other side into it) once that side is
  * first (the base after a merge, or the chat that finished first), after one
  * combined check; or run the combined check now.
  */

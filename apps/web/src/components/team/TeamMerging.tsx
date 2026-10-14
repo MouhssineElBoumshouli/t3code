@@ -6,9 +6,11 @@
  * has "Fix it"; a fix whose turn ended has Approve and Undo. A pair that
  * clashes or overlaps says which side to merge first (section 4); a clean
  * overlap with the base, or with the chat that goes first, offers an update
- * (a rebase), and an update that stops on a conflict offers "Fix it". A
- * clean pair offers "Check now" (the combined check); its result shows under
- * the line, with "Fix it" for new errors and "Update anyway". Used by
+ * (a merge into the chat's copy), and an update that stops on a conflict says
+ * so on the line and offers "Fix it". A clean pair offers "Check now" (the
+ * combined check); its result shows under the line, with "Fix it" for new
+ * errors and "Update anyway". A fix's line shows the check on its result
+ * when the server ran one. Used by
  * Team home / Today's "Merging" section and the presence popover. Times are
  * worded when drawn; nothing ticks.
  */
@@ -20,6 +22,7 @@ import {
 import {
   combinedCheckOffered,
   combinedSentence,
+  fixCheckSentence,
   fixIsForPair,
   foldedMergeLine,
   foldMergePairs,
@@ -30,6 +33,7 @@ import {
   mergePairSentence,
   type MergeUpdateOffer,
   mergeUpdateOffer,
+  mergeUpdateStoppedSentence,
   projectMergeFixes,
   projectMergePairs,
 } from "@t3tools/client-runtime/state/teamMerging";
@@ -92,11 +96,15 @@ export function MergeSentence(props: { readonly text: string }) {
   );
 }
 
-/** One pair: a dot by status, the sentence, when it was checked, and an action. */
+/**
+ * One pair: a dot by status, the sentence, when it was checked, and an action.
+ * `updateStopped`: an update of this pair stopped on a conflict, said instead of "merge cleanly".
+ */
 export function MergePairLine(props: {
   readonly team: TeamFeedTeam;
   readonly pair: TeamMergePair;
   readonly pathPrefix: string;
+  readonly updateStopped?: boolean;
   readonly action?: ReactNode;
 }) {
   const { team, pair } = props;
@@ -109,7 +117,7 @@ export function MergePairLine(props: {
         aria-hidden
         className={cn(
           "mt-1.5 size-1.5 shrink-0 rounded-full",
-          pair.status === "clash"
+          pair.status === "clash" || props.updateStopped
             ? "bg-warning"
             : pair.status === "regenerate"
               ? "bg-muted-foreground"
@@ -117,7 +125,13 @@ export function MergePairLine(props: {
         )}
       />
       <span className="min-w-0">
-        <MergeSentence text={mergePairSentence(team, pair, props.pathPrefix)} />
+        <MergeSentence
+          text={
+            props.updateStopped
+              ? mergeUpdateStoppedSentence(team, pair)
+              : mergePairSentence(team, pair, props.pathPrefix)
+          }
+        />
         <span className="text-muted-foreground">
           {" "}
           · {pending ?? `checked ${formatRelativeTimeLabel(pair.checkedAt)}`}
@@ -228,6 +242,7 @@ function MergeFixLine(props: {
   const navigate = useNavigate();
   const { act, pending, allowed } = useMergeFixAction(props.environmentId);
   const threadId = fix.mine.thread.threadId;
+  const check = fixCheckSentence(props.team, fix, props.pathPrefix);
   return (
     <li className="flex items-start gap-2 text-xs" data-team-merge-fix={fix.status}>
       <span
@@ -250,6 +265,17 @@ function MergeFixLine(props: {
               · its uncommitted work was committed first
             </span>
           ) : null}
+          {check === null ? null : (
+            <span
+              className={cn(
+                "block",
+                fix.check?.status === "broken" ? "text-foreground" : "text-muted-foreground",
+              )}
+              data-team-fix-check={fix.check?.status}
+            >
+              <MergeSentence text={check} />
+            </span>
+          )}
         </span>
         <span className="flex flex-wrap gap-1.5">
           <Button
@@ -347,7 +373,7 @@ function FixItButton(props: {
   );
 }
 
-/** "Update my copy" / "Update "B" on top of "A"": a rebase, never during a turn or over uncommitted work. */
+/** "Update my copy" / "Update "B" on top of "A"": a merge into the chat's copy, never during a turn or over uncommitted work. */
 function UpdateButton(props: {
   readonly environmentId: EnvironmentId;
   readonly pair: TeamMergePair;
@@ -367,8 +393,8 @@ function UpdateButton(props: {
         title={
           offer.blocked ??
           (offer.anyway
-            ? "Moves the chat's branch on top of the other side (a rebase) without the combined check. Not while its agent works or with uncommitted changes."
-            : "Checks the combined result once, then moves the chat's branch on top of the other side (a rebase). Not while its agent works or with uncommitted changes.")
+            ? "Merges the other side into the chat's branch without the combined check. Not while its agent works or with uncommitted changes."
+            : "Checks the combined result once, then merges the other side into the chat's branch. Not while its agent works or with uncommitted changes.")
         }
         onClick={() =>
           act(
@@ -446,6 +472,7 @@ export function MergePairList(props: {
         team={props.team}
         pair={pair}
         pathPrefix={props.pathPrefix}
+        updateStopped={afterConflict !== undefined}
         action={
           <>
             <FixItButton

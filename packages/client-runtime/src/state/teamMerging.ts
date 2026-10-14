@@ -239,10 +239,10 @@ export interface MergeUpdateOffer {
 }
 
 /**
- * Whether a chat can move on top of the other side (a rebase), once that side
+ * Whether the other side can be merged into a chat's copy, once that side
  * is first and they overlap without a clash:
  * - the base, after it took in work that touches this chat's files ("Update my copy");
- * - two chats: the one to merge second moves on top of the first.
+ * - two chats: the one to merge second takes in the first.
  * A teammate's branch is merged first, then the base pair offers the update.
  */
 export function mergeUpdateOffer(pair: TeamMergePair): MergeUpdateOffer | null {
@@ -315,7 +315,11 @@ const otherName = (team: TeamFeedTeam, other: TeamMergeOther) => {
 };
 
 /** Whose change the file is: "(yours)", "(Sara's)", "(changed on `main`)". */
-const ownerWords = (team: TeamFeedTeam, pair: TeamMergePair, side: TeamCombinedError["side"]) => {
+const ownerWords = (
+  team: TeamFeedTeam,
+  pair: Pick<TeamMergePair, "mine" | "other">,
+  side: TeamCombinedError["side"],
+) => {
   switch (side) {
     case "mine":
       return pair.other._tag === "chat" ? ` (in "${pair.mine.title}")` : " (yours)";
@@ -334,7 +338,7 @@ const ownerWords = (team: TeamFeedTeam, pair: TeamMergePair, side: TeamCombinedE
 
 const errorWords = (
   team: TeamFeedTeam,
-  pair: TeamMergePair,
+  pair: Pick<TeamMergePair, "mine" | "other">,
   error: TeamCombinedError,
   pathPrefix: string,
 ) => {
@@ -350,6 +354,36 @@ const errorWords = (
   return where === "" ? `a new error: ${message}` : `a new error in ${where}${owner}: ${message}`;
 };
 
+/** A check's line, after `lead`: "Combined with `main`" or "On the fix". */
+function checkLine(
+  team: TeamFeedTeam,
+  sides: Pick<TeamMergePair, "mine" | "other">,
+  check: TeamCombinedCheck,
+  lead: string,
+  pathPrefix: string,
+): string {
+  const command = check.command === undefined ? "the check" : code(check.command);
+  switch (check.status) {
+    case "running":
+      // The command is known only once the combined result is in the copy.
+      return check.command === undefined
+        ? `${lead}: checking…`
+        : `${lead}: checking with ${command}…`;
+    case "clean":
+      return `${lead}, ${command} finds nothing new.`;
+    case "skipped":
+      return `${lead}: not checked, ${SKIP_WORDS[check.skip ?? "failed"]}.`;
+    case "broken": {
+      const [first] = check.errors;
+      if (first === undefined) return `${lead}, ${command} fails.`;
+      const more = check.errorCount - 1;
+      return `${lead}, ${errorWords(team, sides, first, pathPrefix)}.${
+        more > 0 ? ` And ${more} more new ${more === 1 ? "error" : "errors"}.` : ""
+      }`;
+    }
+  }
+}
+
 /**
  * The combined check's line (MERGE_HELP_PLAN.md section 2): "Combined with
  * Sara's `search` branch, `getUser` is renamed (to `fetchUser`?) but still
@@ -360,29 +394,36 @@ export function combinedSentence(
   pair: TeamMergePair,
   pathPrefix: string,
 ): string | null {
-  const check: TeamCombinedCheck | undefined = pair.combined;
-  if (check === undefined) return null;
-  const combined = `Combined with ${otherName(team, pair.other)}`;
-  const command = check.command === undefined ? "the check" : code(check.command);
-  switch (check.status) {
-    case "running":
-      // The command is known only once the combined result is in the copy.
-      return check.command === undefined
-        ? `${combined}: checking…`
-        : `${combined}: checking with ${command}…`;
-    case "clean":
-      return `${combined}, ${command} finds nothing new.`;
-    case "skipped":
-      return `${combined}: not checked, ${SKIP_WORDS[check.skip ?? "failed"]}.`;
-    case "broken": {
-      const [first] = check.errors;
-      if (first === undefined) return `${combined}, ${command} fails.`;
-      const more = check.errorCount - 1;
-      return `${combined}, ${errorWords(team, pair, first, pathPrefix)}.${
-        more > 0 ? ` And ${more} more new ${more === 1 ? "error" : "errors"}.` : ""
-      }`;
-    }
-  }
+  return pair.combined === undefined
+    ? null
+    : checkLine(
+        team,
+        pair,
+        pair.combined,
+        `Combined with ${otherName(team, pair.other)}`,
+        pathPrefix,
+      );
+}
+
+/**
+ * The check on a fix's result, run because the agent could not run it in the
+ * chat's copy: "On the fix, `npm run typecheck` finds nothing new." Null when
+ * none ran.
+ */
+export function fixCheckSentence(
+  team: TeamFeedTeam,
+  fix: TeamMergeFix,
+  pathPrefix: string,
+): string | null {
+  return fix.check === undefined ? null : checkLine(team, fix, fix.check, "On the fix", pathPrefix);
+}
+
+/** A pair whose update stopped on a conflict: said instead of "merge cleanly". */
+export function mergeUpdateStoppedSentence(
+  team: TeamFeedTeam,
+  pair: Pick<TeamMergePair, "mine" | "other">,
+): string {
+  return `${mergePairSubject(team, pair)}: the update stopped on a conflict, so nothing changed. Fix it lets the agent resolve it.`;
 }
 
 /** One line for a fix: what is being merged, and what the person does next. */
