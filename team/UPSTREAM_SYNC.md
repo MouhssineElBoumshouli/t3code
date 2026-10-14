@@ -9,7 +9,7 @@ How to pull in pingdotgg/t3code, and where our team layer hooks into upstream fi
 3. **Branch.** `git switch -c sync/upstream-YYYY-MM-DD main`. `main` does not move until step 9.
 4. **Merge, not rebase.** `git merge upstream/main`. For each conflict: take upstream's version, then put our `team-layer:` edit back on top. If upstream refactored the spot, follow its new pattern. Commit the merge, push the branch.
 5. **Install.** `vp i`.
-6. **Typecheck, one package at a time** (this laptop has 7 GB; a server `tsc` peaks near 4 GB). In each package: `GOMEMLIMIT=2500MiB npx tsc --noEmit -p . --singleThreaded`. Nothing else running next to the server one.
+6. **Typecheck, one package at a time** (this laptop has 7 GB; a server `tsc` peaks near 4 GB). In each package: `GOMEMLIMIT=2500MiB npx tsc --noEmit -p . --singleThreaded` (`apps/marketing` is Astro's `tsc`: drop `--singleThreaded`). Nothing else running next to the server one. A clean merge is not a clean build: an upstream Effect bump can break our files with no conflict.
 7. **Tests, one run at a time**, from each package's folder.
    - Server: `vp test run src/team/ src/mcp/toolkits/team/ src/cli/team.test.ts src/auth/ChatGptRpcScopes.test.ts`, plus the upstream tests of every conflicted or hooked server file.
    - Web: `src/components/team/`, `MessagesTimeline.logic`, `session-logic`, `Sidebar.logic`, `ThreadNotificationCoordinator`.
@@ -20,7 +20,7 @@ How to pull in pingdotgg/t3code, and where our team layer hooks into upstream fi
 
 ## Upstream files we hook into
 
-Every edit carries a `team-layer` comment, so `git grep -n team-layer -- ':!team/'` is the source of truth. As of 2026-10-12:
+Every edit carries a `team-layer` comment, so `git grep -n team-layer -- ':!team/'` is the source of truth. As of 2026-10-14 (unchanged since 2026-10-12):
 
 - **Server wiring:** `apps/server/src/server.ts` (team layers, team MCP tools), `ws.ts` (team RPC handlers), `binCli.ts` (`t3 team`), `auth/RpcAuthorization.ts`, `observability/RpcInstrumentation.ts`.
 - **Turns and providers:** `orchestration-v2/RunExecutionService.ts` (turn text), `orchestration-v2/ThreadSettlementService.ts` (+ its test: no auto-settle while a card is in play), `orchestration-v2/Adapters/ClaudeAdapterV2.ts`, `CodexAdapterV2.ts` (+ its test's expected config), `AntigravityAdapterV2.ts`, `provider/CodexDeveloperInstructions.ts`, `packages/provider-core/src/server/runtimeInstructions.ts`, `packages/provider-acp/src/server/adapter.ts`.
@@ -35,3 +35,10 @@ Every edit carries a `team-layer` comment, so `git grep -n team-layer -- ':!team
 - **Tests**: our mocked snapshot queries no longer matched anything, so team tests now run on a real v2 orchestrator (`team/teamOrchestrator.testkit.ts`). Two kinds of event race only showed up there: separate typed streams reordering events, and subscribing after a snapshot.
 - **Memory**: a full server typecheck while other things ran likely restarted the laptop. Run checks one at a time.
 - **Our ws.ts security wrapper** was no longer needed: upstream's scope checks now cover those methods (our test passes on plain upstream). The test stays and guards it on every sync.
+
+## 2026-10-14 sync (242 commits)
+
+- **No conflicts, but 319 server type errors**, all from one Effect 4.0.4 change: `crypto.randomUUIDv4` is now a function (`randomUUIDv4()`). Six calls in our files; the errors spread through `binCli.ts` into upstream's CLI tests. Fix the root in our files first, then re-run.
+- **Check that hooks still cover every path**, not just that markers survived: `makeClaudeQueryOptions` still has one caller, Codex's MCP config still carries our timeout, and the briefing showed in a live Codex session log.
+- **First page load after a sync** sits on the splash for about a minute while Vite re-optimizes (the lockfile changed); reload once.
+- **Stopping the dev server**: the PID from `setsid ... & echo $!` is gone at once. Find the owners of the two ports (`ss -H -ltnp`), check their folder, and stop their process group.
