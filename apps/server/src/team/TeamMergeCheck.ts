@@ -685,11 +685,11 @@ export const make = Effect.gen(function* () {
   yield* forkParked(Stream.runForEach(checkpointsCaptured, onCheckpoint));
   // A teammate's push reaches this server as a team state change. Unchanged pairs are not checked again.
   yield* forkParked(Stream.runForEach(Stream.fromSubscription(teamChanges), requestTeam));
-  // The base moves without any team event.
+  // The base moves without any team event. The delay sits outside the repeat, or each round waits twice.
   yield* forkParked(
     requestActive.pipe(
-      Effect.delay(BASE_CHECK_INTERVAL),
       Effect.repeat(Schedule.spaced(BASE_CHECK_INTERVAL)),
+      Effect.delay(BASE_CHECK_INTERVAL),
     ),
   );
 

@@ -1,6 +1,6 @@
 # Merging help: plan (VISION.md step 5)
 
-Status: slice 1 (section 8, point 1) built 2026-10-13 (`TeamMergeCheck.ts`); slice 2 (point 2, "Fix it") and the turn-note line built 2026-10-13 (`TeamMergeFix.ts`); the rest is plan. Covers VISION.md 3.4, and 3.6 points 1, 4, 6 and 7.
+Status: slice 1 (section 8, point 1) built 2026-10-13 (`TeamMergeCheck.ts`); slice 2 (point 2, "Fix it") and the turn-note line built 2026-10-13 (`TeamMergeFix.ts`); slice 3 (point 3, merge order and "Update my copy") built 2026-10-14 (`mergeOrder.ts`, `TeamMergeFix.ts`); the typecheck combine copy is plan. Covers VISION.md 3.4, and 3.6 points 1, 4, 6 and 7.
 
 ## 1. Background test-combine
 
@@ -64,6 +64,14 @@ When two branches clash or overlap, suggest the one that is ready first. We use 
 5. Then the older one.
 
 The rule is a pure function of shared data, so both people see the same suggestion; a tie goes to the login that sorts first. After the first one merges, the other chat's server sees it (`TeamClaimAutoRelease`, or base moved) and offers "Update my copy". This reuses Wait's rebase (`teamCopy.ts`): it is never done while a turn runs or with uncommitted changes. It happens automatically only if the person had chosen Wait. A rebase conflict goes to section 5.
+
+**As built (slice 3).**
+
+- Each claim with a branch carries that branch's pull request as T3 last synced it (`TeamPushedBranches`, next to `pushedCommit`), so both servers rank the same data. "Older" is the earlier first claim of that chat; two chats use which finished its last turn first (a running chat goes last).
+- The order shows on a teammate-branch or chat pair that clashes, has files to regenerate, or where both changed a file. Never on a base pair.
+- The update is offered only on clean overlaps: a base pair ("Update my copy") and a two-chat pair (the second moves on top of the first, its checkpoint commit included). A teammate's branch is merged first; the base pair then offers the update. Own worktrees only.
+- After an update, the chat's side is its new HEAD until its next turn (the same ref as an approved fix). A rebase that stops on a conflict changes nothing and offers "Fix it", which then merges even though the pair checked clean.
+- Wait's own update (`TeamWait`) is unchanged and is the automatic path.
 
 ## 5. When a clash happens
 
