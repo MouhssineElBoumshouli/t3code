@@ -348,7 +348,7 @@ const make = Effect.gen(function* () {
       yield* cards.append({
         threadId,
         entry: {
-          id: `team-plan:${yield* crypto.randomUUIDv4}`,
+          id: `team-plan:${yield* crypto.randomUUIDv4()}`,
           kind: TEAM_PLAN_ACTIVITY_KIND,
           summary: teamPlanSummary(payload.files.length),
           payload,

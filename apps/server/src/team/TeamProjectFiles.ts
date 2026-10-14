@@ -333,7 +333,7 @@ export const initTeamProject = Effect.fn("TeamProjectFiles.initTeamProject")(fun
   const teamFile = Option.isSome(existingTeam)
     ? existingTeam.value
     : TeamFile.make({
-        teamId: input.teamId ?? TeamId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
+        teamId: input.teamId ?? TeamId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie)),
         name: requestedName && requestedName.length > 0 ? requestedName : path.basename(repoRoot),
       });
 

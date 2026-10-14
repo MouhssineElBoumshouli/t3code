@@ -427,7 +427,7 @@ export const make = Effect.gen(function* () {
         return { _tag: "NotYet", instruction: waitingInstruction(waitingCard.files) } as const;
       }
       const reused = yield* openCardFor(threadId, input.files);
-      const choiceId = reused ?? `team-choice:${yield* crypto.randomUUIDv4}`;
+      const choiceId = reused ?? `team-choice:${yield* crypto.randomUUIDv4()}`;
       const cap = yield* capFor(threadId, input.providerInstanceId);
       const waiter: Waiter = {
         threadId,
@@ -664,7 +664,9 @@ export const make = Effect.gen(function* () {
         kind: TEAM_CHOICE_MADE_ACTIVITY_KIND,
         summary: teamChoiceMadeSummary(made),
         payload: made,
-        id: first ? `${made.choiceId}:made` : `${made.choiceId}:made:${yield* crypto.randomUUIDv4}`,
+        id: first
+          ? `${made.choiceId}:made`
+          : `${made.choiceId}:made:${yield* crypto.randomUUIDv4()}`,
       });
     });
 
@@ -919,7 +921,7 @@ export const make = Effect.gen(function* () {
   const showEdited = (input: ShowEditedInput) =>
     Effect.gen(function* () {
       const threadId = input.context.thread.threadId;
-      const choiceId = `team-choice:${yield* crypto.randomUUIDv4}`;
+      const choiceId = `team-choice:${yield* crypto.randomUUIDv4()}`;
       yield* appendCard({
         threadId,
         kind: TEAM_CHOICE_ACTIVITY_KIND,
