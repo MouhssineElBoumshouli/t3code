@@ -105,7 +105,7 @@ describe("combineCheck", () => {
     assert.equal(detectCheckCommand({ packageJson: scripts, has: has([]) }), "npm run typecheck");
     assert.equal(
       detectCheckCommand({ packageJson: "{}", has: has(["tsconfig.json"]) }),
-      "npx --no tsc --noEmit",
+      "npx --no -- tsc --noEmit",
     );
     assert.equal(
       detectCheckCommand({ packageJson: undefined, has: has(["Cargo.toml"]) }),

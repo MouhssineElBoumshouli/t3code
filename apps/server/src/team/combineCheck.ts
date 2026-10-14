@@ -62,7 +62,7 @@ export function detectCheckCommand(input: {
     }
   }
   // `--no` never downloads a missing TypeScript.
-  if (input.has("tsconfig.json")) return "npx --no tsc --noEmit";
+  if (input.has("tsconfig.json")) return "npx --no -- tsc --noEmit";
   if (input.has("Cargo.toml")) return "cargo check";
   if (input.has("go.mod")) return "go vet ./...";
   return undefined;
