@@ -11,7 +11,8 @@
  *   overlaps are already told live.
  * - Teammates: claims with a `branch` and `pushedCommit`. A commit not here
  *   yet is fetched into `refs/t3-team/peers/<login>/<branch>`, so the
- *   person's own remote branches stay as they were.
+ *   person's own remote branches stay as they were. A pushed commit the base
+ *   already holds (merged, also squashed) is left out.
  * - Base: `origin/HEAD`'s branch, else `main`, fetched into
  *   `refs/t3-team/base/<branch>` at most every two minutes.
  * - When: a chat's turn ends (new checkpoint), the team state changes (a
@@ -73,6 +74,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import {
+  alreadyHolds,
   fetchIntoHiddenRef,
   MERGE_TREE_MIN_GIT,
   type MergeTreeResult,
@@ -473,10 +475,26 @@ export const make = Effect.gen(function* () {
           info,
         });
       }
+      /** Cached merge-tree of two commits, null when Git cannot merge them. */
+      const merged = (ours: string, theirs: string) =>
+        Effect.gen(function* () {
+          const cacheKey = commitPairKey(ours, theirs);
+          let result = results.get(cacheKey);
+          if (result === undefined) {
+            result = (yield* mergeTree(git, repoRoot, ours, theirs)) ?? null;
+            results.set(cacheKey, result);
+          }
+          return result;
+        });
+      const baseInfo = base ? refs.get(base.ref) : undefined;
       const others: Array<{ side: TeamMergeOther; info: RefInfo }> = [];
       for (const peer of peerRefs) {
         const info = refs.get(peer.ref);
         if (info === undefined) continue;
+        // A teammate's work already in the base: only the base line is left to tell.
+        if (baseInfo && alreadyHolds(baseInfo.tree, yield* merged(baseInfo.commit, info.commit))) {
+          continue;
+        }
         others.push({
           side: {
             _tag: "branch",
@@ -487,7 +505,6 @@ export const make = Effect.gen(function* () {
           info,
         });
       }
-      const baseInfo = base ? refs.get(base.ref) : undefined;
       if (base && baseInfo) {
         others.push({
           side: { _tag: "base", branch: base.branch, commit: baseInfo.commit },
@@ -592,12 +609,7 @@ export const make = Effect.gen(function* () {
         if (sides.mine.commit === sides.other.commit) continue;
         const key = pairKey(sides.projectId, sides.mine, sides.other);
         const previous = before?.pairs.get(key);
-        const cacheKey = commitPairKey(sides.mine.commit, sides.other.commit);
-        let result = results.get(cacheKey);
-        if (result === undefined) {
-          result = (yield* mergeTree(git, repoRoot, sides.mine.commit, sides.other.commit)) ?? null;
-          results.set(cacheKey, result);
-        }
+        const result = yield* merged(sides.mine.commit, sides.other.commit);
         if (result === null) continue;
         const fresh = nextPair({ previous, sides, result, toTeamPath, now });
         const { order: _order, ...unordered } = fresh.pair;

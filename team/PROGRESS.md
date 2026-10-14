@@ -2,6 +2,14 @@
 
 Newest entries first. See team/WORKING_RULES.md for what each entry needs.
 
+## 2026-10-14 — A teammate's branch already in main leaves the merging view
+
+- **What changed:** once the base (`origin/<base>`) already holds a teammate's pushed commit, their branch pair (and its "merge first" sentence) is no longer shown; only the `main` line stays. "Holds" means merging their commit into the base changes nothing (`alreadyHolds` in `mergeTree.ts`), so a squash merge counts too. Uses the same cached merge-tree as the pairs.
+- **Files:** `apps/server/src/team/{mergeTree,TeamMergeCheck}.ts`, `mergeTree.test.ts`.
+- **Checked:** `mergeTree.test.ts` 9 passed (new: on a real repo, a `--no-ff` merged branch and a squashed one are held by a main that moved on after them; an open branch is not). Full server `tsc`: 0 errors.
+- **Not done:** not tried live on its own (part of the slice 4 live round). The claim itself stays until it is released; only the line goes.
+- **Unsure:** a squash merge that main later changed again on the same lines no longer merges to main's tree, so that line would stay.
+
 ## 2026-10-14 — Polish ("You", a fix that asks) and merging help, slice 3 (merge order, "Update my copy")
 
 - **What changed**

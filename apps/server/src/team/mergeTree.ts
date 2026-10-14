@@ -113,6 +113,13 @@ export const mergeStatusOf = (conflicts: ReadonlyArray<MergeConflict>): TeamMerg
       ? "regenerate"
       : "clash";
 
+/**
+ * Whether `base` already holds `theirs`: merging `theirs` into `base` (in that
+ * order) changes nothing. True for a merged branch, also a squash merge.
+ */
+export const alreadyHolds = (baseTree: string, merged: MergeTreeResult | undefined | null) =>
+  merged != null && merged.conflicts.length === 0 && merged.tree === baseTree;
+
 type Run = (
   args: ReadonlyArray<string>,
 ) => ReturnType<GitVcsDriver.GitVcsDriver["Service"]["execute"]>;

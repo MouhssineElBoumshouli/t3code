@@ -8,6 +8,7 @@ import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import {
+  alreadyHolds,
   fetchIntoHiddenRef,
   isRegeneratedFile,
   mergeStatusOf,
@@ -131,6 +132,32 @@ describe("mergeTree", () => {
         assert.isTrue(fetched);
         assert.equal(git(root, "rev-parse", "refs/t3-team/peers/sara/search"), pushed);
         assert.equal(git(root, "for-each-ref", "refs/remotes/origin/search"), "");
+      }),
+    );
+
+    it.effect("knows when the base already holds a teammate's branch, merged or squashed", () =>
+      Effect.gen(function* () {
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const root = yield* tempRepo;
+        initRepo(root, { "src/a.ts": lines(20), "src/b.ts": lines(5) });
+        const merged = branchWith(root, "merged", { "src/a.ts": lines(20, { 1: "merged" }) });
+        const squashed = branchWith(root, "squashed", { "src/b.ts": lines(5, { 1: "squashed" }) });
+        const open = branchWith(root, "open", { "src/a.ts": lines(20, { 15: "open" }) });
+        git(root, "merge", "--quiet", "--no-ff", "-m", "merge", "merged");
+        git(root, "merge", "--quiet", "--squash", "squashed");
+        git(root, "commit", "--quiet", "-m", "squash");
+        // Main moves on after both merges.
+        writeFile(root, "src/c.ts", "c\n");
+        const base = commitAll(root, "later");
+        const baseTree = git(root, "rev-parse", `${base}^{tree}`);
+        const holds = (commit: string) =>
+          mergeTree(driver, root, base, commit).pipe(
+            Effect.map((result) => alreadyHolds(baseTree, result)),
+          );
+        assert.isTrue(yield* holds(merged));
+        assert.isTrue(yield* holds(squashed));
+        assert.isFalse(yield* holds(open));
+        assert.isFalse(alreadyHolds(baseTree, null));
       }),
     );
 
